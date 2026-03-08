@@ -755,7 +755,6 @@ recommendation.
   - include `component_type` (`item`, `accessory`)
 - `catalog_attribute_definitions`
 - `catalog_attribute_options`
-- `catalog_component_tasks` if task association is still required
 
 ## C. Materials
 
@@ -788,7 +787,8 @@ master data and component-association data are mixed together.
 - `project_instance_links`
   - recommended place to model accessory-to-item application explicitly
 - `project_instance_media`
-  - do not bake image file paths directly into template/frontend concerns
+  - store managed URI/path references to files in `media_gallery/`
+  - enforce media lifecycle rules so there are no orphan database rows or orphan files
 
 ## F. Project BOM and material settings
 
@@ -972,6 +972,23 @@ Recommended conceptual mapping from the current system:
 - `Changelog`
   - `audit_events` / `audit_approvals`
 
+## Recommended application stack
+
+The rebuild should use:
+
+- React + TypeScript
+- FastAPI
+- Uvicorn
+- SQLAlchemy 2.x
+- Alembic
+- PostgreSQL
+
+Supporting recommendations:
+
+- use a background job mechanism for heavy exports and ERP refreshes
+- keep ERP integration behind a dedicated service layer
+- keep media in a managed `media_gallery/` folder with database-backed metadata
+
 ## React/TypeScript frontend guidance
 
 The UI should be rebuilt as a typed client application with domain-focused
@@ -1020,34 +1037,33 @@ The rebuild should explicitly avoid carrying forward these patterns:
 - duplicated material aggregation logic across many export scripts
 - repeated N+1 data retrieval inside exports and dashboards
 - template logic doing service-layer work
-- image storage tightly coupled to the app's static asset folder
+- unmanaged image storage tied to ad hoc static asset paths
 
-## Open questions to resolve before implementation
+## Resolved implementation directions
 
-These points should be confirmed with stakeholders before locking the rebuild:
+These decisions are now assumed for the rebuild unless explicitly revisited:
 
-1. Should project instances remain pure snapshots forever, or should there be an
-   explicit "refresh from catalog" capability?
-2. Should an accessory linked to multiple items be modeled as:
-   - one reusable accessory instance with many applications, or
-   - many accessory occurrences, one per application?
-   The current UX supports the former, but the current storage model is weak.
-3. Should project-template records (`Proyecto Tipo`) remain in the same project
-   table as execution projects, or become a distinct concept?
-4. Are task-association features still required in the rebuilt product?
-5. Should authentication move to company identity/SSO?
-6. Should export generation be synchronous for small projects and queued for
-   large ones?
-7. Where should instance images live in the rebuilt system:
-   - object storage
-   - database-backed media service
-   - managed file store
+1. Project instances should remain snapshots by default, but there should be an
+   explicit refresh/sync-from-catalog capability.
+2. An accessory linked to multiple items should be modeled as many accessory
+   occurrences, one per attachment/application.
+3. Project-template records (`Proyecto Tipo`) should remain in the same project
+   table/model as execution projects, because they are the same core concept at
+   different lifecycle stages.
+4. Task-association features are not required in the rebuilt product and should
+   not shape the initial domain model.
+5. Authentication should move to company identity / SSO.
+6. Export generation should use a hybrid model: synchronous for smaller/faster
+   outputs and queued for larger/heavier ones.
+7. Instance images should live in a managed `media_gallery/` folder inside the
+   repo/workspace, with the database storing URI/path references and the app
+   enforcing a no-orphans media lifecycle.
 
 ## Suggested rebuild sequence
 
 1. Lock the domain model and behavioral contracts in this document.
 2. Design the PostgreSQL schema from the domain model, not from the SQLite
-   tables.
+   tables. Use Alembic.
 3. Stand up typed backend APIs for:
    - catalog
    - project composition
@@ -1099,6 +1115,11 @@ choose the cleaner model and preserve the behavior.
 
 This project should be recreated from its domain logic and UX intent, not from
 its current implementation shortcuts.
+
+
+
+
+
 
 
 
