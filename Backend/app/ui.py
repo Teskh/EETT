@@ -480,10 +480,10 @@ def _render_project_instance(instance: dict) -> str:
     ) or "<p class='empty-state'>No attributes loaded.</p>"
 
     linked_accessories = "".join(
-        f'<span class="badge">{escape(name)}</span>' for name in instance["linked_accessories"]
+        _render_instance_link_badge(link) for link in instance["linked_accessories"]
     ) or "<span class='subtle'>None</span>"
     linked_to = "".join(
-        f'<span class="badge">{escape(name)}</span>' for name in instance["linked_to"]
+        _render_instance_link_badge(link) for link in instance["linked_to"]
     ) or "<span class='subtle'>Standalone</span>"
     material_rows = "".join(_render_bom_material(material) for material in instance["materials"]) or "<p class='empty-state'>No applicable materials resolved for this instance.</p>"
 
@@ -498,6 +498,7 @@ def _render_project_instance(instance: dict) -> str:
       </div>
       <p>{escape(instance['description'] or 'No description yet.')}</p>
       <p class="subtle">Unit amount: {escape(str(instance['unit_amount']) if instance['unit_amount'] is not None else '-')}</p>
+      <p class="subtle">Sync state: {escape(instance['sync_state']['status'])}</p>
       <div class="inline-grid two-col">
         <div>
           <h4>Attributes</h4>
@@ -517,6 +518,13 @@ def _render_project_instance(instance: dict) -> str:
       </div>
     </article>
     """
+
+
+def _render_instance_link_badge(link: dict) -> str:
+    label = escape(link["name"])
+    if link.get("application_label"):
+        label = f"{label} · {escape(link['application_label'])}"
+    return f'<span class="badge">{label}</span>'
 
 
 def _render_bom_material(material: dict) -> str:
