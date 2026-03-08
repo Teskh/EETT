@@ -100,21 +100,65 @@ def create_component(
     name: str,
     short_name: str | None,
     description: str | None,
+    installation: str | None,
     unit_type: str | None,
 ) -> CatalogComponent:
+    clean_description = (description or "").strip() or None
     component = CatalogComponent(
         category_id=category_id,
         component_type=ComponentType(component_type),
         name=name.strip(),
         short_name=(short_name or "").strip() or None,
-        description=(description or "").strip() or None,
-        short_description=(description or "").strip() or None,
+        description=clean_description,
+        short_description=clean_description,
+        installation=(installation or "").strip() or None,
         unit_type=(unit_type or "").strip() or None,
     )
     session.add(component)
     session.commit()
     session.refresh(component)
     return component
+
+
+def update_component(
+    session: Session,
+    *,
+    component_id: int,
+    name: str,
+    short_name: str | None,
+    description: str | None,
+    installation: str | None,
+    unit_type: str | None,
+    component_type: str,
+) -> CatalogComponent | None:
+    component = session.get(CatalogComponent, component_id)
+    if component is None:
+        return None
+
+    clean_description = (description or "").strip() or None
+    component.name = name.strip()
+    component.short_name = (short_name or "").strip() or None
+    component.description = clean_description
+    component.short_description = clean_description
+    component.installation = (installation or "").strip() or None
+    component.unit_type = (unit_type or "").strip() or None
+    component.component_type = ComponentType(component_type)
+    session.commit()
+    session.refresh(component)
+    return component
+
+
+def delete_component(session: Session, *, component_id: int) -> int | None:
+    component = session.get(CatalogComponent, component_id)
+    if component is None:
+        return None
+    if component.instances:
+        raise ValueError("Cannot delete a catalog component that is already used by project instances.")
+
+    category_id = component.category_id
+    session.delete(component)
+    session.commit()
+    return category_id
 
 
 def update_category_links(session: Session, *, category_id: int, linked_category_ids: list[int]) -> None:
@@ -176,6 +220,7 @@ def _serialize_selected_category(
 def _serialize_component(component: CatalogComponent) -> dict:
     return {
         "id": component.id,
+        "category_id": component.category_id,
         "name": component.name,
         "short_name": component.short_name,
         "type": component.component_type.value,

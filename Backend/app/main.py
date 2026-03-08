@@ -38,6 +38,7 @@ from app.services.auth import (
     role_codes,
 )
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
+from app.services.catalog import delete_component, update_component
 from app.services.collaboration import (
     add_project_comment,
     decide_project_approval,
@@ -52,12 +53,15 @@ from app.services.dashboard import get_project_material_dashboard
 from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
     create_project,
+    create_project_instance,
+    delete_project_instance,
     get_instance_sync_preview,
     get_project_view_data,
     get_project_with_details,
     get_projects_page_data,
     refresh_instance_snapshot,
     set_project_material_mode,
+    update_project_instance,
 )
 from app.services.public_api import list_project_public_skus, list_public_projects
 from app.ui import render_catalog_page, render_home_page, render_project_detail_page, render_projects_page
@@ -99,6 +103,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         x_spec_sheets_user: Annotated[str | None, Header()] = None,
     ):
         return get_current_user(session, x_spec_sheets_user)
+
+    def parse_optional_float(raw_value: str | None) -> float | None:
+        value = (raw_value or "").strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid numeric value: {raw_value}") from exc
 
     @app.get("/", response_class=HTMLResponse)
     async def home() -> str:
@@ -142,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         name: str = Form(...),
         short_name: str | None = Form(default=None),
         description: str | None = Form(default=None),
+        installation: str | None = Form(default=None),
         unit_type: str | None = Form(default=None),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -154,9 +168,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             name=name,
             short_name=short_name,
             description=description,
+            installation=installation,
             unit_type=unit_type,
         )
         return RedirectResponse(url=f"/catalog?category_id={category_id}", status_code=303)
+
+    @app.post("/catalog/components/{component_id}/update")
+    async def update_catalog_component(
+        component_id: int,
+        name: str = Form(...),
+        short_name: str | None = Form(default=None),
+        description: str | None = Form(default=None),
+        installation: str | None = Form(default=None),
+        unit_type: str | None = Form(default=None),
+        component_type: str = Form(...),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        component = update_component(
+            session,
+            component_id=component_id,
+            name=name,
+            short_name=short_name,
+            description=description,
+            installation=installation,
+            unit_type=unit_type,
+            component_type=component_type,
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return RedirectResponse(url=f"/catalog?category_id={component.category_id}", status_code=303)
+
+    @app.post("/catalog/components/{component_id}/delete")
+    async def delete_catalog_component(
+        component_id: int,
+        category_id: int = Form(...),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        try:
+            deleted_category_id = delete_component(session, component_id=component_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if deleted_category_id is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return RedirectResponse(url=f"/catalog?category_id={deleted_category_id or category_id}", status_code=303)
 
     @app.post("/catalog/categories/{category_id}/links")
     async def save_catalog_links(
@@ -199,6 +257,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return render_project_detail_page(data)
+
+    @app.post("/projects/{project_id}/instances")
+    async def create_project_instance_route(
+        project_id: int,
+        category_id: int = Form(...),
+        component_id: int = Form(...),
+        name: str = Form(...),
+        short_name: str | None = Form(default=None),
+        description: str | None = Form(default=None),
+        installation: str | None = Form(default=None),
+        unit_amount: str | None = Form(default=None),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            create_project_instance(
+                session,
+                project=project,
+                category_id=category_id,
+                component_id=component_id,
+                name=name,
+                short_name=short_name,
+                description=description,
+                installation=installation,
+                unit_amount=parse_optional_float(unit_amount),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
+
+    @app.post("/projects/{project_id}/instances/{instance_id}/update")
+    async def update_project_instance_route(
+        project_id: int,
+        instance_id: int,
+        category_id: int = Form(...),
+        name: str = Form(...),
+        short_name: str | None = Form(default=None),
+        description: str | None = Form(default=None),
+        installation: str | None = Form(default=None),
+        unit_amount: str | None = Form(default=None),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        instance = update_project_instance(
+            session,
+            project=project,
+            instance_id=instance_id,
+            name=name,
+            short_name=short_name,
+            description=description,
+            installation=installation,
+            unit_amount=parse_optional_float(unit_amount),
+        )
+        if instance is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
+
+    @app.post("/projects/{project_id}/instances/{instance_id}/delete")
+    async def delete_project_instance_route(
+        project_id: int,
+        instance_id: int,
+        category_id: int = Form(...),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        deleted = delete_project_instance(session, project=project, instance_id=instance_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
 
     @app.get("/api/catalog")
     async def catalog_api(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

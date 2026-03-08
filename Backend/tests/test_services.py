@@ -70,6 +70,7 @@ class ServiceLayerTests(unittest.TestCase):
                 name="Mirror Cabinet",
                 short_name="MC-01",
                 description="Wall-mounted cabinet",
+                installation="Anchor to masonry wall.",
                 unit_type="unit",
             )
             refreshed = get_catalog_page_data(session, selected_category_id=category.id)
@@ -77,6 +78,86 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(component.name, "Mirror Cabinet")
         self.assertEqual(refreshed["selected"]["name"], "Bathrooms")
         self.assertEqual(len(refreshed["selected"]["components"]), 1)
+
+    def test_catalog_and_project_crud_routes_work(self) -> None:
+        create_catalog_component_response = self.client.post(
+            "/catalog/components",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "category_id": "6",
+                "component_type": "item",
+                "name": "Island Module",
+                "short_name": "ISL-01",
+                "description": "Kitchen island module",
+                "installation": "Set and level on finished floor.",
+                "unit_type": "unit",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(create_catalog_component_response.status_code, 303)
+
+        with self.session_factory() as session:
+            kitchens = get_catalog_page_data(session, selected_category_id=6)
+            component = next(item for item in kitchens["selected"]["components"] if item["name"] == "Island Module")
+            component_id = component["id"]
+
+        update_catalog_component_response = self.client.post(
+            f"/catalog/components/{component_id}/update",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "name": "Island Module Revised",
+                "short_name": "ISL-02",
+                "description": "Updated module",
+                "installation": "Install after plumbing rough-in.",
+                "unit_type": "set",
+                "component_type": "item",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update_catalog_component_response.status_code, 303)
+
+        create_instance_response = self.client.post(
+            "/projects/2/instances",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "category_id": "6",
+                "component_id": str(component_id),
+                "name": "Kitchen Island A",
+                "short_name": "KIA-01",
+                "description": "Execution instance",
+                "installation": "Install on site.",
+                "unit_amount": "2",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(create_instance_response.status_code, 303)
+
+        project_detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"}).json()
+        kitchen_section = next(section for section in project_detail["categories"] if section["name"] == "Kitchens")
+        created_instance = next(item for item in kitchen_section["instances"] if item["name"] == "Kitchen Island A")
+
+        update_instance_response = self.client.post(
+            f"/projects/2/instances/{created_instance['id']}/update",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "category_id": "6",
+                "name": "Kitchen Island B",
+                "short_name": "KIB-01",
+                "description": "Updated execution instance",
+                "installation": "Updated install notes.",
+                "unit_amount": "3",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update_instance_response.status_code, 303)
+
+        delete_instance_response = self.client.post(
+            f"/projects/2/instances/{created_instance['id']}/delete",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={"category_id": "6"},
+            follow_redirects=False,
+        )
+        self.assertEqual(delete_instance_response.status_code, 303)
 
     def test_projects_page_and_detail_preserve_material_semantics(self) -> None:
         with self.session_factory() as session:

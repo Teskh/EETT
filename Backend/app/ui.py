@@ -172,6 +172,7 @@ def render_catalog_page(data: dict, selected_category_id: int | None) -> str:
             </label>
             <label>Unit type<input name="unit_type" placeholder="unit, m2, set..."></label>
             <label>Description<textarea name="description" rows="4"></textarea></label>
+            <label>Installation<textarea name="installation" rows="3"></textarea></label>
             <button class="button-link" type="submit">Create component</button>
           </form>
         </section>
@@ -290,7 +291,20 @@ def render_project_detail_page(data: dict) -> str:
         category_links.append(
             f'<a href="#category-{category["id"]}" class="sidebar-link" data-category-link>{("&nbsp;" * category["depth"] * 2)}{escape(category["name"])}</a>'
         )
-        instance_cards = "".join(_render_project_instance(instance) for instance in category["instances"]) or "<p class='empty-state'>No project instances in this category yet.</p>"
+        component_options = "".join(
+            f'<option value="{component["id"]}" data-name="{escape(component["name"])}" data-short-name="{escape(component["short_name"] or "")}" data-description="{escape(component["description"] or "")}" data-installation="{escape(component["installation"] or "")}">{escape(component["name"])} ({escape(component["type"])})</option>'
+            for component in category["available_components"]
+        )
+        create_instance_modal = _render_create_instance_modal(project["id"], category, component_options) if category["available_components"] else ""
+        create_instance_action = (
+            f'<button type="button" class="button-link secondary" data-modal-open="add-instance-{category["id"]}">Add instance</button>'
+            if category["available_components"]
+            else "<p class='subtle'>No reusable components exist in this category yet.</p>"
+        )
+        instance_cards = "".join(
+            _render_project_instance(project["id"], category["id"], instance)
+            for instance in category["instances"]
+        ) or "<p class='empty-state'>No project instances in this category yet.</p>"
         linked_categories = "".join(
             f'<span class="badge">{escape(name)}</span>' for name in category["linked_categories"]
         ) or "<span class='subtle'>No linked accessory targets.</span>"
@@ -307,6 +321,10 @@ def render_project_detail_page(data: dict) -> str:
               <div class="linked-row">
                 <strong>Linked accessory categories:</strong> {linked_categories}
               </div>
+              <div class="category-actions">
+                {create_instance_action}
+              </div>
+              {create_instance_modal}
               <div class="stacked-list">{instance_cards}</div>
             </section>
             """
@@ -438,6 +456,29 @@ def _render_catalog_component_card(component: dict) -> str:
           <div class="stacked-list">{material_rows}</div>
         </div>
       </div>
+      <div class="inline-grid two-col component-crud">
+        <form class="form-panel compact-form" method="post" action="/catalog/components/{component['id']}/update">
+          <h5>Edit component</h5>
+          <label>Name<input name="name" value="{escape(component['name'])}" required></label>
+          <label>Short name<input name="short_name" value="{escape(component['short_name'] or '')}"></label>
+          <label>Type
+            <select name="component_type">
+              <option value="item" {"selected" if component['type'] == 'item' else ""}>Item</option>
+              <option value="accessory" {"selected" if component['type'] == 'accessory' else ""}>Accessory</option>
+            </select>
+          </label>
+          <label>Unit type<input name="unit_type" value="{escape(component['unit_type'] or '')}"></label>
+          <label>Description<textarea name="description" rows="3">{escape(component['description'] or '')}</textarea></label>
+          <label>Installation<textarea name="installation" rows="3">{escape(component['installation'] or '')}</textarea></label>
+          <button class="button-link secondary" type="submit">Save changes</button>
+        </form>
+        <form class="form-panel compact-form danger-form" method="post" action="/catalog/components/{component['id']}/delete">
+          <h5>Delete component</h5>
+          <input type="hidden" name="category_id" value="{component['category_id']}">
+          <p class="subtle">Deletion is blocked once a reusable component is already used in a project.</p>
+          <button class="button-link danger" type="submit">Delete component</button>
+        </form>
+      </div>
     </article>
     """
 
@@ -465,7 +506,7 @@ def _render_material_rule(rule: dict) -> str:
     """
 
 
-def _render_project_instance(instance: dict) -> str:
+def _render_project_instance(project_id: int, category_id: int, instance: dict) -> str:
     attribute_blocks = "".join(
         f"""
         <article class="attribute-group">
@@ -486,6 +527,7 @@ def _render_project_instance(instance: dict) -> str:
         _render_instance_link_badge(link) for link in instance["linked_to"]
     ) or "<span class='subtle'>Standalone</span>"
     material_rows = "".join(_render_bom_material(material) for material in instance["materials"]) or "<p class='empty-state'>No applicable materials resolved for this instance.</p>"
+    edit_modal = _render_edit_instance_modal(project_id, category_id, instance)
 
     return f"""
     <article class="instance-card">
@@ -494,7 +536,14 @@ def _render_project_instance(instance: dict) -> str:
           <p class="card-kicker">{escape(instance['type'])}</p>
           <h3>{escape(instance['name'])}</h3>
         </div>
-        <span class="badge">{escape(instance['short_name'] or instance['name'])}</span>
+        <div class="instance-card-actions">
+          <span class="badge">{escape(instance['short_name'] or instance['name'])}</span>
+          <button type="button" class="button-link secondary" data-modal-open="edit-instance-{instance['id']}">Edit</button>
+          <form method="post" action="/projects/{project_id}/instances/{instance['id']}/delete" onsubmit="return confirm('Delete this project instance and its project-scoped records?');">
+            <input type="hidden" name="category_id" value="{category_id}">
+            <button class="button-link danger" type="submit">Delete</button>
+          </form>
+        </div>
       </div>
       <p>{escape(instance['description'] or 'No description yet.')}</p>
       <p class="subtle">Unit amount: {escape(str(instance['unit_amount']) if instance['unit_amount'] is not None else '-')}</p>
@@ -517,6 +566,7 @@ def _render_project_instance(instance: dict) -> str:
         {material_rows}
       </div>
     </article>
+    {edit_modal}
     """
 
 
@@ -525,6 +575,70 @@ def _render_instance_link_badge(link: dict) -> str:
     if link.get("application_label"):
         label = f"{label} · {escape(link['application_label'])}"
     return f'<span class="badge">{label}</span>'
+
+
+def _render_create_instance_modal(project_id: int, category: dict, component_options: str) -> str:
+    return f"""
+    <div class="modal-shell" data-modal="add-instance-{category['id']}" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card">
+        <div class="panel-header compact">
+          <div>
+            <p class="card-kicker">Create project instance</p>
+            <h3>{escape(category['name'])}</h3>
+          </div>
+          <button type="button" class="button-link secondary" data-modal-close>Close</button>
+        </div>
+        <form class="form-panel compact-form" method="post" action="/projects/{project_id}/instances" data-component-prefill-form>
+          <input type="hidden" name="category_id" value="{category['id']}">
+          <label>Template component
+            <select name="component_id" required data-component-select>
+              {component_options}
+            </select>
+          </label>
+          <label>Instance name<input name="name" required data-prefill-target="name"></label>
+          <label>Short name<input name="short_name" data-prefill-target="short_name"></label>
+          <label>Unit amount<input name="unit_amount" placeholder="Optional quantity basis"></label>
+          <label>Description<textarea name="description" rows="3" data-prefill-target="description"></textarea></label>
+          <label>Installation<textarea name="installation" rows="3" data-prefill-target="installation"></textarea></label>
+          <div class="modal-actions">
+            <button type="button" class="button-link secondary" data-modal-close>Cancel</button>
+            <button class="button-link" type="submit">Create instance</button>
+          </div>
+        </form>
+      </section>
+    </div>
+    """
+
+
+def _render_edit_instance_modal(project_id: int, category_id: int, instance: dict) -> str:
+    return f"""
+    <div class="modal-shell" data-modal="edit-instance-{instance['id']}" aria-hidden="true">
+      <div class="modal-backdrop" data-modal-close></div>
+      <section class="modal-card">
+        <div class="panel-header compact">
+          <div>
+            <p class="card-kicker">Edit project instance</p>
+            <h3>{escape(instance['name'])}</h3>
+          </div>
+          <button type="button" class="button-link secondary" data-modal-close>Close</button>
+        </div>
+        <form class="form-panel compact-form" method="post" action="/projects/{project_id}/instances/{instance['id']}/update">
+          <input type="hidden" name="category_id" value="{category_id}">
+          <label>Name<input name="name" value="{escape(instance['name'])}" required></label>
+          <label>Short name<input name="short_name" value="{escape(instance['short_name'] or '')}"></label>
+          <label>Unit amount<input name="unit_amount" value="{escape(str(instance['unit_amount']) if instance['unit_amount'] is not None else '')}"></label>
+          <label>Description<textarea name="description" rows="4">{escape(instance['description'] or '')}</textarea></label>
+          <label>Installation<textarea name="installation" rows="4">{escape(instance['installation'] or '')}</textarea></label>
+          <p class="subtle">Saving marks this snapshot as customized. Use refresh if you want to pull catalog data forward instead.</p>
+          <div class="modal-actions">
+            <button type="button" class="button-link secondary" data-modal-close>Cancel</button>
+            <button class="button-link" type="submit">Save instance</button>
+          </div>
+        </form>
+      </section>
+    </div>
+    """
 
 
 def _render_bom_material(material: dict) -> str:

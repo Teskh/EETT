@@ -18,6 +18,7 @@ from app.models import (
     ProjectInstance,
     ProjectInstanceAttributeGroup,
     ProjectInstanceLink,
+    ProjectInstanceMedia,
     ProjectInstanceSyncState,
     ProjectMaterialMode,
     ProjectMembership,
@@ -82,6 +83,109 @@ def create_project(
     return project
 
 
+def create_project_instance(
+    session: Session,
+    *,
+    project: Project,
+    category_id: int,
+    component_id: int,
+    name: str,
+    short_name: str | None,
+    description: str | None,
+    installation: str | None,
+    unit_amount: float | None,
+) -> ProjectInstance:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id, CatalogComponent.category_id == category_id)
+    )
+    if component is None:
+        raise ValueError("Selected component does not belong to the requested category.")
+
+    clean_description = (description or "").strip() or component.description
+    clean_installation = (installation or "").strip() or component.installation
+    instance = ProjectInstance(
+        project=project,
+        component=component,
+        category_id=category_id,
+        instance_type=component.component_type,
+        name=name.strip(),
+        short_name=(short_name or "").strip() or None,
+        description=clean_description,
+        short_description=clean_description,
+        installation=clean_installation,
+        unit_amount=unit_amount,
+    )
+    session.add(instance)
+    session.flush()
+    session.add(
+        ProjectInstanceSyncState(
+            instance=instance,
+            sync_status=SyncStatus.UP_TO_DATE,
+            last_synced_at=utcnow(),
+            source_component_updated_at=component.updated_at,
+            sync_notes="Snapshot created from catalog template.",
+        )
+    )
+    if component.short_description and component.short_description != clean_description:
+        instance.short_description = component.short_description
+    session.commit()
+    session.refresh(instance)
+    return instance
+
+
+def update_project_instance(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    name: str,
+    short_name: str | None,
+    description: str | None,
+    installation: str | None,
+    unit_amount: float | None,
+) -> ProjectInstance | None:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
+        .options(selectinload(ProjectInstance.component), selectinload(ProjectInstance.sync_state))
+    )
+    if instance is None:
+        return None
+
+    clean_description = (description or "").strip() or None
+    clean_installation = (installation or "").strip() or None
+    instance.name = name.strip()
+    instance.short_name = (short_name or "").strip() or None
+    instance.description = clean_description
+    instance.short_description = clean_description
+    instance.installation = clean_installation
+    instance.unit_amount = unit_amount
+
+    if instance.sync_state is None:
+        instance.sync_state = ProjectInstanceSyncState(instance=instance)
+        session.add(instance.sync_state)
+    instance.sync_state.sync_status = SyncStatus.CUSTOMIZED
+    instance.sync_state.last_synced_at = utcnow()
+    instance.sync_state.source_component_updated_at = instance.component.updated_at
+    instance.sync_state.sync_notes = "Project instance customized after snapshot creation."
+    session.commit()
+    session.refresh(instance)
+    return instance
+
+
+def delete_project_instance(session: Session, *, project: Project, instance_id: int) -> bool:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
+    )
+    if instance is None:
+        return False
+    session.delete(instance)
+    session.commit()
+    return True
+
+
 def get_project_view_data(session: Session, project_id: int, user: User | None = None) -> dict | None:
     project = get_project_with_details(session, project_id)
     if project is None:
@@ -93,6 +197,7 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
         select(CatalogCategory)
         .options(
             selectinload(CatalogCategory.outgoing_links).selectinload(CatalogCategoryLink.linked_category),
+            selectinload(CatalogCategory.components),
         )
         .order_by(CatalogCategory.sort_order, CatalogCategory.name)
     ).all()
@@ -278,6 +383,17 @@ def _build_category_sections(
         "scope": category.scope.value,
         "depth": depth,
         "linked_categories": [link.linked_category.name for link in category.outgoing_links],
+        "available_components": [
+            {
+                "id": component.id,
+                "name": component.name,
+                "short_name": component.short_name,
+                "type": component.component_type.value,
+                "description": component.description,
+                "installation": component.installation,
+            }
+            for component in sorted(category.components, key=lambda item: item.name)
+        ],
         "instances": instance_groups.get(category.id, []),
     }
     sections = [section]
