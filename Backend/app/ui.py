@@ -12,38 +12,96 @@ def render_layout(*, title: str, active_nav: str, content: str, extra_scripts: l
     ]
     scripts = "".join(f'<script src="{escape(path)}" defer></script>' for path in extra_scripts)
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{escape(title)} | Spec Sheets</title>
     <link rel="stylesheet" href="/static/css/app.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {{
+            darkMode: 'class',
+            theme: {{
+                extend: {{
+                    fontFamily: {{
+                        sans: ['Geist', 'sans-serif'],
+                        mono: ['Geist Mono', 'monospace'],
+                    }},
+                    colors: {{
+                        accent: {{
+                            400: '#fbbf24',
+                            500: '#f59e0b',
+                            900: '#78350f',
+                            950: '#451a03',
+                        }},
+                        zinc: {{
+                            950: '#09090b',
+                            900: '#18181b',
+                            800: '#27272a',
+                            700: '#3f3f46',
+                            600: '#52525b',
+                            500: '#71717a',
+                            400: '#a1a1aa',
+                            300: '#d4d4d8',
+                            200: '#e4e4e7',
+                            100: '#f4f4f5',
+                            50: '#fafafa',
+                        }}
+                    }}
+                }}
+            }}
+        }}
+    </script>
+    <style>
+      .liquid-glass {{
+          background: rgba(24, 24, 27, 0.4);
+          backdrop-filter: blur(20px);
+          -webkit-backdrop-filter: blur(20px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 32px -4px rgba(0, 0, 0, 0.5);
+      }}
+      .ambient-glow {{
+          position: fixed;
+          top: -20vh;
+          right: -10vw;
+          width: 70vw;
+          height: 70vh;
+          background: radial-gradient(circle, rgba(245,158,11,0.06) 0%, rgba(9,9,11,0) 70%);
+          pointer-events: none;
+          z-index: 0;
+      }}
+      body {{ font-family: 'Geist', sans-serif; background-color: #09090b; color: #e4e4e7; }}
+    </style>
   </head>
-  <body>
+  <body class="min-h-[100dvh] font-sans selection:bg-accent-500/30 selection:text-accent-400 overflow-x-hidden relative">
     <div class="ambient-glow"></div>
-    <div class="page-shell">
-      <aside class="rail-nav">
-        <div class="rail-brand">SS</div>
-        <nav class="rail-links">
-          {''.join(nav)}
-        </nav>
-        <div class="rail-foot">PG</div>
-      </aside>
-      <section class="workspace-shell">
-        <header class="command-bar">
-          <div>
-            <p class="eyebrow">Spec Sheets Rebuild</p>
-            <h1>{escape(title)}</h1>
-          </div>
-          <div class="command-meta">
-            <span class="command-chip">POSTGRES</span>
-            <p class="topbar-note">FastAPI + SQLAlchemy, rebuilt as a denser command surface.</p>
+    <div class="flex h-screen overflow-hidden relative z-10">
+      <nav class="w-16 border-r border-white/10 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center py-6 shrink-0 z-50">
+        <div class="w-8 h-8 rounded-lg bg-accent-500 flex items-center justify-center text-zinc-950 font-bold mb-8 shadow-[0_0_15px_rgba(245,158,11,0.4)]">
+          <i class="ph-bold ph-database text-xl"></i>
+        </div>
+        <div class="flex flex-col gap-4 w-full px-2">
+            {''.join(nav)}
+        </div>
+      </nav>
+      <main class="flex-1 flex flex-col h-full relative">
+        <header class="h-16 border-b border-white/5 bg-zinc-950/50 backdrop-blur-xl flex items-center justify-between px-6 shrink-0 z-40">
+          <div class="flex items-center gap-4">
+            <div class="font-mono text-xs text-zinc-500 tracking-widest uppercase">Spec Sheets</div>
+            <div class="h-4 w-px bg-white/10"></div>
+            <h1 class="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+              {escape(title)}
+              <span class="w-2 h-2 rounded-full bg-accent-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse"></span>
+            </h1>
           </div>
         </header>
-        <main class="page-content">
+        <div class="flex-1 overflow-y-auto overflow-x-hidden p-6 lg:p-10">
           {content}
-        </main>
-      </section>
+        </div>
+      </main>
     </div>
     {scripts}
   </body>
@@ -90,128 +148,168 @@ def render_home_page() -> str:
 
 def render_catalog_page(data: dict, selected_category_id: int | None) -> str:
     selected = data["selected"]
-    summary_cards = "".join(
-        f"""
-        <article class="metric-card">
-          <p>{escape(label)}</p>
-          <strong>{value}</strong>
-        </article>
+    
+    # Data Density Widget (Summary Stats)
+    summary_html = ""
+    for label, value in (
+        ("Categories", data["summary"]["categories"]),
+        ("Components", data["summary"]["components"]),
+        ("Materials", data["summary"]["materials"]),
+    ):
+        summary_html += f"""
+        <div class="flex flex-col gap-1 border-b border-white/5 pb-3 last:border-0 last:pb-0">
+            <div class="flex justify-between items-end">
+                <span class="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">{escape(label)}</span>
+            </div>
+            <div class="font-mono text-2xl font-bold text-white tracking-tighter">
+                {value}
+            </div>
+        </div>
         """
-        for label, value in (
-            ("Categories", data["summary"]["categories"]),
-            ("Components", data["summary"]["components"]),
-            ("Materials", data["summary"]["materials"]),
-        )
-    )
 
-    selected_block = "<p class='empty-state'>No category available.</p>"
+    selected_block = "<div class='liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm'>No category selected.</div>"
     if selected is not None:
         child_chips = "".join(
-            f'<a class="chip-link" href="/catalog?category_id={child["id"]}">{escape(child["name"])} <span>{escape(child["scope"])}</span></a>'
+            f'<a class="px-3 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-zinc-300 transition-colors" href="/catalog?category_id={child["id"]}">{escape(child["name"])} <span class="text-zinc-500 font-mono text-[10px] ml-2">{escape(child["scope"])}</span></a>'
             for child in selected["child_categories"]
-        ) or "<p class='subtle'>This category has no children yet.</p>"
+        ) or "<p class='text-xs text-zinc-500 font-mono'>No child categories.</p>"
+        
         linked_lines = "".join(
-            f"<li>{escape(category['name'])}</li>" for category in selected["linked_categories"]
-        ) or "<li>No linked accessory categories configured.</li>"
-        component_cards = "".join(_render_catalog_component_card(component) for component in selected["components"]) or "<p class='empty-state'>No components in this category yet.</p>"
+            f'<div class="px-2 py-1 bg-black/40 border border-white/5 rounded text-xs text-zinc-400 font-mono">{escape(category["name"])}</div>' for category in selected["linked_categories"]
+        ) or "<p class='text-xs text-zinc-500 font-mono'>None</p>"
+        
+        component_cards = "".join(_render_catalog_component_card(component) for component in selected["components"]) or "<div class='p-8 text-center text-zinc-500 font-mono text-sm border border-white/5 bg-white/5 rounded-lg'>No components yet.</div>"
+        
         link_checkboxes = "".join(
             f"""
-            <label class="checkbox-row">
-              <input type="checkbox" name="linked_category_ids" value="{target['id']}" {"checked" if target['id'] in selected['linked_category_ids'] else ""}>
-              <span>{escape(target['name'])}</span>
+            <label class="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer hover:text-white transition-colors">
+              <input type="checkbox" name="linked_category_ids" value="{target['id']}" {"checked" if target['id'] in selected['linked_category_ids'] else ""} class="rounded border-white/10 bg-black/40 text-accent-500 focus:ring-accent-500/50">
+              <span class="font-mono text-xs">{escape(target['name'])}</span>
             </label>
             """
             for target in data["link_targets"]
-        ) or "<p class='subtle'>No other categories available.</p>"
+        ) or "<p class='text-xs text-zinc-500 font-mono'>No targets available.</p>"
+        
         selected_block = f"""
-        <section class="panel category-detail">
-          <div class="panel-header">
-            <div>
-              <p class="card-kicker">Selected category</p>
-              <h2>{escape(selected['name'])}</h2>
+        <div class="flex flex-col gap-6">
+            <!-- Header Block -->
+            <div class="flex items-end justify-between border-b border-white/10 pb-4">
+                <div>
+                    <h2 class="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
+                        {escape(selected['name'])}
+                        <span class="px-2 py-0.5 border border-white/10 bg-white/5 rounded text-[10px] font-mono text-zinc-400 align-middle uppercase">{escape(selected['scope'])}</span>
+                    </h2>
+                    <p class="text-sm text-zinc-500 mt-1">{escape(selected['description'] or 'No description provided.')}</p>
+                </div>
             </div>
-            <span class="badge badge-scope">{escape(selected['scope'])}</span>
-          </div>
-          <p>{escape(selected['description'] or 'No description yet.')}</p>
-          <div class="inline-grid two-col">
-            <div>
-              <h3>Child categories</h3>
-              <div class="chip-stack">{child_chips}</div>
+
+            <!-- Meta Data Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="liquid-glass rounded-xl p-5">
+                    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2"><i class="ph-bold ph-folders text-zinc-400"></i> Children</h3>
+                    <div class="flex flex-wrap gap-2">{child_chips}</div>
+                </div>
+                <div class="liquid-glass rounded-xl p-5 border-accent-500/20">
+                    <h3 class="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2"><i class="ph-bold ph-link text-accent-500"></i> Linked Categories</h3>
+                    <div class="flex flex-wrap gap-2">{linked_lines}</div>
+                </div>
             </div>
-            <div>
-              <h3>Linked accessory categories</h3>
-              <ul class="clean-list">{linked_lines}</ul>
+
+            <!-- Forms Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <form class="liquid-glass rounded-xl p-5 flex flex-col gap-4" method="post" action="/catalog/categories">
+                    <h3 class="text-xs font-bold text-zinc-200 uppercase tracking-widest"><i class="ph-bold ph-folder-plus text-zinc-400 mr-2"></i> Add Child Category</h3>
+                    <input type="hidden" name="parent_id" value="{selected['id']}">
+                    <div class="space-y-3">
+                        <input name="name" required placeholder="Category Name" class="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                        <textarea name="description" rows="2" placeholder="Description" class="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"></textarea>
+                        <select name="scope" class="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                            <option value="item">Item</option>
+                            <option value="accessory">Accessory</option>
+                            <option value="mixed">Mixed</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="mt-auto px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-white transition-all w-full">Create Category</button>
+                </form>
+
+                <form class="liquid-glass rounded-xl p-5 flex flex-col gap-4" method="post" action="/catalog/components">
+                    <h3 class="text-xs font-bold text-zinc-200 uppercase tracking-widest"><i class="ph-bold ph-cube text-zinc-400 mr-2"></i> Add Component</h3>
+                    <input type="hidden" name="category_id" value="{selected['id']}">
+                    <div class="space-y-3">
+                        <div class="flex gap-2">
+                            <input name="name" required placeholder="Name" class="w-2/3 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                            <input name="short_name" placeholder="SKU" class="w-1/3 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                        </div>
+                        <div class="flex gap-2">
+                            <select name="component_type" class="w-1/2 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                                <option value="item">Item</option>
+                                <option value="accessory">Accessory</option>
+                            </select>
+                            <input name="unit_type" placeholder="Unit (m2, set)" class="w-1/2 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+                        </div>
+                        <textarea name="description" rows="2" placeholder="Description" class="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"></textarea>
+                    </div>
+                    <button type="submit" class="mt-auto px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 border border-transparent rounded-lg text-xs font-bold shadow-[0_0_15px_rgba(245,158,11,0.2)] transition-all w-full">Create Component</button>
+                </form>
+
+                <form class="liquid-glass rounded-xl p-5 flex flex-col gap-4" method="post" action="/catalog/categories/{selected['id']}/links">
+                    <h3 class="text-xs font-bold text-zinc-200 uppercase tracking-widest"><i class="ph-bold ph-plugs text-zinc-400 mr-2"></i> Rules</h3>
+                    <div class="flex-1 bg-black/20 border border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
+                        {link_checkboxes}
+                    </div>
+                    <button type="submit" class="mt-auto px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-white transition-all w-full">Save Rules</button>
+                </form>
             </div>
-          </div>
-        </section>
-        <section class="inline-grid two-col">
-          <form class="panel form-panel" method="post" action="/catalog/categories">
-            <h3>Add child category</h3>
-            <input type="hidden" name="parent_id" value="{selected['id']}">
-            <label>Name<input name="name" required></label>
-            <label>Description<textarea name="description" rows="3"></textarea></label>
-            <label>Scope
-              <select name="scope">
-                <option value="item">Item</option>
-                <option value="accessory">Accessory</option>
-                <option value="mixed">Mixed</option>
-              </select>
-            </label>
-            <button class="button-link" type="submit">Create category</button>
-          </form>
-          <form class="panel form-panel" method="post" action="/catalog/components">
-            <h3>Add component</h3>
-            <input type="hidden" name="category_id" value="{selected['id']}">
-            <label>Name<input name="name" required></label>
-            <label>Short name<input name="short_name"></label>
-            <label>Type
-              <select name="component_type">
-                <option value="item">Item</option>
-                <option value="accessory">Accessory</option>
-              </select>
-            </label>
-            <label>Unit type<input name="unit_type" placeholder="unit, m2, set..."></label>
-            <label>Description<textarea name="description" rows="4"></textarea></label>
-            <label>Installation<textarea name="installation" rows="3"></textarea></label>
-            <button class="button-link" type="submit">Create component</button>
-          </form>
-        </section>
-        <form class="panel form-panel link-form" method="post" action="/catalog/categories/{selected['id']}/links">
-          <h3>Linked category rules</h3>
-          <p class="subtle">These explicit relationships replace the legacy comma-separated linked category field.</p>
-          <div class="checkbox-grid">
-            {link_checkboxes}
-          </div>
-          <button class="button-link secondary" type="submit">Save link rules</button>
-        </form>
-        <section class="stacked-list">
-          <div class="section-title">
-            <h3>Components in {escape(selected['name'])}</h3>
-            <p>{len(selected['components'])} reusable template(s)</p>
-          </div>
-          {component_cards}
-        </section>
+
+            <!-- Components List -->
+            <div>
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                        <i class="ph-bold ph-stack text-zinc-400"></i> Components
+                    </h3>
+                    <div class="text-xs font-mono text-zinc-500">{len(selected['components'])} instances</div>
+                </div>
+                <div class="w-full border border-white/10 rounded-xl overflow-hidden bg-zinc-900/50 backdrop-blur-sm">
+                    {component_cards}
+                </div>
+            </div>
+        </div>
         """
 
     content = f"""
-    <section class="inline-grid three-col hero-strip">
-      {summary_cards}
-    </section>
-    <section class="workspace">
-      <aside class="sidebar panel">
-        <div class="sidebar-head">
-          <p class="card-kicker">Category tree</p>
-          <input id="catalogTreeSearch" type="search" placeholder="Filter categories">
+    <div class="max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-12 gap-6">
+        <!-- Left Sidebar -->
+        <div class="xl:col-span-3 space-y-6">
+            <!-- Navigation -->
+            <div class="liquid-glass rounded-2xl p-4 flex flex-col h-[500px]">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                        <i class="ph-bold ph-tree-structure"></i> Taxonomy
+                    </h2>
+                    <i class="ph-bold ph-magnifying-glass text-zinc-600"></i>
+                </div>
+                <div class="flex-1 overflow-y-auto pr-2" data-tree-filter-target>
+                    {_render_catalog_tree(data['tree'], selected_category_id or (selected['id'] if selected else None))}
+                </div>
+            </div>
+
+            <!-- Widget -->
+            <div class="liquid-glass rounded-2xl p-5 flex flex-col gap-4">
+                <div class="flex justify-between items-end mb-2">
+                    <span class="text-xs text-zinc-500 uppercase tracking-widest font-bold">Total Scope</span>
+                    <i class="ph-bold ph-chart-bar text-zinc-400"></i>
+                </div>
+                {summary_html}
+            </div>
         </div>
-        <div class="tree-root" data-tree-filter-target>
-          {_render_catalog_tree(data['tree'], selected_category_id or (selected['id'] if selected else None))}
+
+        <!-- Main Content -->
+        <div class="xl:col-span-9">
+            {selected_block}
         </div>
-      </aside>
-      <section class="workspace-main">
-        {selected_block}
-      </section>
-    </section>
+    </div>
     """
+    
     return render_layout(
         title="Database Editor",
         active_nav="catalog",
@@ -403,21 +501,43 @@ def render_project_detail_page(data: dict) -> str:
     )
 
 
-def _render_catalog_tree(nodes: list[dict], selected_category_id: int | None) -> str:
-    if not nodes:
-        return "<p class='empty-state'>No categories loaded.</p>"
-    return "<ul class='tree-list'>" + "".join(_render_catalog_tree_node(node, selected_category_id) for node in nodes) + "</ul>"
+def _render_catalog_tree(nodes: list[dict], selected_category_id: int | None, is_root: bool = True) -> str:
+    if not nodes and is_root:
+        return "<p class='text-xs text-zinc-500 font-mono'>No categories loaded.</p>"
+    elif not nodes:
+        return ""
+        
+    wrapper_class = "space-y-1" if is_root else "ml-5 border-l border-white/10 mt-1 pl-3 space-y-1"
+    
+    return f"<ul class='{wrapper_class}'>" + "".join(_render_catalog_tree_node(node, selected_category_id, is_root) for node in nodes) + "</ul>"
 
 
-def _render_catalog_tree_node(node: dict, selected_category_id: int | None) -> str:
-    active = "active" if node["id"] == selected_category_id else ""
-    children = _render_catalog_tree(node["children"], selected_category_id) if node["children"] else ""
+def _render_catalog_tree_node(node: dict, selected_category_id: int | None, is_root: bool) -> str:
+    is_active = node["id"] == selected_category_id
+    
+    if is_root:
+        active_class = "bg-white/5 border border-white/5 text-zinc-200 font-medium" if is_active else "hover:bg-white/5 border border-transparent text-zinc-500 hover:text-zinc-300"
+        icon_class = "ph-fill ph-folder-open text-accent-400" if is_active else "ph-fill ph-folder"
+        
+        link = f"""
+        <a class="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors {active_class}" href="/catalog?category_id={node['id']}">
+            <span class="flex items-center gap-2"><i class="{icon_class}"></i> {escape(node['name'])}</span>
+            <span class="font-mono text-[10px] text-zinc-500">{node['component_count']} items</span>
+        </a>
+        """
+    else:
+        active_class = "text-accent-400 font-semibold before:bg-accent-400/50" if is_active else "text-zinc-400 hover:text-zinc-200 before:bg-white/10"
+        
+        link = f"""
+        <a class="w-full block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 {active_class}" href="/catalog?category_id={node['id']}">
+            {escape(node['name'])}
+        </a>
+        """
+        
+    children = _render_catalog_tree(node["children"], selected_category_id, is_root=False) if node["children"] else ""
     return f"""
     <li data-filter-item>
-      <a class="tree-link {active}" href="/catalog?category_id={node['id']}">
-        <span>{escape(node['name'])}</span>
-        <small>{node['component_count']} comps</small>
-      </a>
+      {link}
       {children}
     </li>
     """
@@ -426,60 +546,108 @@ def _render_catalog_tree_node(node: dict, selected_category_id: int | None) -> s
 def _render_catalog_component_card(component: dict) -> str:
     attributes = "".join(
         f"""
-        <li>
-          <strong>{escape(attribute['name'])}</strong>
-          <span>{escape(attribute['value_type'])}</span>
-          <p>{escape(', '.join(attribute['options']) if attribute['options'] else 'Free value')}</p>
-        </li>
+        <tr>
+            <td class="py-2 text-zinc-500 font-medium w-1/3">{escape(attribute['name'])}</td>
+            <td class="py-2 text-zinc-200 font-mono w-1/3">{escape(attribute['value_type'])}</td>
+            <td class="py-2 text-zinc-400 font-mono w-1/3 text-right">{escape(', '.join(attribute['options']) if attribute['options'] else 'Free value')}</td>
+        </tr>
         """
         for attribute in component["attributes"]
-    ) or "<li>No attributes defined.</li>"
+    ) or "<tr><td colspan='3' class='py-2 text-zinc-500 font-mono text-center'>No attributes defined.</td></tr>"
 
-    material_rows = "".join(_render_material_rule(rule) for rule in component["material_rules"]) or "<p class='empty-state'>No material rules defined.</p>"
+    material_rows = "".join(_render_material_rule(rule) for rule in component["material_rules"]) or "<tr><td colspan='4' class='py-4 text-center text-zinc-500 font-mono text-xs'>No material rules defined.</td></tr>"
+    
+    icon_class = "ph-flask" if component['type'] == 'accessory' else "ph-wall"
+    type_label = "ACCESSORY" if component['type'] == 'accessory' else "ITEM"
+    badge_bg = "bg-white/10 text-zinc-300 border-white/20" if component['type'] == 'accessory' else "bg-black/40 text-zinc-400 border-white/10"
+    
     return f"""
-    <article class="panel component-card">
-      <div class="panel-header compact">
-        <div>
-          <p class="card-kicker">{escape(component['type'])}</p>
-          <h4>{escape(component['name'])}</h4>
+    <div class="border-b border-white/10 last:border-0">
+        <!-- Header -->
+        <div class="flex items-center justify-between p-4 bg-black/20 group hover:bg-white/5 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded bg-white/5 border border-white/10 flex items-center justify-center text-zinc-400">
+                    <i class="ph-fill {icon_class}"></i>
+                </div>
+                <div>
+                    <div class="font-bold text-white text-[15px] flex items-center gap-2">
+                        {escape(component['name'])}
+                        <span class="px-2 py-0.5 border border-white/10 bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">{escape(component['short_name'] or '')}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
+                <span class="px-2 py-1 {badge_bg} text-[10px] font-bold uppercase tracking-widest border rounded">{type_label}</span>
+                <button type="button" class="px-3 py-1.5 text-xs font-semibold text-zinc-300 border border-white/10 bg-white/5 hover:bg-white/10 rounded transition-colors flex items-center gap-2" onclick="this.parentElement.parentElement.nextElementSibling.classList.toggle('hidden')">
+                    <i class="ph-bold ph-caret-down"></i> Details
+                </button>
+            </div>
         </div>
-        <span class="badge">{escape(component['short_name'] or component['name'])}</span>
-      </div>
-      <p>{escape(component['description'] or 'No description yet.')}</p>
-      <div class="inline-grid two-col">
-        <div>
-          <h5>Attributes</h5>
-          <ul class="attribute-list">{attributes}</ul>
+
+        <!-- Details Container (Hidden by default, toggled by button above) -->
+        <div class="hidden border-t border-white/5 bg-black/40 p-4">
+            <p class="text-sm text-zinc-400 mb-6">{escape(component['description'] or 'No description provided.')}</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <!-- Attributes Section -->
+                <div>
+                    <h6 class="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2"><i class="ph-bold ph-list-dashes text-zinc-600"></i> Attributes</h6>
+                    <table class="w-full text-left border-collapse text-sm">
+                        <tbody class="divide-y divide-white/10">
+                            {attributes}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Crud & Meta -->
+                <div class="flex flex-col gap-4">
+                    <form class="bg-white/5 border border-white/10 rounded-lg p-4 flex flex-col gap-3" method="post" action="/catalog/components/{component['id']}/update">
+                        <h6 class="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2"><i class="ph-bold ph-pencil-simple text-zinc-500"></i> Edit Component</h6>
+                        <div class="flex gap-2">
+                            <input name="name" value="{escape(component['name'])}" required placeholder="Name" class="w-2/3 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">
+                            <input name="short_name" value="{escape(component['short_name'] or '')}" placeholder="SKU" class="w-1/3 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">
+                        </div>
+                        <div class="flex gap-2">
+                            <select name="component_type" class="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">
+                                <option value="item" {"selected" if component['type'] == 'item' else ""}>Item</option>
+                                <option value="accessory" {"selected" if component['type'] == 'accessory' else ""}>Accessory</option>
+                            </select>
+                            <input name="unit_type" value="{escape(component['unit_type'] or '')}" placeholder="Unit type" class="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">
+                        </div>
+                        <textarea name="description" rows="2" placeholder="Description" class="w-full bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">{escape(component['description'] or '')}</textarea>
+                        <textarea name="installation" rows="2" placeholder="Installation" class="w-full bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono">{escape(component['installation'] or '')}</textarea>
+                        <div class="flex justify-between items-center mt-2">
+                            <button class="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs font-semibold transition-colors" type="submit">Save changes</button>
+                        </div>
+                    </form>
+                    
+                    <form method="post" action="/catalog/components/{component['id']}/delete" class="flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-lg p-3">
+                        <input type="hidden" name="category_id" value="{component['category_id']}">
+                        <span class="text-[10px] text-red-400 font-mono">Deletion blocked if in use.</span>
+                        <button class="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs font-semibold transition-colors flex items-center gap-1" type="submit"><i class="ph-bold ph-trash"></i> Delete</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Materials Section -->
+            <div>
+                <h6 class="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2"><i class="ph-bold ph-boxes text-zinc-600"></i> Material Rules</h6>
+                <table class="w-full text-left border-collapse text-sm border border-white/10 rounded overflow-hidden">
+                    <thead class="bg-black/60 border-b border-white/10">
+                        <tr>
+                            <th class="px-3 py-2 text-zinc-500 font-medium w-1/3">Material</th>
+                            <th class="px-3 py-2 text-zinc-500 font-medium w-1/4">SKU / Unit</th>
+                            <th class="px-3 py-2 text-zinc-500 font-medium text-right w-1/4">Qty Per Unit</th>
+                            <th class="px-3 py-2 text-zinc-500 font-medium text-right">Conditions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white/5 divide-y divide-white/5">
+                        {material_rows}
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <div>
-          <h5>Material rules</h5>
-          <div class="stacked-list">{material_rows}</div>
-        </div>
-      </div>
-      <div class="inline-grid two-col component-crud">
-        <form class="form-panel compact-form" method="post" action="/catalog/components/{component['id']}/update">
-          <h5>Edit component</h5>
-          <label>Name<input name="name" value="{escape(component['name'])}" required></label>
-          <label>Short name<input name="short_name" value="{escape(component['short_name'] or '')}"></label>
-          <label>Type
-            <select name="component_type">
-              <option value="item" {"selected" if component['type'] == 'item' else ""}>Item</option>
-              <option value="accessory" {"selected" if component['type'] == 'accessory' else ""}>Accessory</option>
-            </select>
-          </label>
-          <label>Unit type<input name="unit_type" value="{escape(component['unit_type'] or '')}"></label>
-          <label>Description<textarea name="description" rows="3">{escape(component['description'] or '')}</textarea></label>
-          <label>Installation<textarea name="installation" rows="3">{escape(component['installation'] or '')}</textarea></label>
-          <button class="button-link secondary" type="submit">Save changes</button>
-        </form>
-        <form class="form-panel compact-form danger-form" method="post" action="/catalog/components/{component['id']}/delete">
-          <h5>Delete component</h5>
-          <input type="hidden" name="category_id" value="{component['category_id']}">
-          <p class="subtle">Deletion is blocked once a reusable component is already used in a project.</p>
-          <button class="button-link danger" type="submit">Delete component</button>
-        </form>
-      </div>
-    </article>
+    </div>
     """
 
 
@@ -490,19 +658,26 @@ def _render_material_rule(rule: dict) -> str:
             _format_condition(clause)
             for clause in group["clauses"]
         )
-        conditions.append(f"<li>{escape(group['group'])}: {escape(clauses)}</li>")
-    condition_list = "".join(conditions) if conditions else "<li>Always applies</li>"
+        conditions.append(f"<span class='px-1.5 py-0.5 bg-black/40 border border-white/5 rounded text-[10px] font-mono text-zinc-400'>{escape(group['group'])}: {escape(clauses)}</span>")
+    condition_list = "".join(conditions) if conditions else "<span class='text-zinc-500 text-xs italic'>Always applies</span>"
     unit_qty = "n/a" if rule["unit_qty_per_unit"] is None else f"{rule['unit_qty_per_unit']}"
+    
     return f"""
-    <article class="material-rule">
-      <div class="material-rule-head">
-        <strong>{escape(rule['material_name'])}</strong>
-        <span>{escape(rule['sku'])}</span>
-      </div>
-      <p>{escape(rule['notes'] or 'No notes.')}</p>
-      <p class="subtle">Unit: {escape(rule['unit'] or '-')} | Qty per unit: {escape(unit_qty)}</p>
-      <ul class="clean-list">{condition_list}</ul>
-    </article>
+    <tr class="group hover:bg-white/5 transition-colors">
+        <td class="px-3 py-3 text-zinc-200 font-medium text-sm flex flex-col gap-1">
+            {escape(rule['material_name'])}
+            <span class="text-[10px] text-zinc-500 font-mono">{escape(rule['notes'] or '')}</span>
+        </td>
+        <td class="px-3 py-3 text-zinc-500 font-mono text-xs">
+            {escape(rule['sku'])} <br/> ({escape(rule['unit'] or '-')})
+        </td>
+        <td class="px-3 py-3 text-right font-mono text-sm text-accent-400">
+            {escape(unit_qty)}
+        </td>
+        <td class="px-3 py-3 text-right flex flex-wrap justify-end gap-1">
+            {condition_list}
+        </td>
+    </tr>
     """
 
 
@@ -688,9 +863,24 @@ def _render_subtype(subtype: dict) -> str:
 
 
 def _nav_link(href: str, label: str, active: bool) -> str:
-    classes = "nav-link active" if active else "nav-link"
-    short = "".join(part[0] for part in label.split()[:2]).upper()
-    return f'<a class="{classes}" href="{href}"><span class="nav-short">{escape(short)}</span><span class="nav-label">{escape(label)}</span></a>'
+    icon = "ph-rocket"
+    if label == "Database Editor":
+        icon = "ph-database"
+    elif label == "Projects":
+        icon = "ph-kanban"
+    
+    if active:
+        return f'''
+        <a href="{href}" class="w-full aspect-square rounded-xl bg-white/10 text-white flex items-center justify-center border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] transition-transform active:scale-95 group relative">
+            <i class="ph-fill {icon} text-xl"></i>
+            <div class="absolute left-full ml-4 px-2 py-1 bg-zinc-800 text-xs rounded border border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">{escape(label)}</div>
+        </a>'''
+    else:
+        return f'''
+        <a href="{href}" class="w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-white/5 flex items-center justify-center transition-all group relative">
+            <i class="ph-bold {icon} text-xl"></i>
+            <div class="absolute left-full ml-4 px-2 py-1 bg-zinc-800 text-xs rounded border border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">{escape(label)}</div>
+        </a>'''
 
 
 def _format_condition(clause: dict) -> str:
