@@ -6,7 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
+    AttributeValueType,
     CatalogAttributeDefinition,
+    CatalogAttributeOption,
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
@@ -14,7 +16,7 @@ from app.models import (
     Material,
     MaterialRuleGroup,
 )
-from app.models.entities import CategoryScope, ComponentType
+from app.models.entities import CategoryScope, ComponentType, utcnow
 
 
 def get_catalog_page_data(session: Session, selected_category_id: int | None = None) -> dict:
@@ -161,6 +163,121 @@ def delete_component(session: Session, *, component_id: int) -> int | None:
     return category_id
 
 
+def create_attribute_definition(
+    session: Session,
+    *,
+    component_id: int,
+    name: str,
+    value_type: str,
+    options_text: str | None,
+) -> CatalogAttributeDefinition | None:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id)
+        .options(selectinload(CatalogComponent.attribute_definitions).selectinload(CatalogAttributeDefinition.options))
+    )
+    if component is None:
+        return None
+
+    definition = CatalogAttributeDefinition(
+        component=component,
+        name=name.strip(),
+        value_type=AttributeValueType(value_type),
+        sort_order=(component.attribute_definitions[-1].sort_order + 1) if component.attribute_definitions else 1,
+    )
+    session.add(definition)
+    session.flush()
+    _replace_attribute_options(definition, options_text)
+    _touch_component(component)
+    session.commit()
+    session.refresh(definition)
+    return definition
+
+
+def update_attribute_definition(
+    session: Session,
+    *,
+    attribute_definition_id: int,
+    name: str,
+    value_type: str,
+    options_text: str | None,
+) -> CatalogAttributeDefinition | None:
+    definition = session.scalar(
+        select(CatalogAttributeDefinition)
+        .where(CatalogAttributeDefinition.id == attribute_definition_id)
+        .options(
+            selectinload(CatalogAttributeDefinition.component),
+            selectinload(CatalogAttributeDefinition.options),
+        )
+    )
+    if definition is None:
+        return None
+
+    definition.name = name.strip()
+    definition.value_type = AttributeValueType(value_type)
+    _replace_attribute_options(definition, options_text)
+    _touch_component(definition.component)
+    session.commit()
+    session.refresh(definition)
+    return definition
+
+
+def delete_attribute_definition(session: Session, *, attribute_definition_id: int) -> int | None:
+    definition = session.scalar(
+        select(CatalogAttributeDefinition)
+        .where(CatalogAttributeDefinition.id == attribute_definition_id)
+        .options(selectinload(CatalogAttributeDefinition.component))
+    )
+    if definition is None:
+        return None
+
+    category_id = definition.component.category_id
+    _touch_component(definition.component)
+    session.delete(definition)
+    session.commit()
+    return category_id
+
+
+def replace_component_attributes(
+    session: Session,
+    *,
+    component_id: int,
+    attributes: list[dict],
+) -> CatalogComponent | None:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id)
+        .options(selectinload(CatalogComponent.attribute_definitions).selectinload(CatalogAttributeDefinition.options))
+    )
+    if component is None:
+        return None
+
+    component.attribute_definitions.clear()
+    session.flush()
+
+    for index, attribute in enumerate(attributes, start=1):
+        name = (attribute.get("name") or "").strip()
+        value_type = AttributeValueType(attribute.get("value_type") or AttributeValueType.TEXT.value)
+        options = _normalize_attribute_option_list(attribute.get("options"))
+        if not name and not options:
+            continue
+
+        definition = CatalogAttributeDefinition(
+            component=component,
+            name=name,
+            value_type=value_type,
+            sort_order=index,
+        )
+        session.add(definition)
+        session.flush()
+        _replace_attribute_options(definition, options)
+
+    _touch_component(component)
+    session.commit()
+    session.refresh(component)
+    return component
+
+
 def update_category_links(session: Session, *, category_id: int, linked_category_ids: list[int]) -> None:
     current_links = session.scalars(
         select(CatalogCategoryLink).where(CatalogCategoryLink.category_id == category_id)
@@ -229,6 +346,7 @@ def _serialize_component(component: CatalogComponent) -> dict:
         "unit_type": component.unit_type,
         "attributes": [
             {
+                "id": definition.id,
                 "name": definition.name,
                 "value_type": definition.value_type.value,
                 "options": [option.value for option in definition.options],
@@ -261,3 +379,37 @@ def _serialize_component(component: CatalogComponent) -> dict:
             for rule in component.material_rules
         ],
     }
+
+
+def _replace_attribute_options(definition: CatalogAttributeDefinition, options_source: str | list[str] | None) -> None:
+    normalized_options = _normalize_attribute_option_list(options_source)
+    definition.options.clear()
+    if definition.value_type != AttributeValueType.SELECT:
+        return
+
+    for index, option in enumerate(normalized_options, start=1):
+        definition.options.append(
+            CatalogAttributeOption(
+                value=option,
+                sort_order=index,
+            )
+        )
+
+
+def _normalize_attribute_option_list(raw_value: str | list[str] | None) -> list[str]:
+    if raw_value is None:
+        return []
+
+    if isinstance(raw_value, list):
+        return [str(value).strip() for value in raw_value if str(value).strip()]
+
+    normalized = raw_value.replace("\r", "\n")
+    parts = []
+    for chunk in normalized.split("\n"):
+        pieces = [piece.strip() for piece in chunk.split(",")]
+        parts.extend(piece for piece in pieces if piece)
+    return parts
+
+
+def _touch_component(component: CatalogComponent) -> None:
+    component.updated_at = utcnow()

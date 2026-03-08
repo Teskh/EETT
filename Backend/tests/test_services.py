@@ -6,15 +6,24 @@ import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
 from app.database import Base, create_engine_for_url
 from app.main import create_app
-from app.models import CatalogCategory
+from app.models import CatalogCategory, CatalogComponent, Project
 from app.seed import seed_demo_data_if_empty
-from app.services.catalog import create_category, create_component, get_catalog_page_data
-from app.services.projects import get_project_view_data, get_projects_page_data
+from app.services.catalog import (
+    create_attribute_definition,
+    create_category,
+    create_component,
+    delete_attribute_definition,
+    get_catalog_page_data,
+    replace_component_attributes,
+    update_attribute_definition,
+)
+from app.services.projects import create_project_instance, get_instance_sync_preview, get_project_view_data, get_projects_page_data
 from app.ui import render_catalog_page, render_project_detail_page, render_projects_page
 
 
@@ -78,6 +87,128 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(component.name, "Mirror Cabinet")
         self.assertEqual(refreshed["selected"]["name"], "Bathrooms")
         self.assertEqual(len(refreshed["selected"]["components"]), 1)
+
+    def test_catalog_attribute_helpers_support_create_update_delete_and_bump_sync_timestamp(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+
+            self.assertIsNotNone(component)
+            self.assertIsNotNone(project)
+            assert component is not None
+            assert project is not None
+
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=component.category_id,
+                component_id=component.id,
+                name="Kitchen Cabinet Clone",
+                short_name="KCC-01",
+                description="Snapshot for sync test",
+                installation="Install per kitchen plan.",
+                unit_amount=1,
+            )
+            baseline_sync = get_instance_sync_preview(session, instance.id)
+            self.assertIsNotNone(baseline_sync)
+            self.assertFalse(baseline_sync["is_outdated"])
+
+            definition = create_attribute_definition(
+                session,
+                component_id=component.id,
+                name="Toe Kick Finish",
+                value_type="select",
+                options_text="Oak, Walnut\nGraphite",
+            )
+            self.assertIsNotNone(definition)
+            assert definition is not None
+            self.assertEqual([option.value for option in definition.options], ["Oak", "Walnut", "Graphite"])
+
+            refreshed_sync = get_instance_sync_preview(session, instance.id)
+            self.assertIsNotNone(refreshed_sync)
+            self.assertTrue(refreshed_sync["is_outdated"])
+
+            updated = update_attribute_definition(
+                session,
+                attribute_definition_id=definition.id,
+                name="Toe Kick Material",
+                value_type="text",
+                options_text="Ignored",
+            )
+            self.assertIsNotNone(updated)
+            assert updated is not None
+            self.assertEqual(updated.name, "Toe Kick Material")
+            self.assertEqual(updated.value_type.value, "text")
+            self.assertEqual(updated.options, [])
+
+            deleted_category_id = delete_attribute_definition(session, attribute_definition_id=definition.id)
+            self.assertEqual(deleted_category_id, component.category_id)
+
+            refreshed = get_catalog_page_data(session, selected_category_id=component.category_id)
+            component_payload = next(item for item in refreshed["selected"]["components"] if item["id"] == component.id)
+            self.assertNotIn("Toe Kick Material", [attribute["name"] for attribute in component_payload["attributes"]])
+
+    def test_replace_component_attributes_preserves_nested_option_rows_and_marks_instances_outdated(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+
+            self.assertIsNotNone(component)
+            self.assertIsNotNone(project)
+            assert component is not None
+            assert project is not None
+
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=component.category_id,
+                component_id=component.id,
+                name="Kitchen Cabinet UX",
+                short_name="KCU-01",
+                description="Snapshot for bulk attribute editor test",
+                installation="Install per kitchen plan.",
+                unit_amount=1,
+            )
+            self.assertFalse(get_instance_sync_preview(session, instance.id)["is_outdated"])
+
+            updated_component = replace_component_attributes(
+                session,
+                component_id=component.id,
+                attributes=[
+                    {
+                        "name": "Countertop",
+                        "value_type": "select",
+                        "options": ["Laminate", "Quartz", "Porcelain"],
+                    },
+                    {
+                        "name": "Depth",
+                        "value_type": "number",
+                        "options": ["ignored"],
+                    },
+                ],
+            )
+
+            self.assertIsNotNone(updated_component)
+            refreshed = get_catalog_page_data(session, selected_category_id=component.category_id)
+            component_payload = next(item for item in refreshed["selected"]["components"] if item["id"] == component.id)
+            self.assertEqual(
+                component_payload["attributes"],
+                [
+                    {
+                        "id": component_payload["attributes"][0]["id"],
+                        "name": "Countertop",
+                        "value_type": "select",
+                        "options": ["Laminate", "Quartz", "Porcelain"],
+                    },
+                    {
+                        "id": component_payload["attributes"][1]["id"],
+                        "name": "Depth",
+                        "value_type": "number",
+                        "options": [],
+                    },
+                ],
+            )
+            self.assertTrue(get_instance_sync_preview(session, instance.id)["is_outdated"])
 
     def test_catalog_and_project_crud_routes_work(self) -> None:
         create_catalog_component_response = self.client.post(
@@ -158,6 +289,85 @@ class ServiceLayerTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(delete_instance_response.status_code, 303)
+
+    def test_catalog_attribute_routes_work(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            self.assertIsNotNone(component)
+            assert component is not None
+            component_id = component.id
+            category_id = component.category_id
+
+        create_response = self.client.post(
+            f"/catalog/components/{component_id}/attributes",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "name": "Drawer Front",
+                "value_type": "select",
+                "options_text": "Slab, Shaker",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(create_response.status_code, 303)
+
+        with self.session_factory() as session:
+            refreshed = get_catalog_page_data(session, selected_category_id=category_id)
+            component_payload = next(item for item in refreshed["selected"]["components"] if item["id"] == component_id)
+            attribute = next(item for item in component_payload["attributes"] if item["name"] == "Drawer Front")
+
+        update_response = self.client.post(
+            f"/catalog/attributes/{attribute['id']}/update",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "name": "Drawer Style",
+                "value_type": "text",
+                "options_text": "Should be cleared",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(update_response.status_code, 303)
+
+        delete_response = self.client.post(
+            f"/catalog/attributes/{attribute['id']}/delete",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={"category_id": str(category_id)},
+            follow_redirects=False,
+        )
+        self.assertEqual(delete_response.status_code, 303)
+
+        with self.session_factory() as session:
+            refreshed = get_catalog_page_data(session, selected_category_id=category_id)
+            component_payload = next(item for item in refreshed["selected"]["components"] if item["id"] == component_id)
+            self.assertNotIn("Drawer Style", [item["name"] for item in component_payload["attributes"]])
+
+    def test_catalog_bulk_attribute_route_matches_legacy_repeatable_editor_flow(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            self.assertIsNotNone(component)
+            assert component is not None
+            component_id = component.id
+            category_id = component.category_id
+
+        response = self.client.post(
+            f"/catalog/components/{component_id}/attributes/update",
+            headers={"X-Spec-Sheets-User": "editor"},
+            data={
+                "attributes_json": '[{"name":"Drawer Style","value_type":"select","options":["Slab","Shaker"]},{"name":"Cabinet Width","value_type":"number","options":["should clear"]}]',
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+
+        with self.session_factory() as session:
+            refreshed = get_catalog_page_data(session, selected_category_id=category_id)
+            component_payload = next(item for item in refreshed["selected"]["components"] if item["id"] == component_id)
+            self.assertEqual(
+                [(item["name"], item["value_type"], item["options"]) for item in component_payload["attributes"]],
+                [
+                    ("Drawer Style", "select", ["Slab", "Shaker"]),
+                    ("Cabinet Width", "number", []),
+                ],
+            )
 
     def test_projects_page_and_detail_preserve_material_semantics(self) -> None:
         with self.session_factory() as session:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 
 
@@ -544,16 +545,7 @@ def _render_catalog_tree_node(node: dict, selected_category_id: int | None, is_r
 
 
 def _render_catalog_component_card(component: dict) -> str:
-    attributes = "".join(
-        f"""
-        <tr>
-            <td class="py-2 text-zinc-500 font-medium w-1/3">{escape(attribute['name'])}</td>
-            <td class="py-2 text-zinc-200 font-mono w-1/3">{escape(attribute['value_type'])}</td>
-            <td class="py-2 text-zinc-400 font-mono w-1/3 text-right">{escape(', '.join(attribute['options']) if attribute['options'] else 'Free value')}</td>
-        </tr>
-        """
-        for attribute in component["attributes"]
-    ) or "<tr><td colspan='3' class='py-2 text-zinc-500 font-mono text-center'>No attributes defined.</td></tr>"
+    attribute_editor = _render_catalog_attribute_editor(component)
 
     material_rows = "".join(_render_material_rule(rule) for rule in component["material_rules"]) or "<tr><td colspan='4' class='py-4 text-center text-zinc-500 font-mono text-xs'>No material rules defined.</td></tr>"
     
@@ -592,11 +584,7 @@ def _render_catalog_component_card(component: dict) -> str:
                 <!-- Attributes Section -->
                 <div>
                     <h6 class="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2"><i class="ph-bold ph-list-dashes text-zinc-600"></i> Attributes</h6>
-                    <table class="w-full text-left border-collapse text-sm">
-                        <tbody class="divide-y divide-white/10">
-                            {attributes}
-                        </tbody>
-                    </table>
+                    {attribute_editor}
                 </div>
 
                 <!-- Crud & Meta -->
@@ -648,6 +636,47 @@ def _render_catalog_component_card(component: dict) -> str:
             </div>
         </div>
     </div>
+    """
+
+
+def _render_catalog_attribute_editor(component: dict) -> str:
+    initial_attributes = escape(
+        json.dumps(
+            [
+                {
+                    "name": attribute["name"],
+                    "value_type": attribute["value_type"],
+                    "options": attribute["options"],
+                }
+                for attribute in component["attributes"]
+            ]
+        ),
+        quote=True,
+    )
+    return f"""
+    <form
+        class="flex flex-col gap-3"
+        method="post"
+        action="/catalog/components/{component['id']}/attributes/update"
+        data-attribute-editor
+        data-initial-attributes="{initial_attributes}"
+    >
+        <input type="hidden" name="attributes_json" value="[]" data-attribute-json>
+        <div class="flex flex-col gap-3" data-attribute-list></div>
+        <div class="flex items-center justify-between gap-3 pt-1">
+            <button
+                type="button"
+                class="px-3 py-1.5 border border-white/10 bg-white/5 hover:bg-white/10 rounded text-xs font-semibold text-zinc-200 transition-colors flex items-center gap-2"
+                data-add-attribute
+            ><i class="ph-bold ph-plus"></i> Add attribute</button>
+            <button
+                class="px-3 py-1.5 bg-accent-500/20 hover:bg-accent-500/30 text-accent-400 rounded text-xs font-semibold transition-colors"
+                type="submit"
+            >Save attribute set</button>
+        </div>
+        <p class="text-[10px] text-zinc-500 font-mono">Legacy-style editor: build attributes as rows and add individual option values inside each select attribute.</p>
+        <noscript><div class="text-[10px] text-red-300 font-mono border border-red-500/20 bg-red-500/10 rounded-lg p-3">JavaScript is required for the attribute editor.</div></noscript>
+    </form>
     """
 
 

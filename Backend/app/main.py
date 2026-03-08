@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -38,7 +39,14 @@ from app.services.auth import (
     role_codes,
 )
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
-from app.services.catalog import delete_component, update_component
+from app.services.catalog import (
+    create_attribute_definition,
+    delete_attribute_definition,
+    delete_component,
+    replace_component_attributes,
+    update_attribute_definition,
+    update_component,
+)
 from app.services.collaboration import (
     add_project_comment,
     decide_project_approval,
@@ -215,6 +223,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if deleted_category_id is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
         return RedirectResponse(url=f"/catalog?category_id={deleted_category_id or category_id}", status_code=303)
+
+    @app.post("/catalog/components/{component_id}/attributes")
+    async def create_catalog_attribute(
+        component_id: int,
+        name: str = Form(...),
+        value_type: str = Form(...),
+        options_text: str | None = Form(default=None),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        definition = create_attribute_definition(
+            session,
+            component_id=component_id,
+            name=name,
+            value_type=value_type,
+            options_text=options_text,
+        )
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return RedirectResponse(url=f"/catalog?category_id={definition.component.category_id}", status_code=303)
+
+    @app.post("/catalog/attributes/{attribute_definition_id}/update")
+    async def update_catalog_attribute(
+        attribute_definition_id: int,
+        name: str = Form(...),
+        value_type: str = Form(...),
+        options_text: str | None = Form(default=None),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        definition = update_attribute_definition(
+            session,
+            attribute_definition_id=attribute_definition_id,
+            name=name,
+            value_type=value_type,
+            options_text=options_text,
+        )
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Catalog attribute not found")
+        return RedirectResponse(url=f"/catalog?category_id={definition.component.category_id}", status_code=303)
+
+    @app.post("/catalog/attributes/{attribute_definition_id}/delete")
+    async def delete_catalog_attribute(
+        attribute_definition_id: int,
+        category_id: int = Form(...),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        deleted_category_id = delete_attribute_definition(session, attribute_definition_id=attribute_definition_id)
+        if deleted_category_id is None:
+            raise HTTPException(status_code=404, detail="Catalog attribute not found")
+        return RedirectResponse(url=f"/catalog?category_id={deleted_category_id or category_id}", status_code=303)
+
+    @app.post("/catalog/components/{component_id}/attributes/update")
+    async def replace_catalog_component_attributes(
+        component_id: int,
+        attributes_json: str = Form("[]"),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        try:
+            attributes = json.loads(attributes_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid attribute payload") from exc
+        if not isinstance(attributes, list):
+            raise HTTPException(status_code=422, detail="Attribute payload must be a list")
+
+        component = replace_component_attributes(
+            session,
+            component_id=component_id,
+            attributes=attributes,
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return RedirectResponse(url=f"/catalog?category_id={component.category_id}", status_code=303)
 
     @app.post("/catalog/categories/{category_id}/links")
     async def save_catalog_links(
