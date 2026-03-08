@@ -3,7 +3,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import DateTime, Enum as SqlEnum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum as SqlEnum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -47,6 +60,102 @@ class AttributeValueType(str, Enum):
 class BomCalculationMode(str, Enum):
     MANUAL = "manual"
     AUTO = "auto"
+
+
+class MembershipRole(str, Enum):
+    ADMIN = "admin"
+    EDITOR = "editor"
+    VIEWER = "viewer"
+
+
+class SyncStatus(str, Enum):
+    UP_TO_DATE = "up_to_date"
+    OUT_OF_SYNC = "out_of_sync"
+    CUSTOMIZED = "customized"
+
+
+class MaterialMode(str, Enum):
+    GENERAL = "general"
+    PER_SUBTYPE = "per_subtype"
+
+
+class NotificationType(str, Enum):
+    COMMENT_MENTION = "comment_mention"
+    COMMENT_REPLY = "comment_reply"
+    APPROVAL_REQUEST = "approval_request"
+
+
+class ApprovalStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ExportKind(str, Enum):
+    COMMERCIAL_PDF = "commercial_pdf"
+    FULL_TECHNICAL_PDF = "full_technical_pdf"
+    TOTAL_MATERIALS_PDF = "total_materials_pdf"
+    CONTEXT_MATERIALS_PDF = "context_materials_pdf"
+    DETAILED_MATERIAL_PDF = "detailed_material_pdf"
+    ASSEMBLY_KIT_PDF = "assembly_kit_pdf"
+    MATERIALS_WORKBOOK = "materials_workbook"
+    COST_MODEL_WORKBOOK = "cost_model_workbook"
+
+
+class ExportStatus(str, Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    roles: Mapped[list["UserRole"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    project_memberships: Mapped[list["ProjectMembership"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    comments: Mapped[list["ProjectComment"]] = relationship(back_populates="author")
+    notifications: Mapped[list["CommentNotification"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    activity_logs: Mapped[list["ProjectActivityLog"]] = relationship(back_populates="actor")
+    requested_approvals: Mapped[list["ProjectApproval"]] = relationship(
+        foreign_keys="ProjectApproval.requested_by_user_id",
+        back_populates="requested_by",
+    )
+    decided_approvals: Mapped[list["ProjectApproval"]] = relationship(
+        foreign_keys="ProjectApproval.decided_by_user_id",
+        back_populates="decided_by",
+    )
+    requested_exports: Mapped[list["ProjectExportJob"]] = relationship(back_populates="requested_by")
+    changed_material_modes: Mapped[list["ProjectMaterialMode"]] = relationship(back_populates="changed_by")
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    users: Mapped[list["UserRole"]] = relationship(back_populates="role", cascade="all, delete-orphan")
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+    __table_args__ = (UniqueConstraint("user_id", "role_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="roles")
+    role: Mapped[Role] = relationship(back_populates="users")
 
 
 class CatalogCategory(Base):
@@ -114,6 +223,7 @@ class CatalogComponent(Base):
     installation: Mapped[str | None] = mapped_column(Text, default=None)
     unit_type: Mapped[str | None] = mapped_column(String(50), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
     category: Mapped[CatalogCategory] = relationship(back_populates="components")
     attribute_definitions: Mapped[list["CatalogAttributeDefinition"]] = relationship(
@@ -174,6 +284,7 @@ class Material(Base):
 
     component_rules: Mapped[list["ComponentMaterialRule"]] = relationship(back_populates="material")
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="material")
+    erp_cache_entries: Mapped[list["ErpMaterialCache"]] = relationship(back_populates="material")
 
 
 class ComponentMaterialRule(Base):
@@ -260,11 +371,39 @@ class Project(Base):
         cascade="all, delete-orphan",
         order_by="ProjectInstance.name",
     )
+    memberships: Mapped[list["ProjectMembership"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    material_mode: Mapped["ProjectMaterialMode | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     auxiliary_materials: Mapped[list["ProjectAuxiliaryMaterialSelection"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    comments: Mapped[list["ProjectComment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    activity_logs: Mapped[list["ProjectActivityLog"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    approvals: Mapped[list["ProjectApproval"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    export_jobs: Mapped[list["ProjectExportJob"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    export_settings: Mapped[list["InstanceExportSetting"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+
+
+class ProjectMembership(Base):
+    __tablename__ = "project_memberships"
+    __table_args__ = (UniqueConstraint("project_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[MembershipRole] = mapped_column(
+        enum_column(MembershipRole, "membership_role"),
+        default=MembershipRole.VIEWER,
+        nullable=False,
+    )
+
+    project: Mapped[Project] = relationship(back_populates="memberships")
+    user: Mapped[User] = relationship(back_populates="project_memberships")
 
 
 class ProjectSubtype(Base):
@@ -280,6 +419,24 @@ class ProjectSubtype(Base):
     children: Mapped[list["ProjectSubtype"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
     auxiliary_materials: Mapped[list["ProjectAuxiliaryMaterialSelection"]] = relationship(back_populates="subtype")
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="subtype")
+
+
+class ProjectMaterialMode(Base):
+    __tablename__ = "project_material_modes"
+    __table_args__ = (UniqueConstraint("project_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    mode: Mapped[MaterialMode] = mapped_column(
+        enum_column(MaterialMode, "material_mode"),
+        default=MaterialMode.GENERAL,
+        nullable=False,
+    )
+    changed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="material_mode")
+    changed_by: Mapped[User | None] = relationship(back_populates="changed_material_modes")
 
 
 class ProjectInstance(Base):
@@ -304,6 +461,16 @@ class ProjectInstance(Base):
     project: Mapped[Project] = relationship(back_populates="instances")
     component: Mapped[CatalogComponent] = relationship(back_populates="instances")
     category: Mapped[CatalogCategory] = relationship()
+    sync_state: Mapped["ProjectInstanceSyncState | None"] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    media: Mapped[list["ProjectInstanceMedia"]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+        order_by="ProjectInstanceMedia.sort_order",
+    )
     attribute_groups: Mapped[list["ProjectInstanceAttributeGroup"]] = relationship(
         back_populates="instance",
         cascade="all, delete-orphan",
@@ -320,6 +487,39 @@ class ProjectInstance(Base):
         cascade="all, delete-orphan",
     )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
+    comments: Mapped[list["ProjectComment"]] = relationship(back_populates="instance")
+    export_settings: Mapped[list["InstanceExportSetting"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
+
+
+class ProjectInstanceSyncState(Base):
+    __tablename__ = "project_instance_sync_states"
+    __table_args__ = (UniqueConstraint("instance_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    sync_status: Mapped[SyncStatus] = mapped_column(
+        enum_column(SyncStatus, "sync_status"),
+        default=SyncStatus.UP_TO_DATE,
+        nullable=False,
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    source_component_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    sync_notes: Mapped[str | None] = mapped_column(Text, default=None)
+
+    instance: Mapped[ProjectInstance] = relationship(back_populates="sync_state")
+
+
+class ProjectInstanceMedia(Base):
+    __tablename__ = "project_instance_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), default="image", nullable=False)
+    uri: Mapped[str] = mapped_column(String(255), nullable=False)
+    caption: Mapped[str | None] = mapped_column(String(255), default=None)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    instance: Mapped[ProjectInstance] = relationship(back_populates="media")
 
 
 class ProjectInstanceAttributeGroup(Base):
@@ -353,12 +553,14 @@ class ProjectInstanceAttributeValue(Base):
 
 class ProjectInstanceLink(Base):
     __tablename__ = "project_instance_links"
-    __table_args__ = (UniqueConstraint("parent_instance_id", "child_instance_id"),)
+    __table_args__ = (UniqueConstraint("parent_instance_id", "child_instance_id", "relationship_type", "application_label"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
     child_instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
     relationship_type: Mapped[str] = mapped_column(String(60), default="applied_accessory", nullable=False)
+    application_label: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     parent_instance: Mapped[ProjectInstance] = relationship(foreign_keys=[parent_instance_id], back_populates="parent_links")
     child_instance: Mapped[ProjectInstance] = relationship(foreign_keys=[child_instance_id], back_populates="child_links")
@@ -419,3 +621,156 @@ class ProjectAuxiliaryMaterialSelection(Base):
     project: Mapped[Project] = relationship(back_populates="auxiliary_materials")
     auxiliary_material: Mapped[AuxiliaryMaterial] = relationship(back_populates="project_selections")
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="auxiliary_materials")
+
+
+class ProjectComment(Base):
+    __tablename__ = "project_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    instance_id: Mapped[int | None] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), default=None)
+    parent_comment_id: Mapped[int | None] = mapped_column(ForeignKey("project_comments.id", ondelete="CASCADE"), default=None)
+    author_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    project: Mapped[Project] = relationship(back_populates="comments")
+    instance: Mapped[ProjectInstance | None] = relationship(back_populates="comments")
+    author: Mapped[User] = relationship(back_populates="comments")
+    parent_comment: Mapped["ProjectComment | None"] = relationship(remote_side="ProjectComment.id", back_populates="replies")
+    replies: Mapped[list["ProjectComment"]] = relationship(back_populates="parent_comment", cascade="all, delete-orphan")
+    mentions: Mapped[list["CommentMention"]] = relationship(back_populates="comment", cascade="all, delete-orphan")
+    notifications: Mapped[list["CommentNotification"]] = relationship(back_populates="comment", cascade="all, delete-orphan")
+
+
+class CommentMention(Base):
+    __tablename__ = "comment_mentions"
+    __table_args__ = (UniqueConstraint("comment_id", "mentioned_user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("project_comments.id", ondelete="CASCADE"), nullable=False)
+    mentioned_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    comment: Mapped[ProjectComment] = relationship(back_populates="mentions")
+    user: Mapped[User] = relationship()
+
+
+class CommentNotification(Base):
+    __tablename__ = "comment_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("project_comments.id", ondelete="CASCADE"), nullable=False)
+    notification_type: Mapped[NotificationType] = mapped_column(
+        enum_column(NotificationType, "notification_type"),
+        nullable=False,
+    )
+    route: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="notifications")
+    comment: Mapped[ProjectComment] = relationship(back_populates="notifications")
+
+
+class ProjectActivityLog(Base):
+    __tablename__ = "project_activity_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    entity_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    action: Mapped[str] = mapped_column(String(60), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="activity_logs")
+    actor: Mapped[User | None] = relationship(back_populates="activity_logs")
+
+
+class ProjectApproval(Base):
+    __tablename__ = "project_approvals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    requested_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    status: Mapped[ApprovalStatus] = mapped_column(
+        enum_column(ApprovalStatus, "approval_status"),
+        default=ApprovalStatus.PENDING,
+        nullable=False,
+    )
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    project: Mapped[Project] = relationship(back_populates="approvals")
+    requested_by: Mapped[User] = relationship(
+        foreign_keys=[requested_by_user_id],
+        back_populates="requested_approvals",
+    )
+    decided_by: Mapped[User | None] = relationship(
+        foreign_keys=[decided_by_user_id],
+        back_populates="decided_approvals",
+    )
+
+
+class InstanceExportSetting(Base):
+    __tablename__ = "instance_export_settings"
+    __table_args__ = (UniqueConstraint("project_id", "instance_id", "target"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    target: Mapped[str] = mapped_column(String(80), nullable=False)
+    settings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="export_settings")
+    instance: Mapped[ProjectInstance] = relationship(back_populates="export_settings")
+
+
+class ProjectExportJob(Base):
+    __tablename__ = "project_export_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    export_kind: Mapped[ExportKind] = mapped_column(
+        enum_column(ExportKind, "export_kind"),
+        nullable=False,
+    )
+    status: Mapped[ExportStatus] = mapped_column(
+        enum_column(ExportStatus, "export_status"),
+        default=ExportStatus.PENDING,
+        nullable=False,
+    )
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    payload: Mapped[dict | None] = mapped_column(JSON, default=None)
+    artifact_uri: Mapped[str | None] = mapped_column(String(255), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    project: Mapped[Project] = relationship(back_populates="export_jobs")
+    requested_by: Mapped[User | None] = relationship(back_populates="requested_exports")
+
+
+class ErpMaterialCache(Base):
+    __tablename__ = "erp_material_cache"
+    __table_args__ = (UniqueConstraint("sku"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    material_id: Mapped[int | None] = mapped_column(ForeignKey("materials.id", ondelete="SET NULL"), default=None)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    stock_on_hand: Mapped[float | None] = mapped_column(Float, default=None)
+    pending_purchase_quantity: Mapped[float | None] = mapped_column(Float, default=None)
+    average_price: Mapped[float | None] = mapped_column(Float, default=None)
+    last_purchase_price: Mapped[float | None] = mapped_column(Float, default=None)
+    average_lead_time_days: Mapped[float | None] = mapped_column(Float, default=None)
+    recent_monthly_consumption: Mapped[float | None] = mapped_column(Float, default=None)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    material: Mapped[Material | None] = relationship(back_populates="erp_cache_entries")
