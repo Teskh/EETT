@@ -3,6 +3,11 @@
 ## Summary
 Rebuild the remaining system in phases, using the current Postgres core as the base, but treating the legacy app as a behavior reference and [REFACTOR_GUIDE.md](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/REFACTOR_GUIDE.md) as the source of truth for product intent. For every feature below, the implementer must review the referenced guide sections first, then use [LEGACY_REFERENCE_MAP.md](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/LEGACY_REFERENCE_MAP.md) to locate the old implementation paths, and only then inspect legacy code if behavior is still unclear. Do not copy the old structure, dual-database split, or hidden/text-encoded relationships; preserve the workflow depth and business semantics.
 
+## Current execution note
+- The React + TypeScript frontend migration has started in `/mnt/c/Code/Spec Sheets/Frontend`.
+- FastAPI now serves the built SPA from `Backend/app/static/app` for `/`, `/catalog`, `/projects`, and `/projects/{project_id}`.
+- The previous FastAPI-rendered HTML remains only as a fallback while the SPA is being built out; new frontend work should go into the React app, not `Backend/app/ui.py`.
+
 ## Implementation Changes
 ### 1. Lock the domain contract before adding features
 - Review guide sections `Product summary`, `Mental model to preserve`, `Legacy-to-new model mapping`, `Acceptance criteria for the rebuild`, and `Suggested rebuild sequence`.
@@ -30,6 +35,8 @@ Reference instructions for the implementer:
 
 ### 3. Rebuild the frontend around the guide’s UX structure
 - Replace the server-rendered HTML workflow with a React + TypeScript frontend as required by the guide.
+- This migration is now in progress. Preserve the current visual language and workflow shape while moving interaction/state into React components backed by typed API calls.
+- Do not add new product behavior to the legacy server-rendered UI except when a temporary fallback is strictly required to avoid breaking the app during the transition.
 - Build the frontend in this order:
   1. project workspace shell
   2. catalog admin
@@ -153,6 +160,7 @@ Reference instructions for the implementer:
 ## Assumptions and Defaults
 - Source of truth priority is: guide intent first, legacy behavior second, current MVP third.
 - The rebuild remains Postgres-first, FastAPI backend, React + TypeScript frontend, with ERP isolated behind a dedicated service layer.
+- Frontend source of truth is now the React app in `Frontend/`; FastAPI HTML renderers are transitional fallback code only.
 - Heavy exports and ERP refreshes run as application services/jobs, not in blocking request paths.
 - Legacy UX gaps may be improved, but only after the legacy behavior depth is matched or exceeded.
 - No feature is considered complete until both are true:

@@ -21,6 +21,87 @@ class SessionUserResponse(BaseModel):
     permissions: PermissionSet
 
 
+class MutationResultModel(BaseModel):
+    ok: bool = True
+    category_id: int | None = None
+    component_id: int | None = None
+    project_id: int | None = None
+    instance_id: int | None = None
+    deleted_id: int | None = None
+    linked_category_ids: list[int] = Field(default_factory=list)
+
+
+class CatalogCategoryCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    scope: str = "item"
+    parent_id: int | None = None
+
+
+class CatalogComponentCreateRequest(BaseModel):
+    category_id: int
+    component_type: str
+    name: str
+    short_name: str | None = None
+    description: str | None = None
+    installation: str | None = None
+    unit_type: str | None = None
+
+
+class CatalogComponentUpdateRequest(BaseModel):
+    name: str
+    short_name: str | None = None
+    description: str | None = None
+    installation: str | None = None
+    unit_type: str | None = None
+    component_type: str
+
+
+class CatalogAttributePayloadModel(BaseModel):
+    name: str
+    value_type: str
+    options: list[str] = Field(default_factory=list)
+
+
+class CatalogComponentAttributesReplaceRequest(BaseModel):
+    attributes: list[CatalogAttributePayloadModel] = Field(default_factory=list)
+
+
+class CatalogCategoryLinksUpdateRequest(BaseModel):
+    linked_category_ids: list[int] = Field(default_factory=list)
+
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    status: str = "template"
+
+
+class AttributeValueInputModel(BaseModel):
+    name: str
+    value: str | None = None
+
+
+class ProjectInstanceCreateRequest(BaseModel):
+    category_id: int
+    component_id: int
+    name: str
+    short_name: str | None = None
+    description: str | None = None
+    installation: str | None = None
+    unit_amount: float | None = None
+    attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
+
+
+class ProjectInstanceUpdateRequest(BaseModel):
+    name: str
+    short_name: str | None = None
+    description: str | None = None
+    installation: str | None = None
+    unit_amount: float | None = None
+    attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
+
+
 class ProjectSummaryModel(BaseModel):
     id: int
     name: str
@@ -109,6 +190,23 @@ class AttributeGroupModel(BaseModel):
     values: list[AttributeValueModel]
 
 
+class EditableAttributeModel(BaseModel):
+    name: str
+    value_type: str
+    options: list[str]
+    value: str | None = None
+
+
+class AvailableComponentModel(BaseModel):
+    id: int
+    name: str
+    short_name: str | None
+    type: str
+    description: str | None
+    installation: str | None
+    attributes: list[EditableAttributeModel]
+
+
 class InstanceLinkModel(BaseModel):
     name: str
     application_label: str | None
@@ -123,6 +221,7 @@ class ProjectInstanceModel(BaseModel):
     description: str | None
     installation: str | None
     unit_amount: float | None
+    editable_attributes: list[EditableAttributeModel] = Field(default_factory=list)
     attributes: list[AttributeGroupModel]
     linked_accessories: list[InstanceLinkModel]
     linked_to: list[InstanceLinkModel]
@@ -139,6 +238,7 @@ class CategorySectionModel(BaseModel):
     scope: str
     depth: int
     linked_categories: list[str]
+    available_components: list[AvailableComponentModel] = Field(default_factory=list)
     instances: list[ProjectInstanceModel]
 
 

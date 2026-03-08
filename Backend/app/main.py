@@ -6,20 +6,30 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api_models import (
     ActivityLogModel,
     ApprovalModel,
+    AttributeValueInputModel,
+    CatalogCategoryCreateRequest,
+    CatalogCategoryLinksUpdateRequest,
+    CatalogComponentAttributesReplaceRequest,
+    CatalogComponentCreateRequest,
+    CatalogComponentUpdateRequest,
     CatalogResponse,
     CommentModel,
     DashboardResponse,
     ExportJobModel,
     MaterialModeResponse,
+    MutationResultModel,
     NotificationModel,
     ProjectDetailResponse,
+    ProjectCreateRequest,
+    ProjectInstanceCreateRequest,
+    ProjectInstanceUpdateRequest,
     ProjectsBoardResponse,
     PublicProjectListResponse,
     PublicProjectSkuResponse,
@@ -100,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = session_factory
 
     static_dir = Path(__file__).resolve().parent / "static"
+    frontend_index = static_dir / "app" / "index.html"
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     def get_session(request: Request):
@@ -142,9 +153,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             values[name] = str(raw_value_item).strip() if raw_value_item is not None else None
         return values
 
+    def parse_attribute_values_rows(rows: list[AttributeValueInputModel] | None) -> dict[str, str | None]:
+        values: dict[str, str | None] = {}
+        for row in rows or []:
+            name = row.name.strip()
+            if not name:
+                continue
+            values[name] = row.value.strip() if row.value is not None else None
+        return values
+
+    def serve_frontend_app(fallback_html: str) -> FileResponse | HTMLResponse:
+        if frontend_index.exists():
+            return FileResponse(frontend_index)
+        return HTMLResponse(fallback_html)
+
     @app.get("/", response_class=HTMLResponse)
     async def home() -> str:
-        return render_home_page()
+        return serve_frontend_app(render_home_page())
 
     @app.get("/catalog", response_class=HTMLResponse)
     async def catalog(
@@ -156,7 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = get_catalog_page_data(session, selected_category_id=category_id)
         selected = data["selected"]
         active_id = selected["id"] if selected else category_id
-        return render_catalog_page(data, active_id)
+        return serve_frontend_app(render_catalog_page(data, active_id))
 
     @app.post("/catalog/categories")
     async def create_catalog_category(
@@ -343,7 +368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/projects", response_class=HTMLResponse)
     async def projects(session: Session = Depends(get_session), current_user=Depends(get_actor_user)) -> str:
         data = get_projects_page_data(session, user=current_user)
-        return render_projects_page(data)
+        return serve_frontend_app(render_projects_page(data))
 
     @app.post("/projects")
     async def create_project_route(
@@ -367,7 +392,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         data = get_project_view_data(session, project_id, user=current_user)
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        return render_project_detail_page(data)
+        return serve_frontend_app(render_project_detail_page(data))
 
     @app.post("/projects/{project_id}/instances")
     async def create_project_instance_route(
@@ -484,9 +509,126 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_catalog_edit(current_user)
         return get_catalog_page_data(session, selected_category_id=category_id)
 
+    @app.post("/api/v1/catalog/categories", response_model=MutationResultModel)
+    async def create_catalog_category_v1(
+        payload: CatalogCategoryCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        category = create_category(
+            session,
+            name=payload.name,
+            description=payload.description,
+            scope=payload.scope,
+            parent_id=payload.parent_id,
+        )
+        return {"ok": True, "category_id": category.id}
+
+    @app.post("/api/v1/catalog/components", response_model=MutationResultModel)
+    async def create_catalog_component_v1(
+        payload: CatalogComponentCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        component = create_component(
+            session,
+            category_id=payload.category_id,
+            component_type=payload.component_type,
+            name=payload.name,
+            short_name=payload.short_name,
+            description=payload.description,
+            installation=payload.installation,
+            unit_type=payload.unit_type,
+        )
+        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+
+    @app.put("/api/v1/catalog/components/{component_id}", response_model=MutationResultModel)
+    async def update_catalog_component_v1(
+        component_id: int,
+        payload: CatalogComponentUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        component = update_component(
+            session,
+            component_id=component_id,
+            name=payload.name,
+            short_name=payload.short_name,
+            description=payload.description,
+            installation=payload.installation,
+            unit_type=payload.unit_type,
+            component_type=payload.component_type,
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+
+    @app.delete("/api/v1/catalog/components/{component_id}", response_model=MutationResultModel)
+    async def delete_catalog_component_v1(
+        component_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        try:
+            deleted_category_id = delete_component(session, component_id=component_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if deleted_category_id is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return {"ok": True, "category_id": deleted_category_id, "deleted_id": component_id}
+
+    @app.put("/api/v1/catalog/components/{component_id}/attributes", response_model=MutationResultModel)
+    async def replace_catalog_component_attributes_v1(
+        component_id: int,
+        payload: CatalogComponentAttributesReplaceRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        component = replace_component_attributes(
+            session,
+            component_id=component_id,
+            attributes=[attribute.model_dump() for attribute in payload.attributes],
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+
+    @app.put("/api/v1/catalog/categories/{category_id}/links", response_model=MutationResultModel)
+    async def update_catalog_category_links_v1(
+        category_id: int,
+        payload: CatalogCategoryLinksUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        update_category_links(session, category_id=category_id, linked_category_ids=payload.linked_category_ids)
+        return {"ok": True, "category_id": category_id, "linked_category_ids": payload.linked_category_ids}
+
     @app.get("/api/v1/projects", response_model=ProjectsBoardResponse)
     async def projects_v1(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return get_projects_page_data(session, user=current_user)
+
+    @app.post("/api/v1/projects", response_model=MutationResultModel)
+    async def create_project_v1(
+        payload: ProjectCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        if not build_permission_payload(current_user)["catalog_edit"]:
+            raise HTTPException(status_code=403, detail="Project edit permission required")
+        project = create_project(
+            session,
+            name=payload.name,
+            description=payload.description,
+            status=payload.status,
+            actor_user=current_user,
+        )
+        return {"ok": True, "project_id": project.id}
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
     async def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -498,6 +640,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
+
+    @app.post("/api/v1/projects/{project_id}/instances", response_model=MutationResultModel)
+    async def create_project_instance_v1(
+        project_id: int,
+        payload: ProjectInstanceCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=payload.category_id,
+                component_id=payload.component_id,
+                name=payload.name,
+                short_name=payload.short_name,
+                description=payload.description,
+                installation=payload.installation,
+                unit_amount=payload.unit_amount,
+                attribute_values=parse_attribute_values_rows(payload.attribute_values),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"ok": True, "project_id": project_id, "category_id": payload.category_id, "instance_id": instance.id}
+
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=MutationResultModel)
+    async def update_project_instance_v1(
+        project_id: int,
+        instance_id: int,
+        payload: ProjectInstanceUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        instance = update_project_instance(
+            session,
+            project=project,
+            instance_id=instance_id,
+            name=payload.name,
+            short_name=payload.short_name,
+            description=payload.description,
+            installation=payload.installation,
+            unit_amount=payload.unit_amount,
+            attribute_values=parse_attribute_values_rows(payload.attribute_values),
+        )
+        if instance is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project_id, "instance_id": instance.id}
+
+    @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=MutationResultModel)
+    async def delete_project_instance_v1(
+        project_id: int,
+        instance_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        deleted = delete_project_instance(session, project=project, instance_id=instance_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project_id, "deleted_id": instance_id}
 
     @app.get("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
     async def project_material_mode_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

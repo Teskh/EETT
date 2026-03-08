@@ -18,6 +18,8 @@ This backend must treat [REFACTOR_GUIDE.md](/mnt/c/Code/Spec%20Sheets/legacy_ref
 ## Implementation defaults
 
 - Backend remains Postgres-first and API-first.
+- Frontend implementation now lives in `/mnt/c/Code/Spec Sheets/Frontend` as React + TypeScript, and FastAPI serves the built SPA from `Backend/app/static/app`.
+- Do not add new feature work to `Backend/app/ui.py` unless it is a temporary fallback needed while the React screen is being migrated.
 - ERP access stays behind dedicated service methods and cache tables.
 - Heavy exports and ERP refreshes should be modeled as jobs/services, not direct request-path work.
 - No feature is complete until it satisfies the guide section and matches or exceeds the legacy workflow depth.

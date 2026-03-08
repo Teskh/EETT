@@ -10,3 +10,4 @@ __pycache__/
 *.svg
 *.png
 *.jpg
+Frontend/node_modules/
