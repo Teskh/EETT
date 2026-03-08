@@ -26,7 +26,9 @@ function initAttributeEditors() {
     const list = form.querySelector("[data-attribute-list]");
     const hiddenInput = form.querySelector("[data-attribute-json]");
     const addButton = form.querySelector("[data-add-attribute]");
-    if (!list || !hiddenInput || !addButton) {
+    const saveButton = form.querySelector("[data-save-attributes]");
+    const saveStatus = form.querySelector("[data-save-status]");
+    if (!list || !hiddenInput || !addButton || !saveButton || !saveStatus) {
       return;
     }
 
@@ -102,8 +104,30 @@ function initAttributeEditors() {
       toggleValueControls(attributeCard);
     });
 
-    form.addEventListener("submit", () => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
       hiddenInput.value = JSON.stringify(collectAttributes(list));
+      saveButton.disabled = true;
+      saveStatus.textContent = "Saving attribute set...";
+
+      try {
+        const response = await fetch(form.action, {
+          method: "POST",
+          headers: {
+            "x-requested-with": "fetch",
+          },
+          body: new FormData(form),
+        });
+        if (!response.ok) {
+          throw new Error("Unable to save attribute set.");
+        }
+        form.dataset.initialAttributes = hiddenInput.value;
+        saveStatus.textContent = "Attribute set saved.";
+      } catch (error) {
+        saveStatus.textContent = "Could not save attribute set.";
+      } finally {
+        saveButton.disabled = false;
+      }
     });
   });
 }

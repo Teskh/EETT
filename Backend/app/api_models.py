@@ -39,6 +39,7 @@ class ProjectsBoardResponse(BaseModel):
 
 class SyncStateModel(BaseModel):
     status: str
+    is_outdated: bool
     last_synced_at: str | None
     source_component_updated_at: str | None
     notes: str | None

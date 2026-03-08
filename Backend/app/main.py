@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -120,6 +120,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return float(value)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"Invalid numeric value: {raw_value}") from exc
+
+    def parse_attribute_values_json(raw_value: str | None) -> dict[str, str | None]:
+        if not raw_value:
+            return {}
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail="Invalid attribute value payload") from exc
+        if not isinstance(parsed, list):
+            raise HTTPException(status_code=422, detail="Attribute value payload must be a list")
+
+        values: dict[str, str | None] = {}
+        for row in parsed:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            raw_value_item = row.get("value")
+            values[name] = str(raw_value_item).strip() if raw_value_item is not None else None
+        return values
 
     @app.get("/", response_class=HTMLResponse)
     async def home() -> str:
@@ -282,6 +303,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/catalog/components/{component_id}/attributes/update")
     async def replace_catalog_component_attributes(
         component_id: int,
+        request: Request,
         attributes_json: str = Form("[]"),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -301,6 +323,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if component is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
+        if request and request.headers.get("x-requested-with") == "fetch":
+            return JSONResponse({"ok": True, "component_id": component.id, "category_id": component.category_id})
         return RedirectResponse(url=f"/catalog?category_id={component.category_id}", status_code=303)
 
     @app.post("/catalog/categories/{category_id}/links")
@@ -355,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description: str | None = Form(default=None),
         installation: str | None = Form(default=None),
         unit_amount: str | None = Form(default=None),
+        attribute_values_json: str | None = Form(default=None),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -373,6 +398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 description=description,
                 installation=installation,
                 unit_amount=parse_optional_float(unit_amount),
+                attribute_values=parse_attribute_values_json(attribute_values_json),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -388,6 +414,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description: str | None = Form(default=None),
         installation: str | None = Form(default=None),
         unit_amount: str | None = Form(default=None),
+        attribute_values_json: str | None = Form(default=None),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -404,6 +431,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             description=description,
             installation=installation,
             unit_amount=parse_optional_float(unit_amount),
+            attribute_values=parse_attribute_values_json(attribute_values_json),
         )
         if instance is None:
             raise HTTPException(status_code=404, detail="Project instance not found")

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
+    CatalogAttributeDefinition,
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
@@ -17,6 +18,7 @@ from app.models import (
     ProjectBomEntry,
     ProjectInstance,
     ProjectInstanceAttributeGroup,
+    ProjectInstanceAttributeValue,
     ProjectInstanceLink,
     ProjectInstanceMedia,
     ProjectInstanceSyncState,
@@ -94,10 +96,12 @@ def create_project_instance(
     description: str | None,
     installation: str | None,
     unit_amount: float | None,
+    attribute_values: dict[str, str | None] | None = None,
 ) -> ProjectInstance:
     component = session.scalar(
         select(CatalogComponent)
         .where(CatalogComponent.id == component_id, CatalogComponent.category_id == category_id)
+        .options(selectinload(CatalogComponent.attribute_definitions))
     )
     if component is None:
         raise ValueError("Selected component does not belong to the requested category.")
@@ -118,6 +122,8 @@ def create_project_instance(
     )
     session.add(instance)
     session.flush()
+    _sync_base_attribute_group(instance)
+    _apply_base_attribute_values(instance, attribute_values or {})
     session.add(
         ProjectInstanceSyncState(
             instance=instance,
@@ -144,11 +150,16 @@ def update_project_instance(
     description: str | None,
     installation: str | None,
     unit_amount: float | None,
+    attribute_values: dict[str, str | None] | None = None,
 ) -> ProjectInstance | None:
     instance = session.scalar(
         select(ProjectInstance)
         .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
-        .options(selectinload(ProjectInstance.component), selectinload(ProjectInstance.sync_state))
+        .options(
+            selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
     )
     if instance is None:
         return None
@@ -161,6 +172,8 @@ def update_project_instance(
     instance.short_description = clean_description
     instance.installation = clean_installation
     instance.unit_amount = unit_amount
+    _sync_base_attribute_group(instance)
+    _apply_base_attribute_values(instance, attribute_values or {})
 
     if instance.sync_state is None:
         instance.sync_state = ProjectInstanceSyncState(instance=instance)
@@ -197,7 +210,11 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
         select(CatalogCategory)
         .options(
             selectinload(CatalogCategory.outgoing_links).selectinload(CatalogCategoryLink.linked_category),
-            selectinload(CatalogCategory.components),
+            selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.attribute_definitions)
+            .selectinload(CatalogAttributeDefinition.options),
+            selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.attribute_definitions),
         )
         .order_by(CatalogCategory.sort_order, CatalogCategory.name)
     ).all()
@@ -247,6 +264,13 @@ def get_project_with_details(session: Session, project_id: int) -> Project | Non
         .where(Project.id == project_id)
         .options(
             selectinload(Project.subtypes).selectinload(ProjectSubtype.children),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.attribute_definitions)
+            .selectinload(CatalogAttributeDefinition.options),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.attribute_definitions),
             selectinload(Project.instances)
             .selectinload(ProjectInstance.component)
             .selectinload(CatalogComponent.material_rules)
@@ -303,7 +327,11 @@ def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None
     instance = session.scalar(
         select(ProjectInstance)
         .where(ProjectInstance.id == instance_id)
-        .options(selectinload(ProjectInstance.component), selectinload(ProjectInstance.sync_state))
+        .options(
+            selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
     )
     if instance is None:
         return None
@@ -321,8 +349,20 @@ def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None
                 }
             )
 
-    sync_status = instance.sync_state.sync_status.value if instance.sync_state else SyncStatus.UP_TO_DATE.value
-    is_outdated = bool(instance.sync_state and instance.sync_state.source_component_updated_at != instance.component.updated_at)
+    base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
+    instance_attributes = [value.attribute_name for value in base_group.attribute_values] if base_group else []
+    component_attributes = [definition.name for definition in instance.component.attribute_definitions]
+    if instance_attributes != component_attributes:
+        changes.append(
+            {
+                "field": "attributes",
+                "current": ", ".join(instance_attributes) if instance_attributes else None,
+                "catalog": ", ".join(component_attributes) if component_attributes else None,
+            }
+        )
+
+    sync_status = _effective_sync_status(instance).value
+    is_outdated = _is_instance_outdated(instance)
 
     return {
         "instance_id": instance.id,
@@ -339,13 +379,18 @@ def refresh_instance_snapshot(session: Session, *, instance_id: int, actor_user:
     instance = session.scalar(
         select(ProjectInstance)
         .where(ProjectInstance.id == instance_id)
-        .options(selectinload(ProjectInstance.component), selectinload(ProjectInstance.sync_state))
+        .options(
+            selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
     )
     if instance is None:
         return None
 
     for field in SNAPSHOT_FIELDS:
         setattr(instance, field, getattr(instance.component, field))
+    _sync_base_attribute_group(instance)
 
     if instance.sync_state is None:
         instance.sync_state = ProjectInstanceSyncState(instance=instance)
@@ -391,6 +436,14 @@ def _build_category_sections(
                 "type": component.component_type.value,
                 "description": component.description,
                 "installation": component.installation,
+                "attributes": [
+                    {
+                        "name": definition.name,
+                        "value_type": definition.value_type.value,
+                        "options": [option.value for option in definition.options],
+                    }
+                    for definition in component.attribute_definitions
+                ],
             }
             for component in sorted(category.components, key=lambda item: item.name)
         ],
@@ -429,11 +482,14 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
     ]
     grouped_attributes = []
     merged_attributes: dict[str, str | None] = {}
+    base_attribute_values: dict[str, str | None] = {}
 
     for group in instance.attribute_groups:
         values = []
         for attribute in group.attribute_values:
             merged_attributes[attribute.attribute_name] = attribute.value
+            if not group.application_label:
+                base_attribute_values[attribute.attribute_name] = attribute.value
             values.append({"name": attribute.attribute_name, "value": attribute.value})
         grouped_attributes.append(
             {
@@ -464,6 +520,9 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
             }
         )
 
+    effective_sync_status = _effective_sync_status(instance)
+    is_outdated = _is_instance_outdated(instance)
+
     return {
         "id": instance.id,
         "name": instance.name,
@@ -472,12 +531,22 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         "description": instance.description,
         "installation": instance.installation,
         "unit_amount": instance.unit_amount,
+        "editable_attributes": [
+            {
+                "name": definition.name,
+                "value_type": definition.value_type.value,
+                "options": [option.value for option in definition.options],
+                "value": base_attribute_values.get(definition.name),
+            }
+            for definition in instance.component.attribute_definitions
+        ],
         "attributes": grouped_attributes,
         "linked_accessories": linked_accessories,
         "linked_to": linked_to,
         "materials": applicable_materials,
         "sync_state": {
-            "status": instance.sync_state.sync_status.value if instance.sync_state else SyncStatus.UP_TO_DATE.value,
+            "status": effective_sync_status.value,
+            "is_outdated": is_outdated,
             "last_synced_at": instance.sync_state.last_synced_at.isoformat() if instance.sync_state and instance.sync_state.last_synced_at else None,
             "source_component_updated_at": instance.sync_state.source_component_updated_at.isoformat()
             if instance.sync_state and instance.sync_state.source_component_updated_at
@@ -494,6 +563,61 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         ],
         "material_mode": project_material_mode.mode.value if project_material_mode else MaterialMode.GENERAL.value,
     }
+
+
+def _sync_base_attribute_group(instance: ProjectInstance) -> None:
+    base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
+    if base_group is None:
+        base_group = ProjectInstanceAttributeGroup(
+            name="Base Attributes",
+            application_label=None,
+            sort_order=1,
+        )
+        instance.attribute_groups.append(base_group)
+
+    base_group.name = "Base Attributes"
+    base_group.sort_order = 1
+
+    existing_values = {value.attribute_name: value for value in base_group.attribute_values}
+    target_names = []
+    for index, definition in enumerate(instance.component.attribute_definitions, start=1):
+        target_names.append(definition.name)
+        current = existing_values.get(definition.name)
+        if current is None:
+            current = ProjectInstanceAttributeValue(
+                attribute_name=definition.name,
+                value=None,
+                sort_order=index,
+            )
+            base_group.attribute_values.append(current)
+        current.attribute_name = definition.name
+        current.sort_order = index
+
+    for value in list(base_group.attribute_values):
+        if value.attribute_name not in target_names:
+            base_group.attribute_values.remove(value)
+
+
+def _apply_base_attribute_values(instance: ProjectInstance, attribute_values: dict[str, str | None]) -> None:
+    base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
+    if base_group is None:
+        return
+
+    normalized = {name: (value.strip() if isinstance(value, str) else value) for name, value in attribute_values.items()}
+    for value in base_group.attribute_values:
+        if value.attribute_name in normalized:
+            value.value = normalized[value.attribute_name] or None
+
+
+def _is_instance_outdated(instance: ProjectInstance) -> bool:
+    return bool(instance.sync_state and instance.sync_state.source_component_updated_at != instance.component.updated_at)
+
+
+def _effective_sync_status(instance: ProjectInstance) -> SyncStatus:
+    base_status = instance.sync_state.sync_status if instance.sync_state else SyncStatus.UP_TO_DATE
+    if _is_instance_outdated(instance) and base_status == SyncStatus.UP_TO_DATE:
+        return SyncStatus.OUT_OF_SYNC
+    return base_status
 
 
 def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:

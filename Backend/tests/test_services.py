@@ -23,7 +23,13 @@ from app.services.catalog import (
     replace_component_attributes,
     update_attribute_definition,
 )
-from app.services.projects import create_project_instance, get_instance_sync_preview, get_project_view_data, get_projects_page_data
+from app.services.projects import (
+    create_project_instance,
+    get_instance_sync_preview,
+    get_project_view_data,
+    get_projects_page_data,
+    refresh_instance_snapshot,
+)
 from app.ui import render_catalog_page, render_project_detail_page, render_projects_page
 
 
@@ -258,6 +264,7 @@ class ServiceLayerTests(unittest.TestCase):
                 "description": "Execution instance",
                 "installation": "Install on site.",
                 "unit_amount": "2",
+                "attribute_values_json": '[{"name":"Countertop","value":"Quartz"}]',
             },
             follow_redirects=False,
         )
@@ -277,10 +284,16 @@ class ServiceLayerTests(unittest.TestCase):
                 "description": "Updated execution instance",
                 "installation": "Updated install notes.",
                 "unit_amount": "3",
+                "attribute_values_json": '[{"name":"Countertop","value":"Laminate"}]',
             },
             follow_redirects=False,
         )
         self.assertEqual(update_instance_response.status_code, 303)
+
+        project_detail_after_update = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"}).json()
+        kitchen_section_after_update = next(section for section in project_detail_after_update["categories"] if section["name"] == "Kitchens")
+        updated_instance = next(item for item in kitchen_section_after_update["instances"] if item["name"] == "Kitchen Island B")
+        self.assertEqual(updated_instance["attributes"][0]["values"][0]["value"], "Laminate")
 
         delete_instance_response = self.client.post(
             f"/projects/2/instances/{created_instance['id']}/delete",
@@ -367,6 +380,96 @@ class ServiceLayerTests(unittest.TestCase):
                     ("Drawer Style", "select", ["Slab", "Shaker"]),
                     ("Cabinet Width", "number", []),
                 ],
+            )
+
+    def test_catalog_bulk_attribute_route_supports_fetch_without_redirect(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            self.assertIsNotNone(component)
+            assert component is not None
+
+        response = self.client.post(
+            f"/catalog/components/{component.id}/attributes/update",
+            headers={
+                "X-Spec-Sheets-User": "editor",
+                "x-requested-with": "fetch",
+            },
+            data={
+                "attributes_json": '[{"name":"Drawer Style","value_type":"select","options":["Slab","Shaker"]}]',
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ok"], True)
+
+    def test_project_view_marks_instance_outdated_after_catalog_attribute_change_and_refresh_adds_missing_rows(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Base Cabinet 900"))
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+
+            self.assertIsNotNone(component)
+            self.assertIsNotNone(project)
+            assert component is not None
+            assert project is not None
+
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=component.category_id,
+                component_id=component.id,
+                name="Kitchen Cabinet Snapshot",
+                short_name="KCS-01",
+                description="Snapshot to test attribute refresh",
+                installation="Install per kitchen plan.",
+                unit_amount=1,
+            )
+            baseline = get_project_view_data(session, project.id)
+            kitchens = next(section for section in baseline["categories"] if section["name"] == "Kitchens")
+            baseline_instance = next(item for item in kitchens["instances"] if item["id"] == instance.id)
+            self.assertFalse(baseline_instance["sync_state"]["is_outdated"])
+            self.assertEqual(
+                [row["name"] for row in baseline_instance["attributes"][0]["values"]],
+                ["Countertop"],
+            )
+
+            replace_component_attributes(
+                session,
+                component_id=component.id,
+                attributes=[
+                    {
+                        "name": "Countertop",
+                        "value_type": "select",
+                        "options": ["Laminate", "Quartz"],
+                    },
+                    {
+                        "name": "Depth",
+                        "value_type": "number",
+                        "options": [],
+                    },
+                ],
+            )
+
+            changed = get_project_view_data(session, project.id)
+            kitchens = next(section for section in changed["categories"] if section["name"] == "Kitchens")
+            changed_instance = next(item for item in kitchens["instances"] if item["id"] == instance.id)
+            self.assertTrue(changed_instance["sync_state"]["is_outdated"])
+            self.assertEqual(changed_instance["sync_state"]["status"], "out_of_sync")
+            self.assertEqual(
+                [row["name"] for row in changed_instance["attributes"][0]["values"]],
+                ["Countertop"],
+            )
+
+            refreshed_preview = refresh_instance_snapshot(session, instance_id=instance.id, actor_user=None)
+            self.assertIsNotNone(refreshed_preview)
+            self.assertFalse(refreshed_preview["is_outdated"])
+
+            refreshed = get_project_view_data(session, project.id)
+            kitchens = next(section for section in refreshed["categories"] if section["name"] == "Kitchens")
+            refreshed_instance = next(item for item in kitchens["instances"] if item["id"] == instance.id)
+            self.assertFalse(refreshed_instance["sync_state"]["is_outdated"])
+            self.assertEqual(
+                [row["name"] for row in refreshed_instance["attributes"][0]["values"]],
+                ["Countertop", "Depth"],
             )
 
     def test_projects_page_and_detail_preserve_material_semantics(self) -> None:
