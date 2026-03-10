@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap');
 
 :root {
-  --bg: #fafafa;
+  --bg: #f4f4f5;
   --text: #09090b;
   --liquid-bg: rgba(255, 255, 255, 0.7);
   --liquid-border: rgba(0, 0, 0, 0.1);

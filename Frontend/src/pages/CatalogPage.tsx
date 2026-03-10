@@ -201,11 +201,11 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   return (
     <div className="border-b border-black/10 dark:border-white/10 last:border-0">
       <div 
-        className="flex items-center justify-between p-4 bg-white/60 dark:bg-black/20 group hover:bg-white/40 dark:hover:bg-white/5 transition-colors cursor-pointer"
+        className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
       >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
+          <div className="w-8 h-8 rounded bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
             <i className={`ph-fill ${component.type === "accessory" ? "ph-flask" : "ph-wall"}`} />
           </div>
           <div>
@@ -221,14 +221,14 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
           <span
             className={`px-2 py-1 text-[10px] font-bold uppercase tracking-widest border rounded ${
               component.type === "accessory"
-                ? "bg-white/60 dark:bg-white/10 text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20"
+                ? "bg-white dark:bg-white/10 shadow-sm text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20"
                 : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10"
             }`}
           >
             {component.type === "accessory" ? "ACCESSORY" : "ITEM"}
           </span>
           <div
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
+            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 group-hover:bg-zinc-100 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
           >
             <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
           </div>
@@ -239,7 +239,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
           <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">{component.description || "No description provided."}</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div className="flex flex-col gap-4">
-              <form className="bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
+              <form className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
                 <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
                   <i className="ph-bold ph-pencil-simple text-zinc-500" /> Edit Component
                 </h6>
@@ -296,7 +296,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                   className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <div className="flex justify-between items-center mt-2">
-                  <button className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
+                  <button className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
                     {saving ? "Saving..." : "Save changes"}
                   </button>
                 </div>
@@ -331,10 +331,10 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                   <th className="px-3 py-2 text-zinc-500 font-medium text-right">Conditions</th>
                 </tr>
               </thead>
-              <tbody className="bg-white/40 dark:bg-white/5 divide-y divide-white/5">
+              <tbody className="bg-zinc-50 dark:bg-white/5 divide-y divide-white/5">
                 {component.material_rules.length ? (
                   component.material_rules.map((rule) => (
-                    <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-white/40 dark:hover:bg-white/5 transition-colors">
+                    <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">
                       <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm flex flex-col gap-1">
                         {rule.material_name}
                         <span className="text-[10px] text-zinc-500 font-mono">{rule.notes || ""}</span>
@@ -536,7 +536,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
               <div>
                 <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-3">
                   {selected.name}
-                  <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
+                  <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
                     {selected.scope}
                   </span>
                 </h2>
@@ -555,7 +555,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       <button
                         key={child.id}
                         type="button"
-                        className="px-3 py-1 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-800 dark:text-zinc-300 transition-colors"
+                        className="px-3 py-1 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-800 dark:text-zinc-300 transition-colors"
                         onClick={() => onNavigate(`/catalog?category_id=${child.id}`)}
                       >
                         {child.name} <span className="text-zinc-500 font-mono text-[10px] ml-2">{child.scope}</span>
@@ -617,7 +617,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 <button
                   type="submit"
                   disabled={savingCategory}
-                  className="mt-auto px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
+                  className="mt-auto px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                 >
                   {savingCategory ? "Creating..." : "Create Category"}
                 </button>
@@ -687,7 +687,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
                   <i className="ph-bold ph-plugs text-zinc-600 dark:text-zinc-400 mr-2" /> Rules
                 </h3>
-                <div className="flex-1 bg-white/60 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
+                <div className="flex-1 bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
                   {data.link_targets.length ? (
                     data.link_targets.map((target) => (
                       <label key={target.id} className="flex items-center gap-2 text-sm text-zinc-800 dark:text-zinc-300 cursor-pointer hover:text-zinc-900 dark:text-white transition-colors">
@@ -711,7 +711,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 <button
                   type="button"
                   disabled={savingLinks}
-                  className="mt-auto px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
+                  className="mt-auto px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                   onClick={() => void handleSaveLinks()}
                 >
                   {savingLinks ? "Saving..." : "Save Rules"}
@@ -732,7 +732,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     <ComponentCard key={component.id} component={component} onRefresh={loadCatalog} />
                   ))
                 ) : (
-                  <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-white/40 dark:bg-white/5 rounded-lg">
+                  <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-lg">
                     No components yet.
                   </div>
                 )}

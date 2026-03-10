@@ -126,7 +126,7 @@ function renderSubtypeTree(subtype: ProjectSubtype, depth = 0): JSX.Element {
   return (
     <li key={subtype.id}>
       {depth === 0 ? (
-        <div className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm bg-white/40 dark:bg-white/5 border border-black/5 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium">
+        <div className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm bg-zinc-50 dark:bg-white/5 border border-black/5 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium">
           <span className="flex items-center gap-2">
             <i className="ph-fill ph-git-branch text-accent-700 dark:text-accent-400" />
             {subtype.name}
@@ -348,7 +348,7 @@ function InstanceFormModal({
         </div>
 
         {attributes.length ? (
-          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-black/20 p-4 flex flex-col gap-3">
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 shadow-sm p-4 flex flex-col gap-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Base Attributes</div>
             {attributes.map((attribute) => (
               <div key={attribute.name} className="flex flex-col gap-1.5">
@@ -401,7 +401,7 @@ function InstanceFormModal({
         ) : null}
 
         <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-black/10 dark:border-white/10">
-          <button type="button" className="px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded-lg text-sm font-semibold transition-colors" onClick={onClose}>
+          <button type="button" className="px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded-lg text-sm font-semibold transition-colors" onClick={onClose}>
             Cancel
           </button>
           <button 
@@ -442,17 +442,17 @@ function InstanceCard({
   const [expanded, setExpanded] = useState(false);
   const iconClass = instance.type === "accessory" ? "ph-flask" : "ph-wall";
   const typeLabel = instance.type === "accessory" ? "ACCESSORY" : "ITEM";
-  const badgeBg = instance.type === "accessory" ? "bg-white/60 dark:bg-white/10 text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20" : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10";
+  const badgeBg = instance.type === "accessory" ? "bg-white dark:bg-white/10 shadow-sm text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20" : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10";
   const syncColor = instance.sync_state.status === "up-to-date" ? "text-green-400" : "text-amber-400";
 
   return (
     <div className="border-b border-black/10 dark:border-white/10 last:border-0">
       <div 
-        className="flex items-center justify-between p-4 bg-white/60 dark:bg-black/20 group hover:bg-white/40 dark:hover:bg-white/5 transition-colors cursor-pointer"
+        className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
       >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
+          <div className="w-8 h-8 rounded bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
             <i className={`ph-fill ${iconClass}`} />
           </div>
           <div>
@@ -469,7 +469,7 @@ function InstanceCard({
             {typeLabel}
           </span>
           <div
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
+            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 group-hover:bg-zinc-100 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
           >
             <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
           </div>
@@ -498,7 +498,7 @@ function InstanceCard({
                 </div>
               </div>
 
-              <div className="bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
+              <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                   <i className="ph-bold ph-plugs text-zinc-600" /> Relationships
                 </h6>
@@ -536,7 +536,7 @@ function InstanceCard({
               <div className="flex items-center gap-3 pt-4 border-t border-black/10 dark:border-white/10">
                 <button
                   type="button"
-                  className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors flex items-center gap-2"
+                  className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors flex items-center gap-2"
                   onClick={onEdit}
                 >
                   <i className="ph-bold ph-pencil-simple" /> Edit Instance
@@ -584,7 +584,7 @@ function InstanceCard({
             <div className="space-y-4">
               {instance.materials.length ? (
                 instance.materials.map((material) => (
-                  <div key={`${instance.id}-${material.sku}`} className="bg-white/60 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
+                  <div key={`${instance.id}-${material.sku}`} className="bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
                     <div className="flex items-center justify-between p-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-black/40">
                       <div className="flex items-center gap-3">
                         <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2">{material.material_name}</h5>
@@ -601,7 +601,7 @@ function InstanceCard({
                     </div>
 
                     {material.notes ? (
-                      <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white/60 dark:bg-black/20">{material.notes}</div>
+                      <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white dark:bg-black/20 shadow-sm">{material.notes}</div>
                     ) : null}
 
                     <div className="overflow-x-auto">
@@ -623,7 +623,7 @@ function InstanceCard({
                         <tbody className="divide-y divide-white/5">
                           {material.bom_entries.length ? (
                             material.bom_entries.map((row, index) => (
-                              <tr key={`${material.sku}-${index}`} className={`group hover:bg-white/40 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
+                              <tr key={`${material.sku}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
                                 <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">{row.subtype}</td>
                                 <td className="px-3 py-2 text-right font-mono text-sm w-1/6">{formatQuantity(row.quantity)}</td>
                                 <td className="px-3 py-2 text-right font-mono text-sm text-zinc-500 w-1/6">
@@ -812,7 +812,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         <div className="relative z-10 flex items-center gap-4">
           <div className="flex flex-col items-end">
             <span className="text-[10px] font-mono text-zinc-500 uppercase">Status</span>
-            <span className="px-2 py-1 bg-white/60 dark:bg-white/10 text-zinc-900 dark:text-white rounded text-xs font-semibold">{data.project.status_label}</span>
+            <span className="px-2 py-1 bg-white dark:bg-white/10 shadow-sm text-zinc-900 dark:text-white rounded text-xs font-semibold">{data.project.status_label}</span>
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[10px] font-mono text-zinc-500 uppercase">Instances</span>
@@ -858,7 +858,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                 <div>
                   <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-3">
                     {category.name}
-                    <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
+                    <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
                       {category.scope}
                     </span>
                   </h2>
@@ -878,7 +878,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                 {category.available_components.length ? (
                   <button
                     type="button"
-                    className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded border border-black/10 dark:border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
+                    className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded border border-black/10 dark:border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
                     onClick={() => setModalState({ kind: "create", categoryId: category.id })}
                   >
                     <i className="ph-bold ph-plus" /> Add Instance
@@ -900,7 +900,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                     />
                   ))
                 ) : (
-                  <div className="text-center p-6 border border-black/5 dark:border-white/5 bg-white/40 dark:bg-white/5 rounded-xl text-xs font-mono text-zinc-500">
+                  <div className="text-center p-6 border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-xl text-xs font-mono text-zinc-500">
                     No instances in this category.
                   </div>
                 )}
@@ -928,7 +928,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                 <tbody className="divide-y divide-white/5">
                   {data.auxiliary_materials.length ? (
                     data.auxiliary_materials.map((row) => (
-                      <tr key={`${row.code}-${row.subtype}`} className="group hover:bg-white/40 dark:hover:bg-white/5 transition-colors">
+                      <tr key={`${row.code}-${row.subtype}`} className="group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">
                         <td className="px-3 py-3 text-zinc-500 font-mono text-xs">{row.code}</td>
                         <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm">{row.name}</td>
                         <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.category || "Uncategorized"}</td>

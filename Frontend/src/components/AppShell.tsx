@@ -28,7 +28,7 @@ function NavButton({
       className={
         active
           ? "w-full aspect-square rounded-xl bg-zinc-200 dark:bg-white/10 text-zinc-900 dark:text-white flex items-center justify-center border border-zinc-300 dark:border-white/10  dark: transition-transform active:scale-95 group relative"
-          : "w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-white/40 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
+          : "w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-50 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
       }
       onClick={(event) => {
         event.preventDefault();
@@ -63,7 +63,7 @@ function ThemePicker() {
   return (
     <button
       onClick={toggleTheme}
-      className="w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-white/40 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
+      className="w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-50 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
     >
       <i className={`ph-bold ${isDark ? "ph-sun" : "ph-moon"} text-xl`} />
       <div className="absolute left-full ml-4 px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-200 text-xs rounded border border-zinc-200 dark:border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">

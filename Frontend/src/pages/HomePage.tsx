@@ -15,7 +15,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
             manage linked accessory categories without the legacy text-field hacks.
           </p>
           <button 
-            className="px-4 py-2.5 bg-white/40 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/60 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-900 dark:text-white transition-all flex items-center gap-2 relative z-10" 
+            className="px-4 py-2.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-900 dark:text-white transition-all flex items-center gap-2 relative z-10" 
             onClick={() => onNavigate("/catalog")}
           >
             <i className="ph-bold ph-database" /> Open database editor
@@ -30,7 +30,7 @@ export function HomePage({ onNavigate }: HomePageProps) {
             applicability and BOM state preserved.
           </p>
           <button 
-            className="px-4 py-2.5 bg-white/40 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/60 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-900 dark:text-white transition-all flex items-center gap-2 relative z-10" 
+            className="px-4 py-2.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-900 dark:text-white transition-all flex items-center gap-2 relative z-10" 
             onClick={() => onNavigate("/projects")}
           >
             <i className="ph-bold ph-kanban" /> Open projects

@@ -157,7 +157,7 @@ export function ProjectsPage({ onNavigate }: ProjectsPageProps) {
                             <i className="ph-bold ph-stack" /> {project.instance_count} instances
                           </div>
                           <button 
-                            className="px-3 py-1.5 bg-white/40 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/60 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
+                            className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
                             onClick={() => onNavigate(`/projects/${project.id}`)}
                           >
                             Open Project
