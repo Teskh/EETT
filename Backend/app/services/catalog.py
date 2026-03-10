@@ -102,17 +102,19 @@ def create_component(
     name: str,
     short_name: str | None,
     description: str | None,
+    short_description: str | None,
     installation: str | None,
     unit_type: str | None,
 ) -> CatalogComponent:
     clean_description = (description or "").strip() or None
+    clean_short_description = (short_description or "").strip() or None
     component = CatalogComponent(
         category_id=category_id,
         component_type=ComponentType(component_type),
         name=name.strip(),
         short_name=(short_name or "").strip() or None,
         description=clean_description,
-        short_description=clean_description,
+        short_description=clean_short_description,
         installation=(installation or "").strip() or None,
         unit_type=(unit_type or "").strip() or None,
     )
@@ -129,6 +131,7 @@ def update_component(
     name: str,
     short_name: str | None,
     description: str | None,
+    short_description: str | None,
     installation: str | None,
     unit_type: str | None,
     component_type: str,
@@ -138,10 +141,11 @@ def update_component(
         return None
 
     clean_description = (description or "").strip() or None
+    clean_short_description = (short_description or "").strip() or None
     component.name = name.strip()
     component.short_name = (short_name or "").strip() or None
     component.description = clean_description
-    component.short_description = clean_description
+    component.short_description = clean_short_description
     component.installation = (installation or "").strip() or None
     component.unit_type = (unit_type or "").strip() or None
     component.component_type = ComponentType(component_type)
@@ -342,6 +346,7 @@ def _serialize_component(component: CatalogComponent) -> dict:
         "short_name": component.short_name,
         "type": component.component_type.value,
         "description": component.description,
+        "short_description": component.short_description,
         "installation": component.installation,
         "unit_type": component.unit_type,
         "attributes": [

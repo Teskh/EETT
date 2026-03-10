@@ -1,29 +1,25 @@
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap');
 
 :root {
+  --bg: #fafafa;
+  --text: #09090b;
+  --liquid-bg: rgba(255, 255, 255, 0.7);
+  --liquid-border: rgba(0, 0, 0, 0.1);
+}
+
+html.dark {
   --bg: #09090b;
-  --bg-soft: #18181b;
-  --panel: rgba(24, 24, 27, 0.4);
-  --panel-strong: rgba(24, 24, 27, 0.6);
-  --panel-raised: rgba(39, 39, 42, 0.5);
   --text: #e4e4e7;
-  --muted: #a1a1aa;
-  --muted-soft: #71717a;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 32px -4px rgba(0, 0, 0, 0.5);
-  --brand: #f59e0b;
-  --brand-soft: rgba(245, 158, 11, 0.1);
-  --success: #34d399;
-  --danger: #f87171;
-  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --liquid-bg: rgba(24, 24, 27, 0.4);
+  --liquid-border: rgba(255, 255, 255, 0.08);
 }
 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #71717a; }
+::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 4px; }
+html.dark ::-webkit-scrollbar-thumb { background: #3f3f46; }
+::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #71717a; }
 
 * {
   box-sizing: border-box;
@@ -36,7 +32,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: var(--font-sans);
+  font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
   color: var(--text);
   background-color: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -54,10 +50,9 @@ a {
 
 h1, h2, h3, h4, h5 {
   margin: 0;
-  font-family: var(--font-sans);
+  font-family: 'Geist', ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-weight: 600;
   letter-spacing: -0.02em;
-  color: #fff;
 }
 
 p {
@@ -79,22 +74,14 @@ button {
 }
 
 .ambient-glow {
-  position: fixed;
-  top: -20vh;
-  right: -10vw;
-  width: 70vw;
-  height: 70vh;
-  background: radial-gradient(circle, rgba(245, 158, 11, 0.06) 0%, rgba(9, 9, 11, 0) 70%);
-  pointer-events: none;
-  z-index: 0;
+  display: none;
 }
 
 .liquid-glass {
-  background: rgba(24, 24, 27, 0.4);
+  background: var(--liquid-bg);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 8px 32px -4px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--liquid-border);
 }
 
 .is-hidden {

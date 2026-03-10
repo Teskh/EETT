@@ -36,17 +36,112 @@ type InstanceFormModalProps = {
     name: string;
     short_name: string | null;
     description: string | null;
+    short_description: string | null;
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
   }) => Promise<void>;
 };
 
-function renderSubtypeTree(subtype: ProjectSubtype): JSX.Element {
+type CategoryNode = ProjectCategorySection & { children: CategoryNode[] };
+
+function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNode[] {
+  const rootNodes: CategoryNode[] = [];
+  const stack: CategoryNode[] = [];
+
+  for (const category of flatCategories) {
+    const node: CategoryNode = { ...category, children: [] };
+    
+    while (stack.length > 0 && stack[stack.length - 1].depth >= node.depth) {
+      stack.pop();
+    }
+    
+    if (stack.length === 0) {
+      rootNodes.push(node);
+    } else {
+      stack[stack.length - 1].children.push(node);
+    }
+    
+    stack.push(node);
+  }
+  
+  return rootNodes;
+}
+
+function ProjectCategoryTree({
+  nodes,
+  filterTerm,
+  depth = 0,
+}: {
+  nodes: CategoryNode[];
+  filterTerm: string;
+  depth?: number;
+}) {
+  return (
+    <ul className={depth === 0 ? "space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
+      {nodes
+        .filter((node) => {
+          const matches = (n: CategoryNode): boolean => {
+            if (n.name.toLowerCase().includes(filterTerm.toLowerCase())) return true;
+            return n.children.some(matches);
+          };
+          return matches(node);
+        })
+        .map((node) => {
+          return (
+            <li key={node.id}>
+              {depth === 0 ? (
+                <a
+                  href={`#category-${node.id}`}
+                  className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-zinc-600 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
+                >
+                  <span className="flex items-center gap-2">
+                    <i className="ph-fill ph-folder text-zinc-400 dark:text-zinc-500" />
+                    {node.name}
+                  </span>
+                </a>
+              ) : (
+                <a
+                  href={`#category-${node.id}`}
+                  className="w-full block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 before:bg-black/10 dark:before:bg-white/10"
+                >
+                  {node.name}
+                </a>
+              )}
+              {node.children.length ? (
+                <ProjectCategoryTree
+                  nodes={node.children}
+                  filterTerm={filterTerm}
+                  depth={depth + 1}
+                />
+              ) : null}
+            </li>
+          );
+        })}
+    </ul>
+  );
+}
+
+function renderSubtypeTree(subtype: ProjectSubtype, depth = 0): JSX.Element {
   return (
     <li key={subtype.id}>
-      {subtype.name}
-      {subtype.children.length ? <ul>{subtype.children.map((child) => renderSubtypeTree(child))}</ul> : null}
+      {depth === 0 ? (
+        <div className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm bg-white/40 dark:bg-white/5 border border-black/5 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium">
+          <span className="flex items-center gap-2">
+            <i className="ph-fill ph-git-branch text-accent-700 dark:text-accent-400" />
+            {subtype.name}
+          </span>
+        </div>
+      ) : (
+        <div className="w-full block text-left px-2 py-1 text-sm relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 text-zinc-600 dark:text-zinc-400 before:bg-black/10 dark:before:bg-white/10">
+          {subtype.name}
+        </div>
+      )}
+      {subtype.children.length ? (
+        <ul className={depth === 0 ? "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
+          {subtype.children.map((child) => renderSubtypeTree(child, depth + 1))}
+        </ul>
+      ) : null}
     </li>
   );
 }
@@ -58,7 +153,7 @@ function quantityClass(value: number | null) {
   if (value === 0) {
     return "opacity-50";
   }
-  return "text-accent-400 font-bold";
+  return "text-accent-700 dark:text-accent-400 font-bold";
 }
 
 function formatQuantity(value: number | null) {
@@ -101,6 +196,7 @@ function InstanceFormModal({
   const [name, setName] = useState("");
   const [shortName, setShortName] = useState("");
   const [description, setDescription] = useState("");
+  const [shortDescription, setShortDescription] = useState("");
   const [installation, setInstallation] = useState("");
   const [unitAmount, setUnitAmount] = useState("");
   const [attributes, setAttributes] = useState<EditableAttribute[]>([]);
@@ -115,6 +211,7 @@ function InstanceFormModal({
       setName(initialInstance.name);
       setShortName(initialInstance.short_name || "");
       setDescription(initialInstance.description || "");
+      setShortDescription(initialInstance.short_description || "");
       setInstallation(initialInstance.installation || "");
       setUnitAmount(initialInstance.unit_amount === null ? "" : String(initialInstance.unit_amount));
       setAttributes(normalizeEditableAttributes(initialInstance.editable_attributes));
@@ -126,6 +223,7 @@ function InstanceFormModal({
     setName(defaultComponent?.name || "");
     setShortName(defaultComponent?.short_name || "");
     setDescription(defaultComponent?.description || "");
+    setShortDescription(defaultComponent?.short_description || "");
     setInstallation(defaultComponent?.installation || "");
     setUnitAmount("");
     setAttributes(buildAttributesFromComponent(defaultComponent));
@@ -142,6 +240,7 @@ function InstanceFormModal({
     setName(selectedComponent.name);
     setShortName(selectedComponent.short_name || "");
     setDescription(selectedComponent.description || "");
+    setShortDescription(selectedComponent.short_description || "");
     setInstallation(selectedComponent.installation || "");
     setAttributes(buildAttributesFromComponent(selectedComponent));
   }, [availableComponents, componentId, mode, open]);
@@ -153,6 +252,7 @@ function InstanceFormModal({
       name,
       short_name: shortName.trim() || null,
       description: description.trim() || null,
+      short_description: shortDescription.trim() || null,
       installation: installation.trim() || null,
       unit_amount: unitAmount.trim() === "" ? null : Number(unitAmount),
       attribute_values: attributes.map((attribute) => ({
@@ -172,11 +272,11 @@ function InstanceFormModal({
       <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
         {mode === "create" ? (
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Template Component</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Template Component</label>
             <select
               value={componentId}
               onChange={(event) => setComponentId(Number(event.target.value))}
-              className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+              className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             >
               {availableComponents.map((component) => (
                 <option key={component.id} value={component.id}>
@@ -189,60 +289,70 @@ function InstanceFormModal({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Instance Name</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Instance Name</label>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
               required
-              className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+              className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Short Name (SKU)</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Short Name (SKU)</label>
             <input
               value={shortName}
               onChange={(event) => setShortName(event.target.value)}
-              className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+              className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             />
           </div>
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Unit Amount</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Unit Amount</label>
           <input
             value={unitAmount}
             onChange={(event) => setUnitAmount(event.target.value)}
             placeholder="Optional quantity basis"
-            className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Description</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Description</label>
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             rows={3}
-            className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Installation</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Short Description</label>
+          <textarea
+            value={shortDescription}
+            onChange={(event) => setShortDescription(event.target.value)}
+            rows={3}
+            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Installation</label>
           <textarea
             value={installation}
             onChange={(event) => setInstallation(event.target.value)}
             rows={3}
-            className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
         {attributes.length ? (
-          <div className="rounded-xl border border-white/10 bg-black/20 p-4 flex flex-col gap-3">
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/60 dark:bg-black/20 p-4 flex flex-col gap-3">
             <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Base Attributes</div>
             {attributes.map((attribute) => (
               <div key={attribute.name} className="flex flex-col gap-1.5">
-                <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{attribute.name}</label>
+                <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">{attribute.name}</label>
                 {attribute.value_type === "select" ? (
                   <select
                     value={attribute.value || ""}
@@ -253,7 +363,7 @@ function InstanceFormModal({
                         ),
                       )
                     }
-                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   >
                     <option value="">Select value</option>
                     {attribute.options.map((option) => (
@@ -273,7 +383,7 @@ function InstanceFormModal({
                         ),
                       )
                     }
-                    className="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                 )}
               </div>
@@ -290,14 +400,14 @@ function InstanceFormModal({
           </div>
         ) : null}
 
-        <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-white/10">
-          <button type="button" className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-lg text-sm font-semibold transition-colors" onClick={onClose}>
+        <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-black/10 dark:border-white/10">
+          <button type="button" className="px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded-lg text-sm font-semibold transition-colors" onClick={onClose}>
             Cancel
           </button>
           <button 
             type="submit" 
             disabled={submitting}
-            className="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 rounded-lg text-sm font-bold shadow-[0_0_15px_rgba(245,158,11,0.2)] transition-colors disabled:opacity-50"
+            className="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
           >
             {submitting ? "Saving..." : mode === "create" ? "Create Instance" : "Save Instance"}
           </button>
@@ -310,7 +420,7 @@ function InstanceFormModal({
 function renderInstanceLinkBadge(link: { name: string; application_label: string | null }) {
   const label = link.application_label ? `${link.name} · ${link.application_label}` : link.name;
   return (
-    <span key={`${link.name}-${link.application_label || "base"}`} className="px-2 py-0.5 bg-black/40 border border-white/10 rounded text-[10px] font-mono text-zinc-300">
+    <span key={`${link.name}-${link.application_label || "base"}`} className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded text-[10px] font-mono text-zinc-800 dark:text-zinc-300">
       {label}
     </span>
   );
@@ -332,20 +442,23 @@ function InstanceCard({
   const [expanded, setExpanded] = useState(false);
   const iconClass = instance.type === "accessory" ? "ph-flask" : "ph-wall";
   const typeLabel = instance.type === "accessory" ? "ACCESSORY" : "ITEM";
-  const badgeBg = instance.type === "accessory" ? "bg-white/10 text-zinc-300 border-white/20" : "bg-black/40 text-zinc-400 border-white/10";
+  const badgeBg = instance.type === "accessory" ? "bg-white/60 dark:bg-white/10 text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20" : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10";
   const syncColor = instance.sync_state.status === "up-to-date" ? "text-green-400" : "text-amber-400";
 
   return (
-    <div className="border-b border-white/10 last:border-0">
-      <div className="flex items-center justify-between p-4 bg-black/20 group hover:bg-white/5 transition-colors">
+    <div className="border-b border-black/10 dark:border-white/10 last:border-0">
+      <div 
+        className="flex items-center justify-between p-4 bg-white/60 dark:bg-black/20 group hover:bg-white/40 dark:hover:bg-white/5 transition-colors cursor-pointer"
+        onClick={() => setExpanded((current) => !current)}
+      >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-white/5 border border-white/10 flex items-center justify-center text-zinc-400">
+          <div className="w-8 h-8 rounded bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
             <i className={`ph-fill ${iconClass}`} />
           </div>
           <div>
-            <div className="font-bold text-white text-[15px] flex items-center gap-2">
+            <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2">
               {instance.name}
-              <span className="px-2 py-0.5 border border-white/10 bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
+              <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
                 {instance.short_name || instance.name}
               </span>
             </div>
@@ -355,36 +468,37 @@ function InstanceCard({
           <span className={`px-2 py-1 ${badgeBg} text-[10px] font-bold uppercase tracking-widest border rounded`}>
             {typeLabel}
           </span>
-          <button
-            type="button"
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-300 border border-white/10 bg-white/5 hover:bg-white/10 rounded transition-colors flex items-center gap-2"
-            onClick={() => setExpanded((current) => !current)}
+          <div
+            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
           >
-            <i className="ph-bold ph-caret-down" /> Details
-          </button>
+            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
+          </div>
         </div>
       </div>
 
       {expanded ? (
-        <div className="border-t border-white/5 bg-black/40 p-4">
+        <div className="border-t border-black/5 dark:border-white/5 bg-white dark:bg-black/40 p-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <div className="space-y-6">
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-info text-zinc-600" /> Info
                 </h6>
-                <p className="text-sm text-zinc-300 mb-2">{instance.description || "No description provided."}</p>
+                <p className="text-sm text-zinc-800 dark:text-zinc-300 mb-2">{instance.description || "No description provided."}</p>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-2">
+                  Short: {instance.short_description || "No short description."}
+                </p>
                 <div className="flex items-center gap-4 text-xs font-mono">
-                  <span className="text-zinc-400">
-                    Unit Amount: <strong className="text-zinc-200">{instance.unit_amount ?? "-"}</strong>
+                  <span className="text-zinc-600 dark:text-zinc-400">
+                    Unit Amount: <strong className="text-zinc-900 dark:text-zinc-200">{instance.unit_amount ?? "-"}</strong>
                   </span>
-                  <span className="text-zinc-400">
+                  <span className="text-zinc-600 dark:text-zinc-400">
                     Sync: <strong className={syncColor}>{instance.sync_state.status}</strong>
                   </span>
                 </div>
               </div>
 
-              <div className="bg-white/5 border border-white/10 rounded-lg p-4">
+              <div className="bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                   <i className="ph-bold ph-plugs text-zinc-600" /> Relationships
                 </h6>
@@ -416,20 +530,20 @@ function InstanceCard({
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-wrench text-zinc-600" /> Installation
                 </h6>
-                <p className="text-sm text-zinc-400">{instance.installation || "No installation notes."}</p>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "No installation notes."}</p>
               </div>
 
-              <div className="flex items-center gap-3 pt-4 border-t border-white/10">
+              <div className="flex items-center gap-3 pt-4 border-t border-black/10 dark:border-white/10">
                 <button
                   type="button"
-                  className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs font-semibold transition-colors flex items-center gap-2"
+                  className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors flex items-center gap-2"
                   onClick={onEdit}
                 >
                   <i className="ph-bold ph-pencil-simple" /> Edit Instance
                 </button>
                 <button
                   type="button"
-                  className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded text-xs font-semibold transition-colors flex items-center gap-2"
+                  className="px-3 py-1.5 bg-red-100 dark:bg-red-500/10 hover:bg-red-200 dark:hover:bg-red-500/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-500/20 rounded text-xs font-semibold transition-colors flex items-center gap-2"
                   onClick={onDelete}
                 >
                   <i className="ph-bold ph-trash" /> Delete
@@ -437,7 +551,7 @@ function InstanceCard({
               </div>
             </div>
 
-            <div className="bg-black/40 border border-white/5 rounded-lg p-4">
+            <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
               {instance.attributes.length ? (
                 instance.attributes.map((group) => (
                   <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
@@ -450,7 +564,7 @@ function InstanceCard({
                         {group.values.map((row) => (
                           <tr key={`${group.name}-${row.name}`}>
                             <td className="py-1.5 text-zinc-500 w-1/2">{row.name}</td>
-                            <td className="py-1.5 text-zinc-200 font-mono w-1/2">{row.value || "-"}</td>
+                            <td className="py-1.5 text-zinc-900 dark:text-zinc-200 font-mono w-1/2">{row.value || "-"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -463,36 +577,36 @@ function InstanceCard({
             </div>
           </div>
 
-          <div className="border-t border-white/10 pt-6">
+          <div className="border-t border-black/10 dark:border-white/10 pt-6">
             <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
               <i className="ph-bold ph-boxes text-zinc-600" /> Applicable Materials
             </h6>
             <div className="space-y-4">
               {instance.materials.length ? (
                 instance.materials.map((material) => (
-                  <div key={`${instance.id}-${material.sku}`} className="bg-black/20 border border-white/5 rounded-lg overflow-hidden">
-                    <div className="flex items-center justify-between p-3 border-b border-white/5 bg-black/40">
+                  <div key={`${instance.id}-${material.sku}`} className="bg-white/60 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
+                    <div className="flex items-center justify-between p-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-black/40">
                       <div className="flex items-center gap-3">
-                        <h5 className="font-bold text-sm text-white flex items-center gap-2">{material.material_name}</h5>
-                        <span className="px-2 py-0.5 bg-black/40 border border-white/5 rounded text-[10px] font-mono text-zinc-400">
+                        <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2">{material.material_name}</h5>
+                        <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
                           {material.sku}
                         </span>
                       </div>
                       <div className="text-right flex flex-col items-end">
                         <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
-                        <span className="text-xs font-mono text-accent-400">
+                        <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
                           {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
                         </span>
                       </div>
                     </div>
 
                     {material.notes ? (
-                      <div className="px-3 py-2 border-b border-white/5 text-xs text-zinc-400 bg-black/20">{material.notes}</div>
+                      <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white/60 dark:bg-black/20">{material.notes}</div>
                     ) : null}
 
                     <div className="overflow-x-auto">
                       <table className="w-full text-left border-collapse text-sm">
-                        <thead className="bg-black/40 border-b border-white/5">
+                        <thead className="bg-white dark:bg-black/40 border-b border-black/5 dark:border-white/5">
                           <tr>
                             <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtype</th>
                             <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">
@@ -509,13 +623,13 @@ function InstanceCard({
                         <tbody className="divide-y divide-white/5">
                           {material.bom_entries.length ? (
                             material.bom_entries.map((row, index) => (
-                              <tr key={`${material.sku}-${index}`} className={`group hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
-                                <td className="px-3 py-2 text-zinc-300 font-medium text-sm w-1/4">{row.subtype}</td>
+                              <tr key={`${material.sku}-${index}`} className={`group hover:bg-white/40 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
+                                <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">{row.subtype}</td>
                                 <td className="px-3 py-2 text-right font-mono text-sm w-1/6">{formatQuantity(row.quantity)}</td>
                                 <td className="px-3 py-2 text-right font-mono text-sm text-zinc-500 w-1/6">
                                   {formatQuantity(row.assembly_quantity)}
                                 </td>
-                                <td className="px-3 py-2 text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
+                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
                                 <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{row.calculation_mode}</td>
                                 <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
                                   {row.calculation_formula || "-"}
@@ -535,7 +649,7 @@ function InstanceCard({
                   </div>
                 ))
               ) : (
-                <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-white/10 rounded">
+                <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
                   No applicable materials resolved for this instance.
                 </div>
               )}
@@ -587,6 +701,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     name: string;
     short_name: string | null;
     description: string | null;
+    short_description: string | null;
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
@@ -602,6 +717,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         name: payload.name,
         short_name: payload.short_name,
         description: payload.description,
+        short_description: payload.short_description,
         installation: payload.installation,
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
@@ -620,6 +736,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     name: string;
     short_name: string | null;
     description: string | null;
+    short_description: string | null;
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
@@ -633,6 +750,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         name: payload.name,
         short_name: payload.short_name,
         description: payload.description,
+        short_description: payload.short_description,
         installation: payload.installation,
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
@@ -667,40 +785,38 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   }
 
   if (loading) {
-    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-400">Loading project...</div>;
+    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading project...</div>;
   }
 
   if (!data) {
-    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-400">Project not found.</div>;
+    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Project not found.</div>;
   }
 
-  const filteredCategoryLinks = data.categories.filter((category) =>
-    category.name.toLowerCase().includes(categorySearch.toLowerCase()),
-  );
+  const categoryTree = buildCategoryTree(data.categories);
 
   return (
     <div className="max-w-[1600px] mx-auto">
       {error ? (
-        <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>
+        <div className="mb-4 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">{error}</div>
       ) : null}
 
       <div className="liquid-glass rounded-2xl p-8 flex justify-between items-end relative overflow-hidden mb-6">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-accent-500/5 blur-3xl rounded-full" />
+        
         <div className="relative z-10">
           <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-            <i className="ph-bold ph-kanban text-accent-500" /> Project Viewer
+            <i className="ph-bold ph-kanban text-accent-600 dark:text-accent-500" /> Project Viewer
           </p>
-          <h1 className="text-4xl font-bold text-white tracking-tighter mb-2">{data.project.name}</h1>
-          <p className="text-sm text-zinc-400 max-w-2xl">{data.project.description || "No description provided."}</p>
+          <h1 className="text-4xl font-bold text-zinc-900 dark:text-white tracking-tighter mb-2">{data.project.name}</h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-2xl">{data.project.description || "No description provided."}</p>
         </div>
         <div className="relative z-10 flex items-center gap-4">
           <div className="flex flex-col items-end">
             <span className="text-[10px] font-mono text-zinc-500 uppercase">Status</span>
-            <span className="px-2 py-1 bg-white/10 text-white rounded text-xs font-semibold">{data.project.status_label}</span>
+            <span className="px-2 py-1 bg-white/60 dark:bg-white/10 text-zinc-900 dark:text-white rounded text-xs font-semibold">{data.project.status_label}</span>
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[10px] font-mono text-zinc-500 uppercase">Instances</span>
-            <span className="font-mono text-xl font-bold text-accent-400">{data.project.instance_count}</span>
+            <span className="font-mono text-xl font-bold text-accent-700 dark:text-accent-400">{data.project.instance_count}</span>
           </div>
         </div>
       </div>
@@ -718,27 +834,18 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               onChange={(event) => setCategorySearch(event.target.value)}
               type="text"
               placeholder="Filter categories..."
-              className="w-full bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+              className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             />
             <div className="flex-1 overflow-y-auto pr-2 space-y-1">
-              {filteredCategoryLinks.map((category) => (
-                <a
-                  key={category.id}
-                  href={`#category-${category.id}`}
-                  className="w-full block text-left px-2 py-1.5 text-sm text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors rounded"
-                >
-                  {Array(category.depth).fill("\u00A0\u00A0\u00A0\u00A0").join("")}
-                  {category.name}
-                </a>
-              ))}
+              <ProjectCategoryTree nodes={categoryTree} filterTerm={categorySearch} />
             </div>
           </div>
 
           <div className="liquid-glass rounded-2xl p-5">
             <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <i className="ph-bold ph-git-branch text-zinc-400" /> Subtype Tree
+              <i className="ph-bold ph-git-branch text-zinc-600 dark:text-zinc-400" /> Subtype Tree
             </h3>
-            <ul className="ml-2 border-l border-white/10 pl-3 space-y-1 text-sm text-zinc-400">
+            <ul className="space-y-1">
               {data.subtypes.length ? data.subtypes.map((subtype) => renderSubtypeTree(subtype)) : <li className="text-xs font-mono text-zinc-500">No subtype breakdown defined.</li>}
             </ul>
           </div>
@@ -747,11 +854,11 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         <div className="xl:col-span-9 flex flex-col gap-6">
           {data.categories.map((category) => (
             <div key={category.id} id={`category-${category.id}`} className="flex flex-col gap-4 mb-10 scroll-mt-24">
-              <div className="flex items-end justify-between border-b border-white/10 pb-4">
+              <div className="flex items-end justify-between border-b border-black/10 dark:border-white/10 pb-4">
                 <div>
-                  <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
+                  <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-3">
                     {category.name}
-                    <span className="px-2 py-0.5 border border-white/10 bg-white/5 rounded text-[10px] font-mono text-zinc-400 align-middle uppercase">
+                    <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
                       {category.scope}
                     </span>
                   </h2>
@@ -759,7 +866,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                     <span className="text-xs text-zinc-500 font-mono">Links:</span>
                     {category.linked_categories.length ? (
                       category.linked_categories.map((name) => (
-                        <span key={`${category.id}-${name}`} className="px-2 py-1 bg-black/40 border border-white/5 rounded text-[10px] font-mono text-zinc-400">
+                        <span key={`${category.id}-${name}`} className="px-2 py-1 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
                           {name}
                         </span>
                       ))
@@ -771,7 +878,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                 {category.available_components.length ? (
                   <button
                     type="button"
-                    className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded border border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
+                    className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded border border-black/10 dark:border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
                     onClick={() => setModalState({ kind: "create", categoryId: category.id })}
                   >
                     <i className="ph-bold ph-plus" /> Add Instance
@@ -780,7 +887,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                   <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">No reusable components exist</p>
                 )}
               </div>
-              <div className="w-full border border-white/10 rounded-xl overflow-hidden bg-zinc-900/50 backdrop-blur-sm">
+              <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {category.instances.length ? (
                   category.instances.map((instance) => (
                     <InstanceCard
@@ -793,7 +900,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                     />
                   ))
                 ) : (
-                  <div className="text-center p-6 border border-white/5 bg-white/5 rounded-xl text-xs font-mono text-zinc-500">
+                  <div className="text-center p-6 border border-black/5 dark:border-white/5 bg-white/40 dark:bg-white/5 rounded-xl text-xs font-mono text-zinc-500">
                     No instances in this category.
                   </div>
                 )}
@@ -801,15 +908,15 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
             </div>
           ))}
 
-          <div className="mt-8 pt-8 border-t border-white/10">
+          <div className="mt-8 pt-8 border-t border-black/10 dark:border-white/10">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <i className="ph-bold ph-tags text-zinc-400" /> Auxiliary Elements
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                <i className="ph-bold ph-tags text-zinc-600 dark:text-zinc-400" /> Auxiliary Elements
               </h3>
             </div>
-            <div className="w-full border border-white/10 rounded-xl overflow-hidden bg-black/40">
+            <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-black/40">
               <table className="w-full text-left border-collapse text-sm">
-                <thead className="bg-black/60 border-b border-white/10">
+                <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
                   <tr>
                     <th className="px-3 py-2 text-zinc-500 font-medium">Code</th>
                     <th className="px-3 py-2 text-zinc-500 font-medium">Name</th>
@@ -821,12 +928,12 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                 <tbody className="divide-y divide-white/5">
                   {data.auxiliary_materials.length ? (
                     data.auxiliary_materials.map((row) => (
-                      <tr key={`${row.code}-${row.subtype}`} className="group hover:bg-white/5 transition-colors">
+                      <tr key={`${row.code}-${row.subtype}`} className="group hover:bg-white/40 dark:hover:bg-white/5 transition-colors">
                         <td className="px-3 py-3 text-zinc-500 font-mono text-xs">{row.code}</td>
-                        <td className="px-3 py-3 text-zinc-200 font-medium text-sm">{row.name}</td>
-                        <td className="px-3 py-3 text-zinc-400 text-sm">{row.category || "Uncategorized"}</td>
-                        <td className="px-3 py-3 text-zinc-400 text-sm">{row.subtype}</td>
-                        <td className="px-3 py-3 text-right font-mono text-sm text-accent-400">{row.price.toLocaleString()}</td>
+                        <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm">{row.name}</td>
+                        <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.category || "Uncategorized"}</td>
+                        <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.subtype}</td>
+                        <td className="px-3 py-3 text-right font-mono text-sm text-accent-700 dark:text-accent-400">{row.price.toLocaleString()}</td>
                       </tr>
                     ))
                   ) : (

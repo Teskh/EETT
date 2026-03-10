@@ -94,6 +94,7 @@ def create_project_instance(
     name: str,
     short_name: str | None,
     description: str | None,
+    short_description: str | None,
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
@@ -107,6 +108,7 @@ def create_project_instance(
         raise ValueError("Selected component does not belong to the requested category.")
 
     clean_description = (description or "").strip() or component.description
+    clean_short_description = (short_description or "").strip() or component.short_description
     clean_installation = (installation or "").strip() or component.installation
     instance = ProjectInstance(
         project=project,
@@ -116,7 +118,7 @@ def create_project_instance(
         name=name.strip(),
         short_name=(short_name or "").strip() or None,
         description=clean_description,
-        short_description=clean_description,
+        short_description=clean_short_description,
         installation=clean_installation,
         unit_amount=unit_amount,
     )
@@ -133,8 +135,6 @@ def create_project_instance(
             sync_notes="Snapshot created from catalog template.",
         )
     )
-    if component.short_description and component.short_description != clean_description:
-        instance.short_description = component.short_description
     session.commit()
     session.refresh(instance)
     return instance
@@ -148,6 +148,7 @@ def update_project_instance(
     name: str,
     short_name: str | None,
     description: str | None,
+    short_description: str | None,
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
@@ -165,11 +166,12 @@ def update_project_instance(
         return None
 
     clean_description = (description or "").strip() or None
+    clean_short_description = (short_description or "").strip() or None
     clean_installation = (installation or "").strip() or None
     instance.name = name.strip()
     instance.short_name = (short_name or "").strip() or None
     instance.description = clean_description
-    instance.short_description = clean_description
+    instance.short_description = clean_short_description
     instance.installation = clean_installation
     instance.unit_amount = unit_amount
     _sync_base_attribute_group(instance)
@@ -435,6 +437,7 @@ def _build_category_sections(
                 "short_name": component.short_name,
                 "type": component.component_type.value,
                 "description": component.description,
+                "short_description": component.short_description,
                 "installation": component.installation,
                 "attributes": [
                     {
@@ -529,6 +532,7 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         "short_name": instance.short_name,
         "type": instance.instance_type.value,
         "description": instance.description,
+        "short_description": instance.short_description,
         "installation": instance.installation,
         "unit_amount": instance.unit_amount,
         "editable_attributes": [

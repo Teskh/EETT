@@ -122,14 +122,14 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
           attributes.map((attribute) => {
             const showOptions = attribute.value_type === "select";
             return (
-              <article key={attribute.local_id} className="bg-white/5 border border-white/10 rounded-lg p-3 flex flex-col gap-3">
+              <article key={attribute.local_id} className="bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-3 flex flex-col gap-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Attribute</div>
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
                       onClick={() => moveAttribute(attribute.local_id, -1)}
-                      className="px-2 py-1 rounded border border-white/10 bg-black/30 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+                      className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white/80 dark:bg-white/5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5 transition-colors"
                       title="Move up"
                     >
                       <i className="ph-bold ph-caret-up" />
@@ -137,7 +137,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                     <button
                       type="button"
                       onClick={() => moveAttribute(attribute.local_id, 1)}
-                      className="px-2 py-1 rounded border border-white/10 bg-black/30 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+                      className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white/80 dark:bg-white/5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-200 hover:bg-white/40 dark:hover:bg-white/5 transition-colors"
                       title="Move down"
                     >
                       <i className="ph-bold ph-caret-down" />
@@ -145,7 +145,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                     <button
                       type="button"
                       onClick={() => removeAttribute(attribute.local_id)}
-                      className="px-2 py-1 rounded border border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors text-xs font-semibold"
+                      className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-500/20 transition-colors text-xs font-semibold"
                     >
                       Remove
                     </button>
@@ -157,12 +157,12 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                     value={attribute.name}
                     onChange={(event) => updateAttribute(attribute.local_id, { name: event.target.value })}
                     placeholder="Attribute name"
-                    className="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                   <select
                     value={attribute.value_type}
                     onChange={(event) => updateAttribute(attribute.local_id, { value_type: event.target.value })}
-                    className="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   >
                     <option value="text">Text</option>
                     <option value="number">Number</option>
@@ -170,25 +170,25 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                   </select>
                 </div>
                 {showOptions ? (
-                  <div className="border-l-2 border-white/10 pl-3 ml-2 flex flex-col gap-2">
+                  <div className="border-l-2 border-black/10 dark:border-white/10 pl-3 ml-2 flex flex-col gap-2">
                     <div className="text-[10px] font-mono text-zinc-500">Options</div>
                     <div className="flex flex-col gap-2">
                       {attribute.options.map((option, optionIndex) => (
                         <div
                           key={`${attribute.local_id}-${optionIndex}`}
-                          className="flex items-center gap-2 bg-black/20 border border-white/10 rounded-lg p-2"
+                          className="flex items-center gap-2 bg-white/60 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-lg p-2"
                         >
                           <input
                             type="text"
                             value={option}
                             onChange={(event) => updateOption(attribute.local_id, optionIndex, event.target.value)}
                             placeholder="Option value"
-                            className="flex-1 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                            className="flex-1 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                           />
                           <button
                             type="button"
                             onClick={() => removeOption(attribute.local_id, optionIndex)}
-                            className="px-2 py-1 rounded border border-red-500/20 bg-red-500/10 text-red-300 hover:bg-red-500/20 transition-colors"
+                            className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-500/20 transition-colors"
                           >
                             <i className="ph-bold ph-x" />
                           </button>
@@ -198,7 +198,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                     <button
                       type="button"
                       onClick={() => addOption(attribute.local_id)}
-                      className="px-3 py-1.5 border border-white/10 bg-black/30 hover:bg-white/5 rounded text-xs font-semibold text-zinc-300 transition-colors flex items-center gap-2 self-start"
+                      className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white/80 dark:bg-white/5 hover:bg-white/40 dark:hover:bg-white/5 rounded text-xs font-semibold text-zinc-800 dark:text-zinc-300 transition-colors flex items-center gap-2 self-start"
                     >
                       <i className="ph-bold ph-plus" /> Add value
                     </button>
@@ -210,7 +210,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
             );
           })
         ) : (
-          <div className="text-zinc-500 font-mono text-xs text-center border border-dashed border-white/10 rounded-lg p-4">
+          <div className="text-zinc-500 font-mono text-xs text-center border border-dashed border-black/10 dark:border-white/10 rounded-lg p-4">
             No attributes defined.
           </div>
         )}
@@ -218,7 +218,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
       <div className="flex items-center justify-between gap-3 pt-1">
         <button
           type="button"
-          className="px-3 py-1.5 border border-white/10 bg-white/5 hover:bg-white/10 rounded text-xs font-semibold text-zinc-200 transition-colors flex items-center gap-2"
+          className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 rounded text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2"
           onClick={addAttribute}
         >
           <i className="ph-bold ph-plus" /> Add attribute
@@ -226,7 +226,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
         <button
           type="button"
           disabled={saving}
-          className="px-3 py-1.5 bg-accent-500/20 hover:bg-accent-500/30 disabled:opacity-60 text-accent-400 rounded text-xs font-semibold transition-colors"
+          className="px-3 py-1.5 bg-accent-500/20 hover:bg-accent-500/30 disabled:opacity-60 text-accent-700 dark:text-accent-400 rounded text-xs font-semibold transition-colors"
           onClick={() => void handleSave()}
         >
           {saving ? "Saving..." : "Save attribute set"}

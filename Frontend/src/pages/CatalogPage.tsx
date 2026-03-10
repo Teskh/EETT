@@ -36,6 +36,7 @@ const initialComponentForm: CreateComponentRequest = {
   name: "",
   short_name: "",
   description: "",
+  short_description: "",
   installation: "",
   unit_type: "",
 };
@@ -53,7 +54,7 @@ function formatCondition(rule: CatalogMaterialRule) {
       )
       .join(" AND ");
     return (
-      <span key={`${rule.sku}-${group.group}`} className="px-1.5 py-0.5 bg-black/40 border border-white/5 rounded text-[10px] font-mono text-zinc-400">
+      <span key={`${rule.sku}-${group.group}`} className="px-1.5 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
         {group.group}: {clauses}
       </span>
     );
@@ -84,7 +85,7 @@ function CatalogTree({
   depth?: number;
 }) {
   return (
-    <ul className={depth === 0 ? "space-y-1" : "ml-5 border-l border-white/10 mt-1 pl-3 space-y-1"}>
+    <ul className={depth === 0 ? "space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
       {nodes
         .filter((node) => treeMatches(node, filterTerm))
         .map((node) => {
@@ -97,12 +98,12 @@ function CatalogTree({
                   onClick={() => onSelect(node.id)}
                   className={`w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                     active
-                      ? "bg-white/5 border border-white/5 text-zinc-200 font-medium"
-                      : "hover:bg-white/5 border border-transparent text-zinc-500 hover:text-zinc-300"
+                      ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium"
+                      : "hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-zinc-600 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
                   }`}
                 >
                   <span className="flex items-center gap-2">
-                    <i className={`${active ? "ph-fill ph-folder-open text-accent-400" : "ph-fill ph-folder"}`} />
+                    <i className={`${active ? "ph-fill ph-folder-open text-accent-600 dark:text-accent-400" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} />
                     {node.name}
                   </span>
                   <span className="font-mono text-[10px] text-zinc-500">{node.component_count} items</span>
@@ -113,8 +114,8 @@ function CatalogTree({
                   onClick={() => onSelect(node.id)}
                   className={`w-full block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 ${
                     active
-                      ? "text-accent-400 font-semibold before:bg-accent-400/50"
-                      : "text-zinc-400 hover:text-zinc-200 before:bg-white/10"
+                      ? "text-accent-600 dark:text-accent-400 font-semibold before:bg-accent-600/50 dark:before:bg-accent-400/50"
+                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 before:bg-black/10 dark:before:bg-white/10"
                   }`}
                 >
                   {node.name}
@@ -144,6 +145,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
     name: component.name,
     short_name: component.short_name || "",
     description: component.description || "",
+    short_description: component.short_description || "",
     installation: component.installation || "",
     unit_type: component.unit_type || "",
     component_type: component.type,
@@ -154,6 +156,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
       name: component.name,
       short_name: component.short_name || "",
       description: component.description || "",
+      short_description: component.short_description || "",
       installation: component.installation || "",
       unit_type: component.unit_type || "",
       component_type: component.type,
@@ -196,16 +199,19 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   }
 
   return (
-    <div className="border-b border-white/10 last:border-0">
-      <div className="flex items-center justify-between p-4 bg-black/20 group hover:bg-white/5 transition-colors">
+    <div className="border-b border-black/10 dark:border-white/10 last:border-0">
+      <div 
+        className="flex items-center justify-between p-4 bg-white/60 dark:bg-black/20 group hover:bg-white/40 dark:hover:bg-white/5 transition-colors cursor-pointer"
+        onClick={() => setExpanded((current) => !current)}
+      >
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-white/5 border border-white/10 flex items-center justify-center text-zinc-400">
+          <div className="w-8 h-8 rounded bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
             <i className={`ph-fill ${component.type === "accessory" ? "ph-flask" : "ph-wall"}`} />
           </div>
           <div>
-            <div className="font-bold text-white text-[15px] flex items-center gap-2">
+            <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2">
               {component.name}
-              <span className="px-2 py-0.5 border border-white/10 bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
+              <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
                 {component.short_name || ""}
               </span>
             </div>
@@ -215,28 +221,26 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
           <span
             className={`px-2 py-1 text-[10px] font-bold uppercase tracking-widest border rounded ${
               component.type === "accessory"
-                ? "bg-white/10 text-zinc-300 border-white/20"
-                : "bg-black/40 text-zinc-400 border-white/10"
+                ? "bg-white/60 dark:bg-white/10 text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20"
+                : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10"
             }`}
           >
             {component.type === "accessory" ? "ACCESSORY" : "ITEM"}
           </span>
-          <button
-            type="button"
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-300 border border-white/10 bg-white/5 hover:bg-white/10 rounded transition-colors flex items-center gap-2"
-            onClick={() => setExpanded((current) => !current)}
+          <div
+            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 group-hover:bg-white/60 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
           >
-            <i className="ph-bold ph-caret-down" /> Details
-          </button>
+            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
+          </div>
         </div>
       </div>
       {expanded ? (
-        <div className="border-t border-white/5 bg-black/40 p-4">
-          <p className="text-sm text-zinc-400 mb-6">{component.description || "No description provided."}</p>
+        <div className="border-t border-black/5 dark:border-white/5 bg-white dark:bg-black/40 p-4">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">{component.description || "No description provided."}</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div className="flex flex-col gap-4">
-              <form className="bg-white/5 border border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
-                <h6 className="text-xs font-bold text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+              <form className="bg-white/40 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
+                <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
                   <i className="ph-bold ph-pencil-simple text-zinc-500" /> Edit Component
                 </h6>
                 <div className="flex gap-2">
@@ -245,20 +249,20 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                     onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                     required
                     placeholder="Name"
-                    className="w-2/3 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-2/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                   <input
                     value={form.short_name || ""}
                     onChange={(event) => setForm((current) => ({ ...current, short_name: event.target.value }))}
                     placeholder="SKU"
-                    className="w-1/3 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                 </div>
                 <div className="flex gap-2">
                   <select
                     value={form.component_type}
                     onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))}
-                    className="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   >
                     <option value="item">Item</option>
                     <option value="accessory">Accessory</option>
@@ -267,7 +271,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                     value={form.unit_type || ""}
                     onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))}
                     placeholder="Unit type"
-                    className="w-1/2 bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                 </div>
                 <textarea
@@ -275,25 +279,32 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                   onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                   rows={2}
                   placeholder="Description"
-                  className="w-full bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                />
+                <textarea
+                  value={form.short_description || ""}
+                  onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))}
+                  rows={2}
+                  placeholder="Short description"
+                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
                   value={form.installation || ""}
                   onChange={(event) => setForm((current) => ({ ...current, installation: event.target.value }))}
                   rows={2}
                   placeholder="Installation"
-                  className="w-full bg-black/40 border border-white/10 rounded p-1.5 text-xs text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <div className="flex justify-between items-center mt-2">
-                  <button className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
+                  <button className="px-3 py-1.5 bg-white/60 dark:bg-white/10 hover:bg-white/60 dark:bg-black/20 dark:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
                     {saving ? "Saving..." : "Save changes"}
                   </button>
                 </div>
               </form>
 
-              <div className="flex items-center justify-between bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                <span className="text-[10px] text-red-400 font-mono">Deletion blocked if in use.</span>
-                <button className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded text-xs font-semibold transition-colors flex items-center gap-1" type="button" onClick={() => void handleDeleteComponent()}>
+              <div className="flex items-center justify-between bg-red-100 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg p-3">
+                <span className="text-[10px] text-red-700 dark:text-red-400 font-mono">Deletion blocked if in use.</span>
+                <button className="px-2 py-1 bg-red-200 dark:bg-red-500/20 hover:bg-red-300 dark:bg-red-500/30 text-red-700 dark:text-red-300 rounded text-xs font-semibold transition-colors flex items-center gap-1" type="button" onClick={() => void handleDeleteComponent()}>
                   <i className="ph-bold ph-trash" /> Delete
                 </button>
               </div>
@@ -311,8 +322,8 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
             <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
               <i className="ph-bold ph-boxes text-zinc-600" /> Material Rules
             </h6>
-            <table className="w-full text-left border-collapse text-sm border border-white/10 rounded overflow-hidden">
-              <thead className="bg-black/60 border-b border-white/10">
+            <table className="w-full text-left border-collapse text-sm border border-black/10 dark:border-white/10 rounded overflow-hidden">
+              <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
                 <tr>
                   <th className="px-3 py-2 text-zinc-500 font-medium w-1/3">Material</th>
                   <th className="px-3 py-2 text-zinc-500 font-medium w-1/4">SKU / Unit</th>
@@ -320,18 +331,18 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
                   <th className="px-3 py-2 text-zinc-500 font-medium text-right">Conditions</th>
                 </tr>
               </thead>
-              <tbody className="bg-white/5 divide-y divide-white/5">
+              <tbody className="bg-white/40 dark:bg-white/5 divide-y divide-white/5">
                 {component.material_rules.length ? (
                   component.material_rules.map((rule) => (
-                    <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-white/5 transition-colors">
-                      <td className="px-3 py-3 text-zinc-200 font-medium text-sm flex flex-col gap-1">
+                    <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-white/40 dark:hover:bg-white/5 transition-colors">
+                      <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm flex flex-col gap-1">
                         {rule.material_name}
                         <span className="text-[10px] text-zinc-500 font-mono">{rule.notes || ""}</span>
                       </td>
                       <td className="px-3 py-3 text-zinc-500 font-mono text-xs">
                         {rule.sku} <br /> ({rule.unit || "-"})
                       </td>
-                      <td className="px-3 py-3 text-right font-mono text-sm text-accent-400">
+                      <td className="px-3 py-3 text-right font-mono text-sm text-accent-700 dark:text-accent-400">
                         {rule.unit_qty_per_unit ?? "n/a"}
                       </td>
                       <td className="px-3 py-3 text-right">
@@ -474,7 +485,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value.toLowerCase())}
             placeholder="Filter categories..."
-            className="w-full bg-black/40 border border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
           <div className="flex-1 overflow-y-auto pr-2">
             {data ? (
@@ -494,18 +505,18 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
           <div className="liquid-glass rounded-2xl p-5 flex flex-col gap-4">
             <div className="flex justify-between items-end mb-2">
               <span className="text-xs text-zinc-500 uppercase tracking-widest font-bold">Total Scope</span>
-              <i className="ph-bold ph-chart-bar text-zinc-400" />
+              <i className="ph-bold ph-chart-bar text-zinc-600 dark:text-zinc-400" />
             </div>
             {[
               ["Categories", data.summary.categories],
               ["Components", data.summary.components],
               ["Materials", data.summary.materials],
             ].map(([label, value]) => (
-              <div key={label} className="flex flex-col gap-1 border-b border-white/5 pb-3 last:border-0 last:pb-0">
+              <div key={label} className="flex flex-col gap-1 border-b border-black/5 dark:border-white/5 pb-3 last:border-0 last:pb-0">
                 <div className="flex justify-between items-end">
                   <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">{label}</span>
                 </div>
-                <div className="font-mono text-2xl font-bold text-white tracking-tighter">{value}</div>
+                <div className="font-mono text-2xl font-bold text-zinc-900 dark:text-white tracking-tighter">{value}</div>
               </div>
             ))}
           </div>
@@ -514,18 +525,18 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
 
       <div className="xl:col-span-9">
         {error ? (
-          <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>
+          <div className="mb-4 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">{error}</div>
         ) : null}
 
         {loading ? (
           <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">Loading catalog...</div>
         ) : selected && data ? (
           <div className="flex flex-col gap-6">
-            <div className="flex items-end justify-between border-b border-white/10 pb-4">
+            <div className="flex items-end justify-between border-b border-black/10 dark:border-white/10 pb-4">
               <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight flex items-center gap-3">
+                <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-3">
                   {selected.name}
-                  <span className="px-2 py-0.5 border border-white/10 bg-white/5 rounded text-[10px] font-mono text-zinc-400 align-middle uppercase">
+                  <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white/40 dark:bg-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
                     {selected.scope}
                   </span>
                 </h2>
@@ -536,7 +547,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="liquid-glass rounded-xl p-5">
                 <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <i className="ph-bold ph-folders text-zinc-400" /> Children
+                  <i className="ph-bold ph-folders text-zinc-600 dark:text-zinc-400" /> Children
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {selected.child_categories.length ? (
@@ -544,7 +555,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       <button
                         key={child.id}
                         type="button"
-                        className="px-3 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-zinc-300 transition-colors"
+                        className="px-3 py-1 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-800 dark:text-zinc-300 transition-colors"
                         onClick={() => onNavigate(`/catalog?category_id=${child.id}`)}
                       >
                         {child.name} <span className="text-zinc-500 font-mono text-[10px] ml-2">{child.scope}</span>
@@ -557,12 +568,12 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
               </div>
               <div className="liquid-glass rounded-xl p-5 border-accent-500/20">
                 <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <i className="ph-bold ph-link text-accent-500" /> Linked Categories
+                  <i className="ph-bold ph-link text-accent-600 dark:text-accent-500" /> Linked Categories
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {selected.linked_categories.length ? (
                     selected.linked_categories.map((category) => (
-                      <div key={category.id} className="px-2 py-1 bg-black/40 border border-white/5 rounded text-xs text-zinc-400 font-mono">
+                      <div key={category.id} className="px-2 py-1 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-xs text-zinc-600 dark:text-zinc-400 font-mono">
                         {category.name}
                       </div>
                     ))
@@ -575,8 +586,8 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <form className="liquid-glass rounded-xl p-5 flex flex-col gap-4" onSubmit={handleCreateCategory}>
-                <h3 className="text-xs font-bold text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-folder-plus text-zinc-400 mr-2" /> Add Child Category
+                <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
+                  <i className="ph-bold ph-folder-plus text-zinc-600 dark:text-zinc-400 mr-2" /> Add Child Category
                 </h3>
                 <div className="space-y-3">
                   <input
@@ -584,19 +595,19 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))}
                     required
                     placeholder="Category Name"
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                   <textarea
                     value={categoryForm.description || ""}
                     onChange={(event) => setCategoryForm((current) => ({ ...current, description: event.target.value }))}
                     rows={2}
                     placeholder="Description"
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                   <select
                     value={categoryForm.scope}
                     onChange={(event) => setCategoryForm((current) => ({ ...current, scope: event.target.value }))}
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   >
                     <option value="item">Item</option>
                     <option value="accessory">Accessory</option>
@@ -606,15 +617,15 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 <button
                   type="submit"
                   disabled={savingCategory}
-                  className="mt-auto px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-60 border border-white/10 rounded-lg text-xs font-semibold text-white transition-all w-full"
+                  className="mt-auto px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                 >
                   {savingCategory ? "Creating..." : "Create Category"}
                 </button>
               </form>
 
               <form className="liquid-glass rounded-xl p-5 flex flex-col gap-4" onSubmit={handleCreateComponent}>
-                <h3 className="text-xs font-bold text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-cube text-zinc-400 mr-2" /> Add Component
+                <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
+                  <i className="ph-bold ph-cube text-zinc-600 dark:text-zinc-400 mr-2" /> Add Component
                 </h3>
                 <div className="space-y-3">
                   <div className="flex gap-2">
@@ -623,20 +634,20 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       onChange={(event) => setComponentForm((current) => ({ ...current, name: event.target.value }))}
                       required
                       placeholder="Name"
-                      className="w-2/3 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                      className="w-2/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     />
                     <input
                       value={componentForm.short_name || ""}
                       onChange={(event) => setComponentForm((current) => ({ ...current, short_name: event.target.value }))}
                       placeholder="SKU"
-                      className="w-1/3 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                      className="w-1/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     />
                   </div>
                   <div className="flex gap-2">
                     <select
                       value={componentForm.component_type}
                       onChange={(event) => setComponentForm((current) => ({ ...current, component_type: event.target.value }))}
-                      className="w-1/2 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                      className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     >
                       <option value="item">Item</option>
                       <option value="accessory">Accessory</option>
@@ -645,7 +656,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       value={componentForm.unit_type || ""}
                       onChange={(event) => setComponentForm((current) => ({ ...current, unit_type: event.target.value }))}
                       placeholder="Unit (m2, set)"
-                      className="w-1/2 bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                      className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     />
                   </div>
                   <textarea
@@ -653,26 +664,33 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     onChange={(event) => setComponentForm((current) => ({ ...current, description: event.target.value }))}
                     rows={2}
                     placeholder="Description"
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                  />
+                  <textarea
+                    value={componentForm.short_description || ""}
+                    onChange={(event) => setComponentForm((current) => ({ ...current, short_description: event.target.value }))}
+                    rows={2}
+                    placeholder="Short description"
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={savingComponent}
-                  className="mt-auto px-4 py-2 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-xs font-bold shadow-[0_0_15px_rgba(245,158,11,0.2)] transition-all w-full"
+                  className="mt-auto px-4 py-2 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-xs font-bold transition-all w-full"
                 >
                   {savingComponent ? "Creating..." : "Create Component"}
                 </button>
               </form>
 
               <div className="liquid-glass rounded-xl p-5 flex flex-col gap-4">
-                <h3 className="text-xs font-bold text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-plugs text-zinc-400 mr-2" /> Rules
+                <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
+                  <i className="ph-bold ph-plugs text-zinc-600 dark:text-zinc-400 mr-2" /> Rules
                 </h3>
-                <div className="flex-1 bg-black/20 border border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
+                <div className="flex-1 bg-white/60 dark:bg-black/20 border border-black/5 dark:border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
                   {data.link_targets.length ? (
                     data.link_targets.map((target) => (
-                      <label key={target.id} className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer hover:text-white transition-colors">
+                      <label key={target.id} className="flex items-center gap-2 text-sm text-zinc-800 dark:text-zinc-300 cursor-pointer hover:text-zinc-900 dark:text-white transition-colors">
                         <input
                           type="checkbox"
                           checked={selectedLinks.includes(target.id)}
@@ -681,7 +699,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                               event.target.checked ? [...current, target.id] : current.filter((item) => item !== target.id),
                             )
                           }
-                          className="rounded border-white/10 bg-black/40 text-accent-500 focus:ring-accent-500/50"
+                          className="rounded border-black/10 dark:border-white/10 bg-white dark:bg-black/40 text-accent-600 dark:text-accent-500 focus:ring-accent-500/50"
                         />
                         <span className="font-mono text-xs">{target.name}</span>
                       </label>
@@ -693,7 +711,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 <button
                   type="button"
                   disabled={savingLinks}
-                  className="mt-auto px-4 py-2 bg-white/5 hover:bg-white/10 disabled:opacity-60 border border-white/10 rounded-lg text-xs font-semibold text-white transition-all w-full"
+                  className="mt-auto px-4 py-2 bg-white/40 dark:bg-white/5 hover:bg-white/60 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                   onClick={() => void handleSaveLinks()}
                 >
                   {savingLinks ? "Saving..." : "Save Rules"}
@@ -703,18 +721,18 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
 
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <i className="ph-bold ph-stack text-zinc-400" /> Components
+                <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                  <i className="ph-bold ph-stack text-zinc-600 dark:text-zinc-400" /> Components
                 </h3>
                 <div className="text-xs font-mono text-zinc-500">{selected.components.length} instances</div>
               </div>
-              <div className="w-full border border-white/10 rounded-xl overflow-hidden bg-zinc-900/50 backdrop-blur-sm">
+              <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {selected.components.length ? (
                   selected.components.map((component) => (
                     <ComponentCard key={component.id} component={component} onRefresh={loadCatalog} />
                   ))
                 ) : (
-                  <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-white/5 bg-white/5 rounded-lg">
+                  <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-white/40 dark:bg-white/5 rounded-lg">
                     No components yet.
                   </div>
                 )}

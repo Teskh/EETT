@@ -85,14 +85,17 @@ class ServiceLayerTests(unittest.TestCase):
                 name="Mirror Cabinet",
                 short_name="MC-01",
                 description="Wall-mounted cabinet",
+                short_description="Client-facing mirror cabinet",
                 installation="Anchor to masonry wall.",
                 unit_type="unit",
             )
             refreshed = get_catalog_page_data(session, selected_category_id=category.id)
 
         self.assertEqual(component.name, "Mirror Cabinet")
+        self.assertEqual(component.short_description, "Client-facing mirror cabinet")
         self.assertEqual(refreshed["selected"]["name"], "Bathrooms")
         self.assertEqual(len(refreshed["selected"]["components"]), 1)
+        self.assertEqual(refreshed["selected"]["components"][0]["short_description"], "Client-facing mirror cabinet")
 
     def test_catalog_attribute_helpers_support_create_update_delete_and_bump_sync_timestamp(self) -> None:
         with self.session_factory() as session:
@@ -112,6 +115,7 @@ class ServiceLayerTests(unittest.TestCase):
                 name="Kitchen Cabinet Clone",
                 short_name="KCC-01",
                 description="Snapshot for sync test",
+                short_description="Short sync test copy",
                 installation="Install per kitchen plan.",
                 unit_amount=1,
             )
@@ -172,6 +176,7 @@ class ServiceLayerTests(unittest.TestCase):
                 name="Kitchen Cabinet UX",
                 short_name="KCU-01",
                 description="Snapshot for bulk attribute editor test",
+                short_description="Bulk editor snapshot",
                 installation="Install per kitchen plan.",
                 unit_amount=1,
             )
@@ -420,6 +425,7 @@ class ServiceLayerTests(unittest.TestCase):
                 name="Kitchen Cabinet Snapshot",
                 short_name="KCS-01",
                 description="Snapshot to test attribute refresh",
+                short_description="Refresh snapshot",
                 installation="Install per kitchen plan.",
                 unit_amount=1,
             )
@@ -427,6 +433,7 @@ class ServiceLayerTests(unittest.TestCase):
             kitchens = next(section for section in baseline["categories"] if section["name"] == "Kitchens")
             baseline_instance = next(item for item in kitchens["instances"] if item["id"] == instance.id)
             self.assertFalse(baseline_instance["sync_state"]["is_outdated"])
+            self.assertEqual(baseline_instance["short_description"], "Refresh snapshot")
             self.assertEqual(
                 [row["name"] for row in baseline_instance["attributes"][0]["values"]],
                 ["Countertop"],
@@ -591,6 +598,53 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(decision.status_code, 200)
         self.assertEqual(decision.json()["status"], "approved")
+
+    def test_v1_catalog_and_project_instance_requests_preserve_short_description(self) -> None:
+        create_component_response = self.client.post(
+            "/api/v1/catalog/components",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "category_id": 6,
+                "component_type": "item",
+                "name": "Vanity Module",
+                "short_name": "VAN-01",
+                "description": "Bathroom vanity module",
+                "short_description": "Commercial vanity",
+                "installation": "Install against finished wall.",
+                "unit_type": "unit",
+            },
+        )
+        self.assertEqual(create_component_response.status_code, 200)
+        component_id = create_component_response.json()["component_id"]
+
+        catalog = self.client.get("/api/v1/catalog?category_id=6", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(catalog.status_code, 200)
+        created_component = next(item for item in catalog.json()["selected"]["components"] if item["id"] == component_id)
+        self.assertEqual(created_component["short_description"], "Commercial vanity")
+
+        create_instance_response = self.client.post(
+            "/api/v1/projects/2/instances",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "category_id": 6,
+                "component_id": component_id,
+                "name": "Vanity Instance A",
+                "short_name": "VIA-01",
+                "description": "Bathroom vanity instance",
+                "short_description": "Client package vanity",
+                "installation": "Install in bath 01.",
+                "unit_amount": 1,
+                "attribute_values": [],
+            },
+        )
+        self.assertEqual(create_instance_response.status_code, 200)
+        instance_id = create_instance_response.json()["instance_id"]
+
+        project_detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(project_detail.status_code, 200)
+        kitchens = next(section for section in project_detail.json()["categories"] if section["name"] == "Kitchens")
+        created_instance = next(item for item in kitchens["instances"] if item["id"] == instance_id)
+        self.assertEqual(created_instance["short_description"], "Client package vanity")
 
     def test_dashboard_and_public_api_surfaces(self) -> None:
         dashboard = self.client.get(

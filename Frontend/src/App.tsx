@@ -101,7 +101,7 @@ export function App() {
 
   return (
     <AppShell title="Spec Sheets" activeNav="home" onNavigate={navigate}>
-      <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-400">This route is not implemented yet.</div>
+      <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">This route is not implemented yet.</div>
     </AppShell>
   );
 }

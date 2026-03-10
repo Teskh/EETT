@@ -57,6 +57,7 @@ export type CatalogComponent = {
   short_name: string | null;
   type: string;
   description: string | null;
+  short_description: string | null;
   installation: string | null;
   unit_type: string | null;
   attributes: CatalogAttribute[];
@@ -186,6 +187,7 @@ export type AvailableComponent = {
   short_name: string | null;
   type: string;
   description: string | null;
+  short_description: string | null;
   installation: string | null;
   attributes: CatalogAttribute[];
 };
@@ -196,6 +198,7 @@ export type ProjectInstance = {
   short_name: string | null;
   type: string;
   description: string | null;
+  short_description: string | null;
   installation: string | null;
   unit_amount: number | null;
   editable_attributes: EditableAttribute[];
@@ -255,6 +258,7 @@ export type CreateComponentRequest = {
   name: string;
   short_name?: string | null;
   description?: string | null;
+  short_description?: string | null;
   installation?: string | null;
   unit_type?: string | null;
 };
@@ -263,6 +267,7 @@ export type UpdateComponentRequest = {
   name: string;
   short_name?: string | null;
   description?: string | null;
+  short_description?: string | null;
   installation?: string | null;
   unit_type?: string | null;
   component_type: string;
@@ -285,6 +290,7 @@ export type CreateProjectInstanceRequest = {
   name: string;
   short_name?: string | null;
   description?: string | null;
+  short_description?: string | null;
   installation?: string | null;
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];
@@ -294,6 +300,7 @@ export type UpdateProjectInstanceRequest = {
   name: string;
   short_name?: string | null;
   description?: string | null;
+  short_description?: string | null;
   installation?: string | null;
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];

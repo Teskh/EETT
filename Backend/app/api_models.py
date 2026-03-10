@@ -44,6 +44,7 @@ class CatalogComponentCreateRequest(BaseModel):
     name: str
     short_name: str | None = None
     description: str | None = None
+    short_description: str | None = None
     installation: str | None = None
     unit_type: str | None = None
 
@@ -52,6 +53,7 @@ class CatalogComponentUpdateRequest(BaseModel):
     name: str
     short_name: str | None = None
     description: str | None = None
+    short_description: str | None = None
     installation: str | None = None
     unit_type: str | None = None
     component_type: str
@@ -88,6 +90,7 @@ class ProjectInstanceCreateRequest(BaseModel):
     name: str
     short_name: str | None = None
     description: str | None = None
+    short_description: str | None = None
     installation: str | None = None
     unit_amount: float | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
@@ -97,6 +100,7 @@ class ProjectInstanceUpdateRequest(BaseModel):
     name: str
     short_name: str | None = None
     description: str | None = None
+    short_description: str | None = None
     installation: str | None = None
     unit_amount: float | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
@@ -203,6 +207,7 @@ class AvailableComponentModel(BaseModel):
     short_name: str | None
     type: str
     description: str | None
+    short_description: str | None
     installation: str | None
     attributes: list[EditableAttributeModel]
 
@@ -219,6 +224,7 @@ class ProjectInstanceModel(BaseModel):
     short_name: str | None
     type: str
     description: str | None
+    short_description: str | None
     installation: str | None
     unit_amount: float | None
     editable_attributes: list[EditableAttributeModel] = Field(default_factory=list)

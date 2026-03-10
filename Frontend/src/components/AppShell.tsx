@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useState, useEffect } from "react";
 
 type NavKey = "home" | "catalog" | "projects";
 
@@ -27,8 +27,8 @@ function NavButton({
       href={href}
       className={
         active
-          ? "w-full aspect-square rounded-xl bg-white/10 text-white flex items-center justify-center border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] transition-transform active:scale-95 group relative"
-          : "w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-white/5 flex items-center justify-center transition-all group relative"
+          ? "w-full aspect-square rounded-xl bg-zinc-200 dark:bg-white/10 text-zinc-900 dark:text-white flex items-center justify-center border border-zinc-300 dark:border-white/10  dark: transition-transform active:scale-95 group relative"
+          : "w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-white/40 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
       }
       onClick={(event) => {
         event.preventDefault();
@@ -36,20 +36,50 @@ function NavButton({
       }}
     >
       <i className={`${active ? "ph-fill" : "ph-bold"} ${icon} text-xl`} />
-      <div className="absolute left-full ml-4 px-2 py-1 bg-zinc-800 text-xs rounded border border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+      <div className="absolute left-full ml-4 px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-200 text-xs rounded border border-zinc-200 dark:border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
         {label}
       </div>
     </a>
   );
 }
 
+function ThemePicker() {
+  const [isDark, setIsDark] = useState(() => 
+    document.documentElement.classList.contains("dark")
+  );
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains("dark"));
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
+  const toggleTheme = () => {
+    document.documentElement.classList.toggle("dark");
+  };
+
+  return (
+    <button
+      onClick={toggleTheme}
+      className="w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-white/40 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
+    >
+      <i className={`ph-bold ${isDark ? "ph-sun" : "ph-moon"} text-xl`} />
+      <div className="absolute left-full ml-4 px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-200 text-xs rounded border border-zinc-200 dark:border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
+        Toggle Theme
+      </div>
+    </button>
+  );
+}
+
 export function AppShell({ title, activeNav, onNavigate, children }: AppShellProps) {
   return (
-    <div className="min-h-[100dvh] font-sans selection:bg-accent-500/30 selection:text-accent-400 overflow-x-hidden relative bg-zinc-950 text-zinc-200">
+    <div className="min-h-[100dvh] font-sans selection:bg-accent-500/30 selection:text-accent-700 dark:text-accent-400 overflow-x-hidden relative bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-200">
       <div className="ambient-glow" />
       <div className="flex h-screen overflow-hidden relative z-10">
-        <nav className="w-16 border-r border-white/10 bg-zinc-950/80 backdrop-blur-md flex flex-col items-center py-6 shrink-0 z-50">
-          <div className="w-8 h-8 rounded-lg bg-accent-500 flex items-center justify-center text-zinc-950 font-bold mb-8 shadow-[0_0_15px_rgba(245,158,11,0.4)]">
+        <nav className="w-16 border-r border-zinc-200 dark:border-white/10 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-md flex flex-col items-center py-6 shrink-0 z-50">
+          <div className="w-8 h-8 rounded-lg bg-accent-500 flex items-center justify-center text-zinc-950 font-bold mb-8">
             <i className="ph-bold ph-database text-xl" />
           </div>
           <div className="flex flex-col gap-4 w-full px-2">
@@ -57,15 +87,18 @@ export function AppShell({ title, activeNav, onNavigate, children }: AppShellPro
             <NavButton href="/catalog" icon="ph-database" label="Database Editor" active={activeNav === "catalog"} onNavigate={onNavigate} />
             <NavButton href="/projects" icon="ph-kanban" label="Projects" active={activeNav === "projects"} onNavigate={onNavigate} />
           </div>
+          <div className="mt-auto w-full px-2">
+            <ThemePicker />
+          </div>
         </nav>
         <main className="flex-1 flex flex-col h-full relative">
-          <header className="h-16 border-b border-white/5 bg-zinc-950/50 backdrop-blur-xl flex items-center justify-between px-6 shrink-0 z-40">
+          <header className="h-16 border-b border-zinc-200 dark:border-white/5 bg-zinc-50/50 dark:bg-zinc-950/50 backdrop-blur-xl flex items-center justify-between px-6 shrink-0 z-40">
             <div className="flex items-center gap-4">
               <div className="font-mono text-xs text-zinc-500 tracking-widest uppercase">Spec Sheets</div>
-              <div className="h-4 w-px bg-white/10" />
-              <h1 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+              <div className="h-4 w-px bg-zinc-300 dark:bg-white/10" />
+              <h1 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 {title}
-                <span className="w-2 h-2 rounded-full bg-accent-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-accent-500 animate-pulse" />
               </h1>
             </div>
           </header>
