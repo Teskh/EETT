@@ -218,6 +218,24 @@ class InstanceLinkModel(BaseModel):
     relationship_type: str
 
 
+class OccurrenceAttributeModel(BaseModel):
+    name: str
+    value: str | None
+
+
+class OccurrenceTargetModel(BaseModel):
+    instance_name: str
+    role_label: str | None
+
+
+class OccurrenceModel(BaseModel):
+    relationship_type: str
+    context_label: str | None
+    context_notes: str | None
+    targets: list[OccurrenceTargetModel]
+    attributes: list[OccurrenceAttributeModel]
+
+
 class ProjectInstanceModel(BaseModel):
     id: int
     name: str
@@ -231,6 +249,8 @@ class ProjectInstanceModel(BaseModel):
     attributes: list[AttributeGroupModel]
     linked_accessories: list[InstanceLinkModel]
     linked_to: list[InstanceLinkModel]
+    outgoing_occurrences: list[OccurrenceModel] = Field(default_factory=list)
+    incoming_occurrences: list[OccurrenceModel] = Field(default_factory=list)
     materials: list[MaterialModel]
     sync_state: SyncStateModel
     media: list[MediaModel]

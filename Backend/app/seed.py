@@ -39,6 +39,9 @@ from app.models import (
     ProjectInstanceAttributeValue,
     ProjectInstanceLink,
     ProjectInstanceMedia,
+    ProjectInstanceOccurrence,
+    ProjectInstanceOccurrenceAttributeValue,
+    ProjectInstanceOccurrenceTarget,
     ProjectInstanceSyncState,
     ProjectMaterialMode,
     ProjectMembership,
@@ -584,6 +587,15 @@ def seed_demo_dataset(session: Session) -> None:
         ]
     )
 
+    ensure_linked_accessory_demo(
+        session,
+        project=execution_project,
+        anchor_instances={
+            "Door A": door_instance,
+            "Kitchen Cabinet Run": cabinet_instance,
+        },
+    )
+
 
 def backfill_demo_supporting_records(session: Session) -> None:
     admin_role = ensure_role(session, "admin", "Admin", "Full access including ERP/admin tooling.")
@@ -757,6 +769,16 @@ def backfill_demo_supporting_records(session: Session) -> None:
                 )
             )
 
+    if project is not None:
+        ensure_linked_accessory_demo(
+            session,
+            project=project,
+            anchor_instances={
+                "Door A": instances.get("Door A"),
+                "Kitchen Cabinet Run": instances.get("Kitchen Cabinet Run"),
+            },
+        )
+
 
 def ensure_role(session: Session, code: str, name: str, description: str) -> Role:
     role = session.scalar(select(Role).where(Role.code == code))
@@ -802,6 +824,650 @@ def ensure_media(session: Session, instance: ProjectInstance | None, uri: str, c
     )
     if existing is None:
         session.add(ProjectInstanceMedia(instance=instance, kind="image", uri=uri, caption=caption, sort_order=1))
+
+
+def ensure_linked_accessory_demo(
+    session: Session,
+    *,
+    project: Project,
+    anchor_instances: dict[str, ProjectInstance | None],
+) -> None:
+    applied_finishes = ensure_category(
+        session,
+        name="Applied Finishes",
+        description="Reusable finishes and sealants with explicit usage occurrences.",
+        scope=CategoryScope.MIXED,
+        sort_order=3,
+        parent=None,
+    )
+    paints = ensure_category(
+        session,
+        name="Paints",
+        description="Paint systems that summarize all application contexts.",
+        scope=CategoryScope.ACCESSORY,
+        sort_order=1,
+        parent=applied_finishes,
+    )
+    sealants = ensure_category(
+        session,
+        name="Sealants",
+        description="Sealant systems with repeated, context-specific occurrences.",
+        scope=CategoryScope.ACCESSORY,
+        sort_order=2,
+        parent=applied_finishes,
+    )
+    exterior = ensure_category(
+        session,
+        name="Exterior Works",
+        description="Porches, railings, and other exterior-facing elements.",
+        scope=CategoryScope.ITEM,
+        sort_order=4,
+        parent=None,
+    )
+    porches = ensure_category(
+        session,
+        name="Porches",
+        description="Exterior porch assemblies.",
+        scope=CategoryScope.ITEM,
+        sort_order=1,
+        parent=exterior,
+    )
+    railings = ensure_category(
+        session,
+        name="Railings",
+        description="Metal and timber railing assemblies.",
+        scope=CategoryScope.ITEM,
+        sort_order=2,
+        parent=exterior,
+    )
+    bathrooms = ensure_category(
+        session,
+        name="Bathrooms",
+        description="Bathroom fixtures and finish interfaces.",
+        scope=CategoryScope.ITEM,
+        sort_order=5,
+        parent=None,
+    )
+    fixtures = ensure_category(
+        session,
+        name="Bathroom Fixtures",
+        description="Fixture templates requiring finish and sealant coordination.",
+        scope=CategoryScope.ITEM,
+        sort_order=1,
+        parent=bathrooms,
+    )
+
+    for source, target in [
+        (porches, paints),
+        (railings, paints),
+        (anchor_instances.get("Door A").category if anchor_instances.get("Door A") else None, paints),
+        (fixtures, sealants),
+    ]:
+        ensure_category_link(session, source, target)
+
+    porch = ensure_component(
+        session,
+        category=porches,
+        component_type=ComponentType.ITEM,
+        name="Front Porch Assembly",
+        short_name="Porch Type A",
+        description="Timber porch assembly with fascia, exposed beam faces, and coordinated exterior finish notes.",
+        short_description="Front porch assembly.",
+        installation="Set out fascia faces before coating so usage-specific paint notes can be tracked by occurrence.",
+        unit_type="unit",
+    )
+    railing = ensure_component(
+        session,
+        category=railings,
+        component_type=ComponentType.ITEM,
+        name="Steel Railing",
+        short_name="Rail Type B",
+        description="Powder-coated steel railing that may receive localized paint touch-ups or finish packages.",
+        short_description="Exterior steel railing.",
+        installation="Install after porch alignment and confirm coating touch-up schedule by occurrence.",
+        unit_type="unit",
+    )
+    toilet = ensure_component(
+        session,
+        category=fixtures,
+        component_type=ComponentType.ITEM,
+        name="Close Coupled Toilet",
+        short_name="WC-01",
+        description="Floor-mounted toilet requiring multiple sealant contexts around the fixture perimeter.",
+        short_description="Close coupled toilet.",
+        installation="Install after floor finish; coordinate sealant colors per contact surface.",
+        unit_type="unit",
+    )
+    paint = ensure_component(
+        session,
+        category=paints,
+        component_type=ComponentType.ACCESSORY,
+        name="Exterior Enamel Paint",
+        short_name="Paint Enamel",
+        description="Single paint chapter that centralizes preparation, coats, and curing while summarizing every place it appears.",
+        short_description="Exterior enamel paint.",
+        installation="Apply strictly per occurrence schedule so color and target context remain coordinated across the project.",
+        unit_type="set",
+    )
+    caulking = ensure_component(
+        session,
+        category=sealants,
+        component_type=ComponentType.ACCESSORY,
+        name="Elastic Caulking Package",
+        short_name="Caulk Flex",
+        description="Sealant chapter that captures repeated joints, interfaces, and color variations without duplicating the spec text.",
+        short_description="Elastic caulking package.",
+        installation="Prepare surfaces and execute each joint according to the occurrence list, including freeform contexts with no linked instance.",
+        unit_type="set",
+    )
+
+    ensure_component_attribute(session, porch, "Deck Finish", AttributeValueType.SELECT, 1, ["Natural", "Exterior Accent"])
+    ensure_component_attribute(session, railing, "Profile", AttributeValueType.SELECT, 1, ["Steel", "Timber"])
+    ensure_component_attribute(session, toilet, "Type", AttributeValueType.SELECT, 1, ["Close Coupled", "Wall Hung"])
+    ensure_component_attribute(session, paint, "Base", AttributeValueType.SELECT, 1, ["Waterborne", "Solvent"])
+    ensure_component_attribute(session, paint, "Sheen", AttributeValueType.SELECT, 2, ["Satin", "Gloss"])
+    ensure_component_attribute(session, caulking, "Chemistry", AttributeValueType.SELECT, 1, ["Sanitary", "Neutral Cure"])
+    ensure_component_attribute(session, caulking, "Movement Class", AttributeValueType.SELECT, 2, ["12.5", "20"])
+
+    enamel_material = ensure_material(session, sku="MAT-007", name="Exterior Enamel Topcoat", unit="l")
+    caulk_material = ensure_material(session, sku="MAT-008", name="Elastic Sealant Cartridge", unit="cartridge")
+    ensure_material_rule(
+        session,
+        component=paint,
+        material=enamel_material,
+        display_order=1,
+        unit="l",
+        unit_qty_per_unit=1.0,
+        notes="Usage quantity is coordinated from explicit occurrences rather than duplicated paint chapters.",
+    )
+    ensure_material_rule(
+        session,
+        component=caulking,
+        material=caulk_material,
+        display_order=1,
+        unit="cartridge",
+        unit_qty_per_unit=1.0,
+        notes="Sealant contexts are tracked explicitly so repeated joints remain readable in the spec sheet.",
+    )
+
+    door_instance = anchor_instances.get("Door A") or session.scalar(
+        select(ProjectInstance).where(ProjectInstance.project_id == project.id, ProjectInstance.name == "Door A")
+    )
+    kitchen_instance = anchor_instances.get("Kitchen Cabinet Run") or session.scalar(
+        select(ProjectInstance).where(ProjectInstance.project_id == project.id, ProjectInstance.name == "Kitchen Cabinet Run")
+    )
+
+    porch_instance = ensure_project_instance(
+        session,
+        project=project,
+        component=porch,
+        category=porches,
+        name="Front Porch",
+        short_name="POR-01",
+        description=porch.description,
+        short_description=porch.short_description,
+        installation=porch.installation,
+        unit_amount=1,
+    )
+    railing_instance = ensure_project_instance(
+        session,
+        project=project,
+        component=railing,
+        category=railings,
+        name="Main Railing",
+        short_name="RAL-01",
+        description=railing.description,
+        short_description=railing.short_description,
+        installation=railing.installation,
+        unit_amount=1,
+    )
+    toilet_instance = ensure_project_instance(
+        session,
+        project=project,
+        component=toilet,
+        category=fixtures,
+        name="Guest Toilet",
+        short_name="WC-G1",
+        description=toilet.description,
+        short_description=toilet.short_description,
+        installation=toilet.installation,
+        unit_amount=1,
+    )
+    paint_instance = ensure_project_instance(
+        session,
+        project=project,
+        component=paint,
+        category=paints,
+        name="Exterior Enamel Paint",
+        short_name="PNT-01",
+        description=paint.description,
+        short_description=paint.short_description,
+        installation=paint.installation,
+        unit_amount=1,
+    )
+    caulking_instance = ensure_project_instance(
+        session,
+        project=project,
+        component=caulking,
+        category=sealants,
+        name="Elastic Caulking Package",
+        short_name="CLK-01",
+        description=caulking.description,
+        short_description=caulking.short_description,
+        installation=caulking.installation,
+        unit_amount=1,
+    )
+
+    ensure_base_attribute_group(session, porch_instance, [("Deck Finish", "Exterior Accent")])
+    ensure_base_attribute_group(session, railing_instance, [("Profile", "Steel")])
+    ensure_base_attribute_group(session, toilet_instance, [("Type", "Close Coupled")])
+    ensure_base_attribute_group(session, paint_instance, [("Base", "Waterborne"), ("Sheen", "Satin")])
+    ensure_base_attribute_group(session, caulking_instance, [("Chemistry", "Sanitary"), ("Movement Class", "12.5")])
+
+    for instance in [porch_instance, railing_instance, toilet_instance, paint_instance, caulking_instance]:
+        ensure_sync_state(session, instance, SyncStatus.UP_TO_DATE, None)
+
+    ensure_occurrence(
+        session,
+        source_instance=paint_instance,
+        relationship_type="coats",
+        context_label="Primary railing bars",
+        context_notes=None,
+        sort_order=1,
+        targets=[(railing_instance, "Surface")],
+        attributes=[("Color", "Black"), ("Area", "Exterior"), ("Finish", "Gloss")],
+    )
+    ensure_occurrence(
+        session,
+        source_instance=paint_instance,
+        relationship_type="coats",
+        context_label="Porch timber fascia",
+        context_notes=None,
+        sort_order=2,
+        targets=[(porch_instance, "Surface")],
+        attributes=[("Color", "Red"), ("Area", "Front elevation"), ("Finish", "Satin")],
+    )
+    if door_instance is not None:
+        ensure_occurrence(
+            session,
+            source_instance=paint_instance,
+            relationship_type="coats",
+            context_label="Exterior doorknob set",
+            context_notes=None,
+            sort_order=3,
+            targets=[(door_instance, "Host item")],
+            attributes=[("Color", "Black"), ("Area", "Hardware touch-up"), ("Finish", "Gloss")],
+        )
+
+    ensure_occurrence(
+        session,
+        source_instance=caulking_instance,
+        relationship_type="seals",
+        context_label="Joint between toilet base and floor",
+        context_notes=None,
+        sort_order=1,
+        targets=[(toilet_instance, "Fixture")],
+        attributes=[("Color", "Gray"), ("Side", "Floor"), ("Joint", "Perimeter")],
+    )
+    ensure_occurrence(
+        session,
+        source_instance=caulking_instance,
+        relationship_type="seals",
+        context_label="Joint between toilet base and ceramic wall",
+        context_notes=None,
+        sort_order=2,
+        targets=[(toilet_instance, "Fixture")],
+        attributes=[("Color", "White"), ("Side", "Wall"), ("Joint", "Back edge")],
+    )
+    ensure_occurrence(
+        session,
+        source_instance=caulking_instance,
+        relationship_type="seals",
+        context_label="Joint between kitchen wall and ceiling",
+        context_notes=None,
+        sort_order=3,
+        targets=[],
+        attributes=[("Color", "Gray"), ("Area", "Kitchen ceiling line")],
+    )
+    if kitchen_instance is not None:
+        ensure_occurrence(
+            session,
+            source_instance=caulking_instance,
+            relationship_type="seals",
+            context_label="Countertop backsplash return",
+            context_notes=None,
+            sort_order=4,
+            targets=[(kitchen_instance, "Host zone")],
+            attributes=[("Color", "White"), ("Area", "Backsplash return")],
+        )
+
+
+def ensure_category(
+    session: Session,
+    *,
+    name: str,
+    description: str,
+    scope: CategoryScope,
+    sort_order: int,
+    parent: CatalogCategory | None,
+) -> CatalogCategory:
+    category = session.scalar(
+        select(CatalogCategory).where(CatalogCategory.name == name, CatalogCategory.parent_id == (parent.id if parent else None))
+    )
+    if category is None:
+        category = CatalogCategory(name=name, description=description, scope=scope, sort_order=sort_order, parent=parent)
+        session.add(category)
+        session.flush()
+    else:
+        category.description = description
+        category.scope = scope
+        category.sort_order = sort_order
+        category.parent = parent
+    return category
+
+
+def ensure_category_link(session: Session, source: CatalogCategory | None, target: CatalogCategory | None) -> None:
+    if source is None or target is None:
+        return
+    existing = session.scalar(
+        select(CatalogCategoryLink.id).where(
+            CatalogCategoryLink.category_id == source.id,
+            CatalogCategoryLink.linked_category_id == target.id,
+        )
+    )
+    if existing is None:
+        session.add(CatalogCategoryLink(category=source, linked_category=target))
+
+
+def ensure_component(
+    session: Session,
+    *,
+    category: CatalogCategory,
+    component_type: ComponentType,
+    name: str,
+    short_name: str,
+    description: str,
+    short_description: str,
+    installation: str,
+    unit_type: str,
+) -> CatalogComponent:
+    component = session.scalar(
+        select(CatalogComponent).where(CatalogComponent.category_id == category.id, CatalogComponent.name == name)
+    )
+    if component is None:
+        component = CatalogComponent(
+            category=category,
+            component_type=component_type,
+            name=name,
+            short_name=short_name,
+            description=description,
+            short_description=short_description,
+            installation=installation,
+            unit_type=unit_type,
+        )
+        session.add(component)
+        session.flush()
+    else:
+        component.component_type = component_type
+        component.short_name = short_name
+        component.description = description
+        component.short_description = short_description
+        component.installation = installation
+        component.unit_type = unit_type
+    return component
+
+
+def ensure_component_attribute(
+    session: Session,
+    component: CatalogComponent,
+    name: str,
+    value_type: AttributeValueType,
+    sort_order: int,
+    options: list[str] | None = None,
+) -> CatalogAttributeDefinition:
+    definition = session.scalar(
+        select(CatalogAttributeDefinition).where(
+            CatalogAttributeDefinition.component_id == component.id,
+            CatalogAttributeDefinition.name == name,
+        )
+    )
+    if definition is None:
+        definition = CatalogAttributeDefinition(component=component, name=name, value_type=value_type, sort_order=sort_order)
+        session.add(definition)
+        session.flush()
+    else:
+        definition.value_type = value_type
+        definition.sort_order = sort_order
+
+    existing_options = {option.value: option for option in definition.options}
+    target_options = options or []
+    for option in list(definition.options):
+        if option.value not in target_options:
+            definition.options.remove(option)
+    for index, option_value in enumerate(target_options, start=1):
+        option = existing_options.get(option_value)
+        if option is None:
+            option = CatalogAttributeOption(attribute_definition=definition, value=option_value, sort_order=index)
+            session.add(option)
+        else:
+            option.sort_order = index
+    return definition
+
+
+def ensure_material(session: Session, *, sku: str, name: str, unit: str | None) -> Material:
+    material = session.scalar(select(Material).where(Material.sku == sku))
+    if material is None:
+        material = Material(sku=sku, name=name, unit=unit)
+        session.add(material)
+        session.flush()
+    else:
+        material.name = name
+        material.unit = unit
+    return material
+
+
+def ensure_material_rule(
+    session: Session,
+    *,
+    component: CatalogComponent,
+    material: Material,
+    display_order: int,
+    unit: str | None,
+    unit_qty_per_unit: float | None,
+    notes: str | None,
+) -> ComponentMaterialRule:
+    rule = session.scalar(
+        select(ComponentMaterialRule).where(
+            ComponentMaterialRule.component_id == component.id,
+            ComponentMaterialRule.material_id == material.id,
+        )
+    )
+    if rule is None:
+        rule = ComponentMaterialRule(
+            component=component,
+            material=material,
+            display_order=display_order,
+            unit=unit,
+            unit_qty_per_unit=unit_qty_per_unit,
+            notes=notes,
+        )
+        session.add(rule)
+        session.flush()
+    else:
+        rule.display_order = display_order
+        rule.unit = unit
+        rule.unit_qty_per_unit = unit_qty_per_unit
+        rule.notes = notes
+    return rule
+
+
+def ensure_project_instance(
+    session: Session,
+    *,
+    project: Project,
+    component: CatalogComponent,
+    category: CatalogCategory,
+    name: str,
+    short_name: str,
+    description: str,
+    short_description: str,
+    installation: str,
+    unit_amount: float | None,
+) -> ProjectInstance:
+    instance = session.scalar(
+        select(ProjectInstance).where(ProjectInstance.project_id == project.id, ProjectInstance.name == name)
+    )
+    if instance is None:
+        instance = ProjectInstance(
+            project=project,
+            component=component,
+            category=category,
+            instance_type=component.component_type,
+            name=name,
+            short_name=short_name,
+            description=description,
+            short_description=short_description,
+            installation=installation,
+            unit_amount=unit_amount,
+        )
+        session.add(instance)
+        session.flush()
+    else:
+        instance.component = component
+        instance.category = category
+        instance.instance_type = component.component_type
+        instance.short_name = short_name
+        instance.description = description
+        instance.short_description = short_description
+        instance.installation = installation
+        instance.unit_amount = unit_amount
+    return instance
+
+
+def ensure_base_attribute_group(
+    session: Session,
+    instance: ProjectInstance,
+    attributes: list[tuple[str, str]],
+) -> None:
+    group = next((row for row in instance.attribute_groups if row.application_label is None), None)
+    if group is None:
+        group = ProjectInstanceAttributeGroup(instance=instance, name="Base Attributes", application_label=None, sort_order=1)
+        session.add(group)
+        session.flush()
+    else:
+        group.name = "Base Attributes"
+        group.sort_order = 1
+
+    existing_values = {value.attribute_name: value for value in group.attribute_values}
+    target_names = [name for name, _ in attributes]
+    for value in list(group.attribute_values):
+        if value.attribute_name not in target_names:
+            group.attribute_values.remove(value)
+    for index, (attribute_name, value) in enumerate(attributes, start=1):
+        row = existing_values.get(attribute_name)
+        if row is None:
+            row = ProjectInstanceAttributeValue(group=group, attribute_name=attribute_name, value=value, sort_order=index)
+            session.add(row)
+        else:
+            row.value = value
+            row.sort_order = index
+
+
+def ensure_sync_state(
+    session: Session,
+    instance: ProjectInstance,
+    status: SyncStatus,
+    notes: str | None,
+) -> None:
+    if instance.sync_state is None:
+        session.add(
+            ProjectInstanceSyncState(
+                instance=instance,
+                sync_status=status,
+                last_synced_at=utcnow(),
+                source_component_updated_at=instance.component.updated_at,
+                sync_notes=notes,
+            )
+        )
+        return
+
+    instance.sync_state.sync_status = status
+    instance.sync_state.last_synced_at = utcnow()
+    instance.sync_state.source_component_updated_at = instance.component.updated_at
+    instance.sync_state.sync_notes = notes
+
+
+def ensure_occurrence(
+    session: Session,
+    *,
+    source_instance: ProjectInstance,
+    relationship_type: str,
+    context_label: str,
+    context_notes: str | None,
+    sort_order: int,
+    targets: list[tuple[ProjectInstance, str | None]],
+    attributes: list[tuple[str, str]],
+) -> ProjectInstanceOccurrence:
+    occurrence = session.scalar(
+        select(ProjectInstanceOccurrence).where(
+            ProjectInstanceOccurrence.source_instance_id == source_instance.id,
+            ProjectInstanceOccurrence.relationship_type == relationship_type,
+            ProjectInstanceOccurrence.context_label == context_label,
+        )
+    )
+    if occurrence is None:
+        occurrence = ProjectInstanceOccurrence(
+            source_instance=source_instance,
+            relationship_type=relationship_type,
+            context_label=context_label,
+            context_notes=context_notes,
+            sort_order=sort_order,
+        )
+        session.add(occurrence)
+        session.flush()
+    else:
+        occurrence.context_notes = context_notes
+        occurrence.sort_order = sort_order
+
+    existing_targets = {(target.target_instance_id, target.role_label): target for target in occurrence.targets}
+    wanted_targets = {(target.id, role_label): (target, role_label) for target, role_label in targets}
+    for row in list(occurrence.targets):
+        if (row.target_instance_id, row.role_label) not in wanted_targets:
+            occurrence.targets.remove(row)
+    for index, (target_id, role_label) in enumerate(wanted_targets.keys(), start=1):
+        row = existing_targets.get((target_id, role_label))
+        if row is None:
+            target_instance, _ = wanted_targets[(target_id, role_label)]
+            row = ProjectInstanceOccurrenceTarget(
+                occurrence=occurrence,
+                target_instance=target_instance,
+                role_label=role_label,
+                sort_order=index,
+            )
+            session.add(row)
+        else:
+            row.sort_order = index
+
+    existing_attributes = {row.attribute_name: row for row in occurrence.attribute_values}
+    target_names = [name for name, _ in attributes]
+    for row in list(occurrence.attribute_values):
+        if row.attribute_name not in target_names:
+            occurrence.attribute_values.remove(row)
+    for index, (attribute_name, value) in enumerate(attributes, start=1):
+        row = existing_attributes.get(attribute_name)
+        if row is None:
+            row = ProjectInstanceOccurrenceAttributeValue(
+                occurrence=occurrence,
+                attribute_name=attribute_name,
+                value=value,
+                sort_order=index,
+            )
+            session.add(row)
+        else:
+            row.value = value
+            row.sort_order = index
+
+    return occurrence
 
 
 def add_attribute(

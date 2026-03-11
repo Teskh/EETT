@@ -139,6 +139,24 @@ export type InstanceLink = {
   relationship_type: string;
 };
 
+export type OccurrenceAttribute = {
+  name: string;
+  value: string | null;
+};
+
+export type OccurrenceTarget = {
+  instance_name: string;
+  role_label: string | null;
+};
+
+export type UsageOccurrence = {
+  relationship_type: string;
+  context_label: string | null;
+  context_notes: string | null;
+  targets: OccurrenceTarget[];
+  attributes: OccurrenceAttribute[];
+};
+
 export type BomEntry = {
   subtype: string;
   quantity: number | null;
@@ -205,6 +223,8 @@ export type ProjectInstance = {
   attributes: AttributeGroup[];
   linked_accessories: InstanceLink[];
   linked_to: InstanceLink[];
+  outgoing_occurrences: UsageOccurrence[];
+  incoming_occurrences: UsageOccurrence[];
   materials: InstanceMaterial[];
   sync_state: SyncState;
   media: Array<{ kind: string; uri: string; caption: string | null }>;

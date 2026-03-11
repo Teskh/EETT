@@ -21,6 +21,9 @@ from app.models import (
     ProjectInstanceAttributeValue,
     ProjectInstanceLink,
     ProjectInstanceMedia,
+    ProjectInstanceOccurrence,
+    ProjectInstanceOccurrenceAttributeValue,
+    ProjectInstanceOccurrenceTarget,
     ProjectInstanceSyncState,
     ProjectMaterialMode,
     ProjectMembership,
@@ -292,6 +295,26 @@ def get_project_with_details(session: Session, project_id: int) -> Project | Non
             .selectinload(ProjectInstance.child_links)
             .selectinload(ProjectInstanceLink.parent_instance),
             selectinload(Project.instances)
+            .selectinload(ProjectInstance.outgoing_occurrences)
+            .selectinload(ProjectInstanceOccurrence.targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.target_instance),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.outgoing_occurrences)
+            .selectinload(ProjectInstanceOccurrence.attribute_values),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.occurrence_targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.occurrence)
+            .selectinload(ProjectInstanceOccurrence.source_instance),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.occurrence_targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.occurrence)
+            .selectinload(ProjectInstanceOccurrence.attribute_values),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.occurrence_targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.occurrence)
+            .selectinload(ProjectInstanceOccurrence.targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.target_instance),
+            selectinload(Project.instances)
             .selectinload(ProjectInstance.bom_entries)
             .selectinload(ProjectBomEntry.material),
             selectinload(Project.instances).selectinload(ProjectInstance.category),
@@ -467,7 +490,7 @@ def _serialize_subtype(subtype: ProjectSubtype) -> dict:
 
 
 def _serialize_instance(instance: ProjectInstance, project_material_mode: ProjectMaterialMode | None) -> dict:
-    linked_accessories = [
+    legacy_linked_accessories = [
         {
             "name": link.child_instance.name,
             "application_label": link.application_label or None,
@@ -475,7 +498,7 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         }
         for link in sorted(instance.parent_links, key=lambda item: (item.sort_order, item.id))
     ]
-    linked_to = [
+    legacy_linked_to = [
         {
             "name": link.parent_instance.name,
             "application_label": link.application_label or None,
@@ -483,6 +506,34 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         }
         for link in sorted(instance.child_links, key=lambda item: (item.sort_order, item.id))
     ]
+    outgoing_occurrences = [_serialize_occurrence(occurrence) for occurrence in instance.outgoing_occurrences]
+    incoming_occurrence_rows = sorted(
+        {target.occurrence.id: target.occurrence for target in instance.occurrence_targets}.values(),
+        key=lambda occurrence: (occurrence.sort_order, occurrence.id),
+    )
+    incoming_occurrences = [_serialize_occurrence(occurrence) for occurrence in incoming_occurrence_rows]
+    linked_accessories = _merge_link_badges(
+        legacy_linked_accessories,
+        [
+            {
+                "name": occurrence.source_instance.name,
+                "application_label": occurrence.context_label or None,
+                "relationship_type": occurrence.relationship_type,
+            }
+            for occurrence in incoming_occurrence_rows
+        ],
+    )
+    linked_to = _merge_link_badges(
+        legacy_linked_to,
+        [
+            {
+                "name": ", ".join(target.target_instance.name for target in occurrence.targets) or "Freeform context",
+                "application_label": occurrence.context_label or None,
+                "relationship_type": occurrence.relationship_type,
+            }
+            for occurrence in instance.outgoing_occurrences
+        ],
+    )
     grouped_attributes = []
     merged_attributes: dict[str, str | None] = {}
     base_attribute_values: dict[str, str | None] = {}
@@ -547,6 +598,8 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         "attributes": grouped_attributes,
         "linked_accessories": linked_accessories,
         "linked_to": linked_to,
+        "outgoing_occurrences": outgoing_occurrences,
+        "incoming_occurrences": incoming_occurrences,
         "materials": applicable_materials,
         "sync_state": {
             "status": effective_sync_status.value,
@@ -567,6 +620,41 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
         ],
         "material_mode": project_material_mode.mode.value if project_material_mode else MaterialMode.GENERAL.value,
     }
+
+
+def _serialize_occurrence(occurrence: ProjectInstanceOccurrence) -> dict:
+    return {
+        "relationship_type": occurrence.relationship_type,
+        "context_label": occurrence.context_label,
+        "context_notes": occurrence.context_notes,
+        "targets": [
+            {
+                "instance_name": target.target_instance.name,
+                "role_label": target.role_label,
+            }
+            for target in occurrence.targets
+        ],
+        "attributes": [
+            {
+                "name": attribute.attribute_name,
+                "value": attribute.value,
+            }
+            for attribute in occurrence.attribute_values
+        ],
+    }
+
+
+def _merge_link_badges(*badge_groups: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[tuple[str, str | None, str]] = set()
+    for group in badge_groups:
+        for badge in group:
+            key = (badge["name"], badge["application_label"], badge["relationship_type"])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(badge)
+    return merged
 
 
 def _sync_base_attribute_group(instance: ProjectInstance) -> None:

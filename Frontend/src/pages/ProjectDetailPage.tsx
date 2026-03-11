@@ -11,6 +11,7 @@ import type {
   ProjectInstance,
   ProjectSubtype,
   UpdateProjectInstanceRequest,
+  UsageOccurrence,
 } from "../lib/types";
 
 type ProjectDetailPageProps = {
@@ -417,12 +418,35 @@ function InstanceFormModal({
   );
 }
 
-function renderInstanceLinkBadge(link: { name: string; application_label: string | null }) {
-  const label = link.application_label ? `${link.name} · ${link.application_label}` : link.name;
+function renderOccurrenceSummary(occurrence: UsageOccurrence, index: number) {
+  const targets = occurrence.targets.length
+    ? occurrence.targets
+        .map((target) => (target.role_label ? `${target.instance_name} (${target.role_label})` : target.instance_name))
+        .join(", ")
+    : "Freeform context";
+
   return (
-    <span key={`${link.name}-${link.application_label || "base"}`} className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded text-[10px] font-mono text-zinc-800 dark:text-zinc-300">
-      {label}
-    </span>
+    <div key={`${occurrence.relationship_type}-${occurrence.context_label || "occurrence"}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{occurrence.context_label || "Usage occurrence"}</div>
+          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
+        </div>
+        <div className="text-right text-[11px] text-zinc-600 dark:text-zinc-400 max-w-[50%]">{targets}</div>
+      </div>
+      {occurrence.attributes.length ? (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {occurrence.attributes.map((attribute) => (
+            <span
+              key={`${occurrence.context_label || "occurrence"}-${attribute.name}`}
+              className="px-2 py-0.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 text-[10px] font-mono text-zinc-700 dark:text-zinc-300"
+            >
+              {attribute.name}: {attribute.value || "-"}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -498,33 +522,27 @@ function InstanceCard({
                 </div>
               </div>
 
-              <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
-                <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <i className="ph-bold ph-plugs text-zinc-600" /> Relationships
-                </h6>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-500 font-mono w-24">Linked Acc:</span>
-                    <div className="flex flex-wrap gap-1">
-                      {instance.linked_accessories.length ? (
-                        instance.linked_accessories.map(renderInstanceLinkBadge)
-                      ) : (
-                        <span className="text-xs font-mono text-zinc-500">None</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-500 font-mono w-24">Attached To:</span>
-                    <div className="flex flex-wrap gap-1">
-                      {instance.linked_to.length ? (
-                        instance.linked_to.map(renderInstanceLinkBadge)
-                      ) : (
-                        <span className="text-xs font-mono text-zinc-500">Standalone</span>
-                      )}
-                    </div>
+              {instance.outgoing_occurrences.length ? (
+                <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Summary
+                  </h6>
+                  <div className="space-y-3">
+                    {instance.outgoing_occurrences.map(renderOccurrenceSummary)}
                   </div>
                 </div>
-              </div>
+              ) : null}
+
+              {instance.incoming_occurrences.length ? (
+                <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenced Here
+                  </h6>
+                  <div className="space-y-3">
+                    {instance.incoming_occurrences.map(renderOccurrenceSummary)}
+                  </div>
+                </div>
+              ) : null}
 
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">

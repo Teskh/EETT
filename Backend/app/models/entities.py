@@ -486,6 +486,17 @@ class ProjectInstance(Base):
         back_populates="child_instance",
         cascade="all, delete-orphan",
     )
+    outgoing_occurrences: Mapped[list["ProjectInstanceOccurrence"]] = relationship(
+        back_populates="source_instance",
+        cascade="all, delete-orphan",
+        foreign_keys="ProjectInstanceOccurrence.source_instance_id",
+        order_by="ProjectInstanceOccurrence.sort_order",
+    )
+    occurrence_targets: Mapped[list["ProjectInstanceOccurrenceTarget"]] = relationship(
+        back_populates="target_instance",
+        cascade="all, delete-orphan",
+        foreign_keys="ProjectInstanceOccurrenceTarget.target_instance_id",
+    )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
     comments: Mapped[list["ProjectComment"]] = relationship(back_populates="instance")
     export_settings: Mapped[list["InstanceExportSetting"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
@@ -564,6 +575,60 @@ class ProjectInstanceLink(Base):
 
     parent_instance: Mapped[ProjectInstance] = relationship(foreign_keys=[parent_instance_id], back_populates="parent_links")
     child_instance: Mapped[ProjectInstance] = relationship(foreign_keys=[child_instance_id], back_populates="child_links")
+
+
+class ProjectInstanceOccurrence(Base):
+    __tablename__ = "project_instance_occurrences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    relationship_type: Mapped[str] = mapped_column(String(60), default="applied_to", nullable=False)
+    context_label: Mapped[str | None] = mapped_column(String(160), default=None)
+    context_notes: Mapped[str | None] = mapped_column(Text, default=None)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    source_instance: Mapped[ProjectInstance] = relationship(
+        foreign_keys=[source_instance_id],
+        back_populates="outgoing_occurrences",
+    )
+    targets: Mapped[list["ProjectInstanceOccurrenceTarget"]] = relationship(
+        back_populates="occurrence",
+        cascade="all, delete-orphan",
+        order_by="ProjectInstanceOccurrenceTarget.sort_order",
+    )
+    attribute_values: Mapped[list["ProjectInstanceOccurrenceAttributeValue"]] = relationship(
+        back_populates="occurrence",
+        cascade="all, delete-orphan",
+        order_by="ProjectInstanceOccurrenceAttributeValue.sort_order",
+    )
+
+
+class ProjectInstanceOccurrenceTarget(Base):
+    __tablename__ = "project_instance_occurrence_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    occurrence_id: Mapped[int] = mapped_column(ForeignKey("project_instance_occurrences.id", ondelete="CASCADE"), nullable=False)
+    target_instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    role_label: Mapped[str | None] = mapped_column(String(120), default=None)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    occurrence: Mapped[ProjectInstanceOccurrence] = relationship(back_populates="targets")
+    target_instance: Mapped[ProjectInstance] = relationship(
+        foreign_keys=[target_instance_id],
+        back_populates="occurrence_targets",
+    )
+
+
+class ProjectInstanceOccurrenceAttributeValue(Base):
+    __tablename__ = "project_instance_occurrence_attribute_values"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    occurrence_id: Mapped[int] = mapped_column(ForeignKey("project_instance_occurrences.id", ondelete="CASCADE"), nullable=False)
+    attribute_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    value: Mapped[str | None] = mapped_column(String(160), default=None)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    occurrence: Mapped[ProjectInstanceOccurrence] = relationship(back_populates="attribute_values")
 
 
 class ProjectBomEntry(Base):

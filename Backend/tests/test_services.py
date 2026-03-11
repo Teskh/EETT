@@ -63,7 +63,7 @@ class ServiceLayerTests(unittest.TestCase):
         with self.session_factory() as session:
             data = get_catalog_page_data(session)
 
-        self.assertEqual(data["summary"]["categories"], 6)
+        self.assertEqual(data["summary"]["categories"], 14)
         self.assertEqual(data["selected"]["name"], "Openings")
         child_names = {child["name"] for child in data["selected"]["child_categories"]}
         self.assertIn("Doors", child_names)
@@ -499,6 +499,33 @@ class ServiceLayerTests(unittest.TestCase):
         trim_material = trim_instance["materials"][0]
         self.assertEqual(trim_material["bom_entries"][0]["quantity_state"], "zero")
         self.assertEqual(trim_instance["sync_state"]["status"], "out_of_sync")
+
+    def test_project_view_includes_explicit_usage_occurrences_for_linked_accessories(self) -> None:
+        with self.session_factory() as session:
+            detail = get_project_view_data(session, 2)
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+
+        paints_section = next(section for section in detail["categories"] if section["name"] == "Paints")
+        paint_instance = next(item for item in paints_section["instances"] if item["name"] == "Exterior Enamel Paint")
+        self.assertEqual(len(paint_instance["outgoing_occurrences"]), 3)
+        self.assertEqual(
+            [row["context_label"] for row in paint_instance["outgoing_occurrences"]],
+            ["Primary railing bars", "Porch timber fascia", "Exterior doorknob set"],
+        )
+
+        sealants_section = next(section for section in detail["categories"] if section["name"] == "Sealants")
+        caulking_instance = next(item for item in sealants_section["instances"] if item["name"] == "Elastic Caulking Package")
+        freeform_occurrence = next(
+            row for row in caulking_instance["outgoing_occurrences"] if row["context_label"] == "Joint between kitchen wall and ceiling"
+        )
+        self.assertEqual(freeform_occurrence["targets"], [])
+
+        railings_section = next(section for section in detail["categories"] if section["name"] == "Railings")
+        railing_instance = next(item for item in railings_section["instances"] if item["name"] == "Main Railing")
+        self.assertEqual(len(railing_instance["incoming_occurrences"]), 1)
+        self.assertEqual(railing_instance["incoming_occurrences"][0]["context_label"], "Primary railing bars")
 
     def test_html_renderers_include_core_screen_content(self) -> None:
         with self.session_factory() as session:
