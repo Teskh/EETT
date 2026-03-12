@@ -27,6 +27,7 @@ from app.api_models import (
     DashboardResponse,
     ExportJobModel,
     LoginRequest,
+    MaterialOccurrenceUpdateRequest,
     MaterialModeResponse,
     ManagedUserModel,
     MutationResultModel,
@@ -35,6 +36,8 @@ from app.api_models import (
     ProjectCreateRequest,
     ProjectInstanceCreateRequest,
     ProjectInstanceUpdateRequest,
+    ProjectSubtypeCreateRequest,
+    ProjectSubtypeUpdateRequest,
     ProjectsBoardResponse,
     PublicProjectListResponse,
     PublicProjectSkuResponse,
@@ -86,13 +89,17 @@ from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
     create_project,
     create_project_instance,
+    create_project_subtype,
+    delete_project_subtype,
     delete_project_instance,
     get_instance_sync_preview,
     get_project_view_data,
     get_project_with_details,
     get_projects_page_data,
     refresh_instance_snapshot,
+    replace_project_material_occurrence,
     set_project_material_mode,
+    update_project_subtype,
     update_project_instance,
 )
 from app.services.public_api import list_project_public_skus, list_public_projects
@@ -843,6 +850,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
 
+    @app.post("/api/v1/projects/{project_id}/subtypes", response_model=MutationResultModel)
+    async def create_project_subtype_v1(
+        project_id: int,
+        payload: ProjectSubtypeCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            subtype = create_project_subtype(
+                session,
+                project=project,
+                name=payload.name,
+                parent_id=payload.parent_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"ok": True, "project_id": project.id, "subtype_id": subtype.id}
+
+    @app.put("/api/v1/projects/{project_id}/subtypes/{subtype_id}", response_model=MutationResultModel)
+    async def update_project_subtype_v1(
+        project_id: int,
+        subtype_id: int,
+        payload: ProjectSubtypeUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            subtype = update_project_subtype(
+                session,
+                project=project,
+                subtype_id=subtype_id,
+                name=payload.name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if subtype is None:
+            raise HTTPException(status_code=404, detail="Project subtype not found")
+        return {"ok": True, "project_id": project.id, "subtype_id": subtype.id}
+
+    @app.delete("/api/v1/projects/{project_id}/subtypes/{subtype_id}", response_model=MutationResultModel)
+    async def delete_project_subtype_v1(
+        project_id: int,
+        subtype_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        deleted = delete_project_subtype(session, project=project, subtype_id=subtype_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project subtype not found")
+        return {"ok": True, "project_id": project.id, "deleted_id": subtype_id}
+
     @app.post("/api/v1/projects/{project_id}/instances", response_model=MutationResultModel)
     async def create_project_instance_v1(
         project_id: int,
@@ -915,6 +985,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project_id, "deleted_id": instance_id}
+
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}", response_model=MutationResultModel)
+    async def update_project_material_occurrence_v1(
+        project_id: int,
+        instance_id: int,
+        rule_id: int,
+        payload: MaterialOccurrenceUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            updated = replace_project_material_occurrence(
+                session,
+                project=project,
+                instance_id=instance_id,
+                rule_id=rule_id,
+                mode=payload.mode,
+                entries=[
+                    {
+                        "subtype_id": row.subtype_id,
+                        "quantity": row.quantity,
+                        "assembly_quantity": row.assembly_quantity,
+                    }
+                    for row in payload.entries
+                ],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not updated:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project.id, "instance_id": instance_id}
 
     @app.get("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
     async def project_material_mode_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

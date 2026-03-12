@@ -174,6 +174,7 @@ export type ProjectsBoardData = {
 
 export type ProjectSubtype = {
   id: number;
+  parent_id: number | null;
   name: string;
   children: ProjectSubtype[];
 };
@@ -221,7 +222,9 @@ export type UsageOccurrence = {
 };
 
 export type BomEntry = {
+  subtype_id: number | null;
   subtype: string;
+  subtype_depth: number;
   quantity: number | null;
   quantity_state: string;
   assembly_quantity: number | null;
@@ -230,6 +233,7 @@ export type BomEntry = {
   calculation_mode: string;
   calculation_formula: string | null;
   calculation_explanation: string | null;
+  is_persisted: boolean;
 };
 
 export type MaterialApplicabilityGroup = {
@@ -245,12 +249,15 @@ export type MaterialApplicability = {
 };
 
 export type InstanceMaterial = {
+  rule_id: number;
+  material_id: number;
   material_name: string;
   sku: string;
   unit_qty_per_unit: number | null;
   unit: string | null;
   notes: string | null;
   applicability: MaterialApplicability;
+  mode: string;
   bom_entries: BomEntry[];
 };
 
@@ -387,6 +394,26 @@ export type UpdateProjectInstanceRequest = {
   installation?: string | null;
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];
+};
+
+export type CreateProjectSubtypeRequest = {
+  name: string;
+  parent_id?: number | null;
+};
+
+export type UpdateProjectSubtypeRequest = {
+  name: string;
+};
+
+export type MaterialOccurrenceEntryInput = {
+  subtype_id?: number | null;
+  quantity?: number | null;
+  assembly_quantity?: number | null;
+};
+
+export type UpdateMaterialOccurrenceRequest = {
+  mode: string;
+  entries: MaterialOccurrenceEntryInput[];
 };
 
 export type MutationResult = {

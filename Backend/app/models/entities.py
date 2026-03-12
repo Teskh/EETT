@@ -301,6 +301,7 @@ class ComponentMaterialRule(Base):
 
     component: Mapped[CatalogComponent] = relationship(back_populates="material_rules")
     material: Mapped[Material] = relationship(back_populates="component_rules")
+    bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="material_rule")
     condition_groups: Mapped[list["MaterialRuleGroup"]] = relationship(
         back_populates="rule",
         cascade="all, delete-orphan",
@@ -639,7 +640,7 @@ class ProjectBomEntry(Base):
             "uq_project_bom_entries_general",
             "project_id",
             "instance_id",
-            "material_id",
+            "material_rule_id",
             unique=True,
             postgresql_where=text("subtype_id IS NULL"),
         ),
@@ -647,7 +648,7 @@ class ProjectBomEntry(Base):
             "uq_project_bom_entries_subtype",
             "project_id",
             "instance_id",
-            "material_id",
+            "material_rule_id",
             "subtype_id",
             unique=True,
             postgresql_where=text("subtype_id IS NOT NULL"),
@@ -657,6 +658,7 @@ class ProjectBomEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    material_rule_id: Mapped[int] = mapped_column(ForeignKey("component_material_rules.id", ondelete="CASCADE"), nullable=False)
     material_id: Mapped[int] = mapped_column(ForeignKey("materials.id"), nullable=False)
     subtype_id: Mapped[int | None] = mapped_column(ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None)
     quantity: Mapped[float | None] = mapped_column(Float, default=None)
@@ -671,6 +673,7 @@ class ProjectBomEntry(Base):
 
     project: Mapped[Project] = relationship(back_populates="bom_entries")
     instance: Mapped[ProjectInstance] = relationship(back_populates="bom_entries")
+    material_rule: Mapped[ComponentMaterialRule] = relationship(back_populates="bom_entries")
     material: Mapped[Material] = relationship(back_populates="bom_entries")
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="bom_entries")
 

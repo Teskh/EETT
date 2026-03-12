@@ -596,13 +596,13 @@ def _remove_orphan_bom_entries(component: CatalogComponent) -> None:
             for value in group.attribute_values:
                 attribute_values[value.attribute_name] = value.value
 
-        applicable_material_ids = {
-            rule.material_id
+        applicable_rule_ids = {
+            rule.id
             for rule in rules
             if _rule_applies(rule, attribute_values)
         }
         for bom_entry in list(instance.bom_entries):
-            if bom_entry.material_id not in applicable_material_ids:
+            if bom_entry.material_rule_id not in applicable_rule_ids:
                 instance.bom_entries.remove(bom_entry)
 
 

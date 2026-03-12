@@ -74,6 +74,7 @@ class MutationResultModel(BaseModel):
     component_id: int | None = None
     project_id: int | None = None
     instance_id: int | None = None
+    subtype_id: int | None = None
     deleted_id: int | None = None
     linked_category_ids: list[int] = Field(default_factory=list)
 
@@ -194,6 +195,26 @@ class ProjectInstanceUpdateRequest(BaseModel):
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
 
 
+class ProjectSubtypeCreateRequest(BaseModel):
+    name: str
+    parent_id: int | None = None
+
+
+class ProjectSubtypeUpdateRequest(BaseModel):
+    name: str
+
+
+class MaterialOccurrenceEntryInputModel(BaseModel):
+    subtype_id: int | None = None
+    quantity: float | None = None
+    assembly_quantity: float | None = None
+
+
+class MaterialOccurrenceUpdateRequest(BaseModel):
+    mode: str
+    entries: list[MaterialOccurrenceEntryInputModel] = Field(default_factory=list)
+
+
 class ProjectSummaryModel(BaseModel):
     id: int
     name: str
@@ -250,7 +271,9 @@ class MaterialApplicabilityModel(BaseModel):
 
 
 class BomEntryModel(BaseModel):
+    subtype_id: int | None
     subtype: str
+    subtype_depth: int
     quantity: float | None
     quantity_state: str
     assembly_quantity: float | None
@@ -259,15 +282,19 @@ class BomEntryModel(BaseModel):
     calculation_mode: str
     calculation_formula: str | None
     calculation_explanation: str | None
+    is_persisted: bool = True
 
 
 class MaterialModel(BaseModel):
+    rule_id: int
+    material_id: int
     material_name: str
     sku: str
     unit_qty_per_unit: float | None
     unit: str | None
     notes: str | None
     applicability: MaterialApplicabilityModel
+    mode: str
     bom_entries: list[BomEntryModel]
 
 
@@ -358,6 +385,7 @@ class CategorySectionModel(BaseModel):
 
 class ProjectSubtypeModel(BaseModel):
     id: int
+    parent_id: int | None = None
     name: str
     children: list["ProjectSubtypeModel"] = Field(default_factory=list)
 

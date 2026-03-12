@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Settings
 from app.database import Base, create_engine_for_url
 from app.main import create_app
-from app.models import CatalogCategory, CatalogComponent, Project, ProjectBomEntry
+from app.models import CatalogCategory, CatalogComponent, ComponentMaterialRule, Project, ProjectBomEntry, ProjectInstance, ProjectSubtype
 from app.seed import seed_demo_data_if_empty
 from app.services.catalog import (
     create_attribute_definition,
@@ -681,6 +681,7 @@ class ServiceLayerTests(unittest.TestCase):
         login_response = self.client.post("/api/v1/login", json={"username": "sysadmin", "password": "adminpass"})
         self.assertEqual(login_response.status_code, 200)
         self.assertTrue(login_response.json()["permissions"]["user_admin"])
+        self.assertTrue(login_response.json()["permissions"]["project_edit"])
 
         users_response = self.client.get("/api/v1/users")
         self.assertEqual(users_response.status_code, 200)
@@ -765,6 +766,133 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(update_mode.status_code, 200)
         self.assertEqual(update_mode.json()["mode"], "general")
+
+    def test_project_subtype_crud_endpoints(self) -> None:
+        create_root = self.client.post(
+            "/api/v1/projects/2/subtypes",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Economy"},
+        )
+        self.assertEqual(create_root.status_code, 200)
+        root_id = create_root.json()["subtype_id"]
+
+        create_child = self.client.post(
+            "/api/v1/projects/2/subtypes",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Economy Child", "parent_id": root_id},
+        )
+        self.assertEqual(create_child.status_code, 200)
+
+        rename_root = self.client.put(
+            f"/api/v1/projects/2/subtypes/{root_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Economy Revised"},
+        )
+        self.assertEqual(rename_root.status_code, 200)
+
+        detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail.status_code, 200)
+        created_root = next(subtype for subtype in detail.json()["subtypes"] if subtype["id"] == root_id)
+        self.assertEqual(created_root["name"], "Economy Revised")
+        self.assertEqual(created_root["children"][0]["name"], "Economy Child")
+
+        delete_root = self.client.delete(
+            f"/api/v1/projects/2/subtypes/{root_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(delete_root.status_code, 200)
+
+        with self.session_factory() as session:
+            deleted = session.scalar(select(ProjectSubtype).where(ProjectSubtype.id == root_id))
+        self.assertIsNone(deleted)
+
+    def test_project_material_occurrence_updates_toggle_between_general_and_per_subtype(self) -> None:
+        with self.session_factory() as session:
+            window_instance = session.scalar(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.name == "Living Window")
+            )
+            material_rule = session.scalar(
+                select(ComponentMaterialRule)
+                .where(ComponentMaterialRule.component.has(CatalogComponent.name == "Sliding Window"))
+                .where(ComponentMaterialRule.material.has(name="Laminated Glass Panel"))
+            )
+            subtypes = session.scalars(
+                select(ProjectSubtype).where(ProjectSubtype.project_id == 2).order_by(ProjectSubtype.name)
+            ).all()
+
+        self.assertIsNotNone(window_instance)
+        self.assertIsNotNone(material_rule)
+        assert window_instance is not None
+        assert material_rule is not None
+        subtype_ids = {subtype.name: subtype.id for subtype in subtypes}
+
+        update_general = self.client.put(
+            f"/api/v1/projects/2/instances/{window_instance.id}/materials/{material_rule.id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": "general",
+                "entries": [{"subtype_id": None, "quantity": 7.5, "assembly_quantity": 1.0}],
+            },
+        )
+        self.assertEqual(update_general.status_code, 200)
+
+        with self.session_factory() as session:
+            general_rows = session.scalars(
+                select(ProjectBomEntry)
+                .where(ProjectBomEntry.instance_id == window_instance.id, ProjectBomEntry.material_rule_id == material_rule.id)
+            ).all()
+        self.assertEqual(len(general_rows), 1)
+        self.assertIsNone(general_rows[0].subtype_id)
+        self.assertEqual(general_rows[0].quantity, 7.5)
+
+        update_general_again = self.client.put(
+            f"/api/v1/projects/2/instances/{window_instance.id}/materials/{material_rule.id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": "general",
+                "entries": [{"subtype_id": None, "quantity": 15, "assembly_quantity": 5}],
+            },
+        )
+        self.assertEqual(update_general_again.status_code, 200)
+
+        with self.session_factory() as session:
+            rewritten_general_rows = session.scalars(
+                select(ProjectBomEntry)
+                .where(ProjectBomEntry.instance_id == window_instance.id, ProjectBomEntry.material_rule_id == material_rule.id)
+            ).all()
+        self.assertEqual(len(rewritten_general_rows), 1)
+        self.assertEqual(rewritten_general_rows[0].quantity, 15)
+        self.assertEqual(rewritten_general_rows[0].assembly_quantity, 5)
+
+        update_per_subtype = self.client.put(
+            f"/api/v1/projects/2/instances/{window_instance.id}/materials/{material_rule.id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": "per_subtype",
+                "entries": [
+                    {"subtype_id": subtype_ids["Premium"], "quantity": 4.1, "assembly_quantity": 0},
+                    {"subtype_id": subtype_ids["Standard"], "quantity": 3.2, "assembly_quantity": 0},
+                ],
+            },
+        )
+        self.assertEqual(update_per_subtype.status_code, 200)
+
+        with self.session_factory() as session:
+            subtype_rows = session.scalars(
+                select(ProjectBomEntry)
+                .where(ProjectBomEntry.instance_id == window_instance.id, ProjectBomEntry.material_rule_id == material_rule.id)
+                .order_by(ProjectBomEntry.subtype_id)
+            ).all()
+        self.assertEqual(len(subtype_rows), 2)
+        self.assertTrue(all(row.subtype_id is not None for row in subtype_rows))
+
+        detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail.status_code, 200)
+        windows = next(section for section in detail.json()["categories"] if section["name"] == "Windows")
+        living_window = next(item for item in windows["instances"] if item["id"] == window_instance.id)
+        glass_material = next(item for item in living_window["materials"] if item["rule_id"] == material_rule.id)
+        self.assertEqual(glass_material["mode"], "per_subtype")
+        self.assertEqual([row["subtype"] for row in glass_material["bom_entries"]], ["Standard", "Premium"])
 
     def test_comments_notifications_exports_and_approvals(self) -> None:
         comments_response = self.client.get("/api/v1/projects/2/comments", headers={"X-Spec-Sheets-User": "viewer"})

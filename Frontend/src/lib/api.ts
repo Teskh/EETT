@@ -3,6 +3,7 @@ import type {
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
   CatalogPageData,
+  CreateProjectSubtypeRequest,
   CreateUserRequest,
   CreateCategoryRequest,
   CreateComponentRequest,
@@ -14,6 +15,8 @@ import type {
   ProjectDetailData,
   ProjectsBoardData,
   SessionUser,
+  UpdateMaterialOccurrenceRequest,
+  UpdateProjectSubtypeRequest,
   UpdateUserRequest,
   UpdateComponentRequest,
   UpdateProjectInstanceRequest,
@@ -157,6 +160,23 @@ export const api = {
   getProject(projectId: number) {
     return request<ProjectDetailData>(`/api/v1/projects/${projectId}`);
   },
+  createProjectSubtype(projectId: number, payload: CreateProjectSubtypeRequest) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateProjectSubtype(projectId: number, subtypeId: number, payload: UpdateProjectSubtypeRequest) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteProjectSubtype(projectId: number, subtypeId: number) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}`, {
+      method: "DELETE",
+    });
+  },
   createProjectInstance(projectId: number, payload: CreateProjectInstanceRequest) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances`, {
       method: "POST",
@@ -172,6 +192,12 @@ export const api = {
   deleteProjectInstance(projectId: number, instanceId: number) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}`, {
       method: "DELETE",
+    });
+  },
+  updateMaterialOccurrence(projectId: number, instanceId: number, ruleId: number, payload: UpdateMaterialOccurrenceRequest) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
     });
   },
 };

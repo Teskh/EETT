@@ -88,6 +88,66 @@ def create_project(
     return project
 
 
+def create_project_subtype(
+    session: Session,
+    *,
+    project: Project,
+    name: str,
+    parent_id: int | None = None,
+) -> ProjectSubtype:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Subtype name is required.")
+
+    parent: ProjectSubtype | None = None
+    if parent_id is not None:
+        parent = session.scalar(
+            select(ProjectSubtype).where(ProjectSubtype.id == parent_id, ProjectSubtype.project_id == project.id)
+        )
+        if parent is None:
+            raise ValueError("Parent subtype was not found in this project.")
+
+    subtype = ProjectSubtype(project=project, parent=parent, name=clean_name)
+    session.add(subtype)
+    session.commit()
+    session.refresh(subtype)
+    return subtype
+
+
+def update_project_subtype(
+    session: Session,
+    *,
+    project: Project,
+    subtype_id: int,
+    name: str,
+) -> ProjectSubtype | None:
+    subtype = session.scalar(
+        select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
+    )
+    if subtype is None:
+        return None
+
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Subtype name is required.")
+
+    subtype.name = clean_name
+    session.commit()
+    session.refresh(subtype)
+    return subtype
+
+
+def delete_project_subtype(session: Session, *, project: Project, subtype_id: int) -> bool:
+    subtype = session.scalar(
+        select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
+    )
+    if subtype is None:
+        return False
+    session.delete(subtype)
+    session.commit()
+    return True
+
+
 def create_project_instance(
     session: Session,
     *,
@@ -228,11 +288,12 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
     for category in categories:
         children_by_parent[category.parent_id].append(category)
 
+    subtype_nodes = [subtype for subtype in project.subtypes if subtype.parent_id is None]
+    flat_subtypes = _flatten_subtypes(subtype_nodes)
+
     instance_groups = defaultdict(list)
     for instance in project.instances:
-        instance_groups[instance.category_id].append(_serialize_instance(instance, project.material_mode))
-
-    subtype_nodes = [subtype for subtype in project.subtypes if subtype.parent_id is None]
+        instance_groups[instance.category_id].append(_serialize_instance(instance, flat_subtypes, project.material_mode))
 
     category_sections = []
     for root in children_by_parent[None]:
@@ -317,6 +378,10 @@ def get_project_with_details(session: Session, project_id: int) -> Project | Non
             selectinload(Project.instances)
             .selectinload(ProjectInstance.bom_entries)
             .selectinload(ProjectBomEntry.material),
+            selectinload(Project.instances)
+            .selectinload(ProjectInstance.bom_entries)
+            .selectinload(ProjectBomEntry.material_rule)
+            .selectinload(ComponentMaterialRule.material),
             selectinload(Project.instances).selectinload(ProjectInstance.category),
             selectinload(Project.instances).selectinload(ProjectInstance.sync_state),
             selectinload(Project.instances).selectinload(ProjectInstance.media),
@@ -346,6 +411,99 @@ def set_project_material_mode(
     session.commit()
     session.refresh(current)
     return current
+
+
+def replace_project_material_occurrence(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    rule_id: int,
+    mode: str,
+    entries: list[dict],
+) -> bool:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
+        .options(
+            selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.material),
+            selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.condition_groups)
+            .selectinload(MaterialRuleGroup.conditions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.bom_entries),
+        )
+    )
+    if instance is None:
+        return False
+
+    normalized_mode = mode.strip()
+    if normalized_mode not in {MaterialMode.GENERAL.value, MaterialMode.PER_SUBTYPE.value}:
+        raise ValueError("Invalid material mode.")
+
+    rule = next((item for item in instance.component.material_rules if item.id == rule_id), None)
+    if rule is None:
+        raise ValueError("Material occurrence was not found on this instance.")
+
+    attribute_values = _collect_attribute_values(instance)
+    evaluation = _evaluate_rule(rule, attribute_values)
+    if not evaluation["applies"]:
+        raise ValueError("Material occurrence is no longer applicable for this instance.")
+
+    subtype_map = {subtype.id: subtype for subtype in project.subtypes}
+    normalized_entries: list[dict] = []
+    seen_subtype_ids: set[int | None] = set()
+    for row in entries:
+        subtype_id = row.get("subtype_id")
+        if subtype_id is not None and subtype_id not in subtype_map:
+            raise ValueError("One or more subtype rows do not belong to this project.")
+        if subtype_id in seen_subtype_ids:
+            raise ValueError("Duplicate subtype rows are not allowed.")
+        seen_subtype_ids.add(subtype_id)
+        normalized_entries.append(
+            {
+                "subtype_id": subtype_id,
+                "quantity": row.get("quantity"),
+                "assembly_quantity": row.get("assembly_quantity"),
+            }
+        )
+
+    if normalized_mode == MaterialMode.GENERAL.value:
+        if len(normalized_entries) != 1 or normalized_entries[0]["subtype_id"] is not None:
+            raise ValueError("General material mode requires exactly one general row.")
+    else:
+        required_subtype_ids = {subtype.id for subtype in project.subtypes}
+        submitted_subtype_ids = {row["subtype_id"] for row in normalized_entries}
+        if required_subtype_ids != submitted_subtype_ids:
+            raise ValueError("Subtype material mode requires one row for each project subtype.")
+
+    for bom_entry in list(instance.bom_entries):
+        if bom_entry.material_rule_id == rule.id:
+            instance.bom_entries.remove(bom_entry)
+            session.delete(bom_entry)
+    session.flush()
+
+    for row in normalized_entries:
+        instance.bom_entries.append(
+            ProjectBomEntry(
+                project=project,
+                instance=instance,
+                material_rule=rule,
+                material=rule.material,
+                subtype=subtype_map.get(row["subtype_id"]),
+                quantity=row["quantity"],
+                assembly_quantity=row["assembly_quantity"],
+                unit=rule.unit or rule.material.unit,
+                calculation_mode=BomCalculationMode.MANUAL,
+                calculation_formula=None,
+            )
+        )
+
+    session.commit()
+    return True
 
 
 def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None:
@@ -484,12 +642,17 @@ def _build_category_sections(
 def _serialize_subtype(subtype: ProjectSubtype) -> dict:
     return {
         "id": subtype.id,
+        "parent_id": subtype.parent_id,
         "name": subtype.name,
         "children": [_serialize_subtype(child) for child in subtype.children],
     }
 
 
-def _serialize_instance(instance: ProjectInstance, project_material_mode: ProjectMaterialMode | None) -> dict:
+def _serialize_instance(
+    instance: ProjectInstance,
+    flat_subtypes: list[dict],
+    project_material_mode: ProjectMaterialMode | None,
+) -> dict:
     legacy_linked_accessories = [
         {
             "name": link.child_instance.name,
@@ -553,9 +716,9 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
             }
         )
 
-    bom_by_material: dict[int, list[dict]] = defaultdict(list)
+    bom_by_rule: dict[int, list[ProjectBomEntry]] = defaultdict(list)
     for entry in instance.bom_entries:
-        bom_by_material[entry.material_id].append(_serialize_bom_entry(entry))
+        bom_by_rule[entry.material_rule_id].append(entry)
 
     applicable_materials = []
     for rule in sorted(instance.component.material_rules, key=lambda item: item.display_order):
@@ -564,13 +727,16 @@ def _serialize_instance(instance: ProjectInstance, project_material_mode: Projec
             continue
         applicable_materials.append(
             {
+                "rule_id": rule.id,
+                "material_id": rule.material_id,
                 "material_name": rule.material.name,
                 "sku": rule.material.sku,
                 "unit_qty_per_unit": rule.unit_qty_per_unit,
                 "unit": rule.unit or rule.material.unit,
                 "notes": rule.notes,
                 "applicability": evaluation,
-                "bom_entries": bom_by_material.get(rule.material_id, []),
+                "mode": _material_mode_for_entries(bom_by_rule.get(rule.id, [])),
+                "bom_entries": _serialize_material_bom_entries(rule, bom_by_rule.get(rule.id, []), flat_subtypes),
             }
         )
 
@@ -657,6 +823,93 @@ def _merge_link_badges(*badge_groups: list[dict]) -> list[dict]:
     return merged
 
 
+def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[dict]:
+    rows: list[dict] = []
+    for subtype in subtypes:
+        rows.append(
+            {
+                "id": subtype.id,
+                "name": subtype.name,
+                "depth": depth,
+            }
+        )
+        rows.extend(_flatten_subtypes(subtype.children, depth + 1))
+    return rows
+
+
+def _collect_attribute_values(instance: ProjectInstance) -> dict[str, str | None]:
+    attribute_values: dict[str, str | None] = {}
+    for group in instance.attribute_groups:
+        for value in group.attribute_values:
+            attribute_values[value.attribute_name] = value.value
+    return attribute_values
+
+
+def _material_mode_for_entries(entries: list[ProjectBomEntry]) -> str:
+    return MaterialMode.PER_SUBTYPE.value if any(entry.subtype_id is not None for entry in entries) else MaterialMode.GENERAL.value
+
+
+def _serialize_material_bom_entries(
+    rule: ComponentMaterialRule,
+    entries: list[ProjectBomEntry],
+    flat_subtypes: list[dict],
+) -> list[dict]:
+    if _material_mode_for_entries(entries) == MaterialMode.PER_SUBTYPE.value:
+        entries_by_subtype = {entry.subtype_id: entry for entry in entries if entry.subtype_id is not None}
+        rows: list[dict] = []
+        for subtype in flat_subtypes:
+            entry = entries_by_subtype.get(subtype["id"])
+            if entry is None:
+                rows.append(
+                    _serialize_empty_bom_entry(
+                        subtype_id=subtype["id"],
+                        subtype_name=subtype["name"],
+                        subtype_depth=subtype["depth"],
+                        unit=rule.unit or rule.material.unit,
+                    )
+                )
+                continue
+            row = _serialize_bom_entry(entry)
+            row["subtype_depth"] = subtype["depth"]
+            rows.append(row)
+        return rows
+
+    general_entry = next((entry for entry in entries if entry.subtype_id is None), None)
+    if general_entry is not None:
+        return [_serialize_bom_entry(general_entry)]
+    return [
+        _serialize_empty_bom_entry(
+            subtype_id=None,
+            subtype_name="General",
+            subtype_depth=0,
+            unit=rule.unit or rule.material.unit,
+        )
+    ]
+
+
+def _serialize_empty_bom_entry(
+    *,
+    subtype_id: int | None,
+    subtype_name: str,
+    subtype_depth: int,
+    unit: str | None,
+) -> dict:
+    return {
+        "subtype_id": subtype_id,
+        "subtype": subtype_name,
+        "subtype_depth": subtype_depth,
+        "quantity": None,
+        "quantity_state": "blank",
+        "assembly_quantity": None,
+        "assembly_quantity_state": "blank",
+        "unit": unit,
+        "calculation_mode": "manual",
+        "calculation_formula": None,
+        "calculation_explanation": None,
+        "is_persisted": False,
+    }
+
+
 def _sync_base_attribute_group(instance: ProjectInstance) -> None:
     base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
     if base_group is None:
@@ -728,7 +981,9 @@ def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:
         assembly_state = "value"
 
     return {
+        "subtype_id": entry.subtype_id,
         "subtype": entry.subtype.name if entry.subtype else "General",
+        "subtype_depth": 0,
         "quantity": entry.quantity,
         "quantity_state": quantity_state,
         "assembly_quantity": entry.assembly_quantity,
@@ -737,6 +992,7 @@ def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:
         "calculation_mode": entry.calculation_mode.value,
         "calculation_formula": entry.calculation_formula,
         "calculation_explanation": _build_formula_explanation(entry),
+        "is_persisted": True,
     }
 
 

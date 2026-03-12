@@ -5,7 +5,9 @@ import { ApiError, api } from "../lib/api";
 import type {
   AttributeValueInput,
   AvailableComponent,
+  BomEntry,
   EditableAttribute,
+  InstanceMaterial,
   ProjectCategorySection,
   ProjectDetailData,
   ProjectInstance,
@@ -45,6 +47,12 @@ type InstanceFormModalProps = {
 };
 
 type CategoryNode = ProjectCategorySection & { children: CategoryNode[] };
+type FlatSubtype = { id: number; name: string; depth: number };
+type MaterialRowDraft = {
+  subtype_id: number | null;
+  quantity: string;
+  assembly_quantity: string;
+};
 
 function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNode[] {
   const rootNodes: CategoryNode[] = [];
@@ -123,28 +131,105 @@ function ProjectCategoryTree({
   );
 }
 
-function renderSubtypeTree(subtype: ProjectSubtype, depth = 0): JSX.Element {
-  return (
-    <li key={subtype.id}>
-      {depth === 0 ? (
-        <div className="w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm bg-zinc-50 dark:bg-white/5 border border-black/5 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium">
-          <span className="flex items-center gap-2">
-            <i className="ph-fill ph-git-branch text-accent-700 dark:text-accent-400" />
-            {subtype.name}
-          </span>
-        </div>
-      ) : (
-        <div className="w-full block text-left px-2 py-1 text-sm relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 text-zinc-600 dark:text-zinc-400 before:bg-black/10 dark:before:bg-white/10">
-          {subtype.name}
-        </div>
-      )}
-      {subtype.children.length ? (
-        <ul className={depth === 0 ? "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
-          {subtype.children.map((child) => renderSubtypeTree(child, depth + 1))}
-        </ul>
-      ) : null}
-    </li>
+function flattenSubtypeTree(subtypes: ProjectSubtype[], depth = 0): FlatSubtype[] {
+  return subtypes.flatMap((subtype) => [
+    { id: subtype.id, name: subtype.name, depth },
+    ...flattenSubtypeTree(subtype.children, depth + 1),
+  ]);
+}
+
+function serializeBomRows(rows: MaterialRowDraft[]) {
+  return JSON.stringify(
+    rows.map((row) => ({
+      subtype_id: row.subtype_id,
+      quantity: row.quantity,
+      assembly_quantity: row.assembly_quantity,
+    })),
   );
+}
+
+function buildDraftRows(rows: BomEntry[]): MaterialRowDraft[] {
+  return rows.map((row) => ({
+    subtype_id: row.subtype_id,
+    quantity: row.quantity === null ? "" : String(row.quantity),
+    assembly_quantity: row.assembly_quantity === null ? "" : String(row.assembly_quantity),
+  }));
+}
+
+function parseNullableNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Invalid numeric value: ${value}`);
+  }
+  return parsed;
+}
+
+function quantityStateForValue(value: number | null) {
+  if (value === null) {
+    return "blank";
+  }
+  if (value === 0) {
+    return "zero";
+  }
+  return "value";
+}
+
+function buildLocalBomEntries(
+  mode: string,
+  payloadEntries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }>,
+  material: InstanceMaterial,
+  subtypeOptions: FlatSubtype[],
+): BomEntry[] {
+  if (mode === "per_subtype") {
+    const bySubtypeId = new Map(payloadEntries.map((entry) => [entry.subtype_id, entry]));
+    return subtypeOptions.map((subtype) => {
+      const entry = bySubtypeId.get(subtype.id) ?? {
+        subtype_id: subtype.id,
+        quantity: null,
+        assembly_quantity: null,
+      };
+      return {
+        subtype_id: subtype.id,
+        subtype: subtype.name,
+        subtype_depth: subtype.depth,
+        quantity: entry.quantity,
+        quantity_state: quantityStateForValue(entry.quantity),
+        assembly_quantity: entry.assembly_quantity,
+        assembly_quantity_state: quantityStateForValue(entry.assembly_quantity),
+        unit: material.unit,
+        calculation_mode: "manual",
+        calculation_formula: null,
+        calculation_explanation: "Manually overridden quantity",
+        is_persisted: true,
+      };
+    });
+  }
+
+  const generalEntry = payloadEntries[0] ?? {
+    subtype_id: null,
+    quantity: null,
+    assembly_quantity: null,
+  };
+  return [
+    {
+      subtype_id: null,
+      subtype: "General",
+      subtype_depth: 0,
+      quantity: generalEntry.quantity,
+      quantity_state: quantityStateForValue(generalEntry.quantity),
+      assembly_quantity: generalEntry.assembly_quantity,
+      assembly_quantity_state: quantityStateForValue(generalEntry.assembly_quantity),
+      unit: material.unit,
+      calculation_mode: "manual",
+      calculation_formula: null,
+      calculation_explanation: "Manually overridden quantity",
+      is_persisted: true,
+    },
+  ];
 }
 
 function quantityClass(value: number | null) {
@@ -169,6 +254,72 @@ function normalizeEditableAttributes(attributes: EditableAttribute[]): EditableA
     ...attribute,
     value: attribute.value || "",
   }));
+}
+
+function patchEditedInstance(
+  instance: ProjectInstance,
+  payload: {
+    name: string;
+    short_name: string | null;
+    description: string | null;
+    short_description: string | null;
+    installation: string | null;
+    unit_amount: number | null;
+    attribute_values: AttributeValueInput[];
+  },
+): ProjectInstance {
+  const nextValues = new Map(payload.attribute_values.map((attribute) => [attribute.name, attribute.value ?? null]));
+
+  return {
+    ...instance,
+    name: payload.name,
+    short_name: payload.short_name,
+    description: payload.description,
+    short_description: payload.short_description,
+    installation: payload.installation,
+    unit_amount: payload.unit_amount,
+    editable_attributes: instance.editable_attributes.map((attribute) => ({
+      ...attribute,
+      value: nextValues.has(attribute.name) ? nextValues.get(attribute.name) ?? null : attribute.value,
+    })),
+    attributes: instance.attributes.map((group) =>
+      group.application_label !== null
+        ? group
+        : {
+            ...group,
+            values: group.values.map((value) => ({
+              ...value,
+              value: nextValues.has(value.name) ? nextValues.get(value.name) ?? null : value.value,
+            })),
+          },
+    ),
+    sync_state: {
+      ...instance.sync_state,
+      status: "customized",
+      is_outdated: false,
+      last_synced_at: new Date().toISOString(),
+      notes: "Project instance customized after snapshot creation.",
+    },
+  };
+}
+
+function updateCategoryInstance(
+  data: ProjectDetailData,
+  categoryId: number,
+  instanceId: number,
+  updater: (instance: ProjectInstance) => ProjectInstance,
+): ProjectDetailData {
+  return {
+    ...data,
+    categories: data.categories.map((category) =>
+      category.id !== categoryId
+        ? category
+        : {
+            ...category,
+            instances: category.instances.map((instance) => (instance.id === instanceId ? updater(instance) : instance)),
+          },
+    ),
+  };
 }
 
 function buildAttributesFromComponent(component: AvailableComponent | undefined): EditableAttribute[] {
@@ -450,18 +601,220 @@ function renderOccurrenceSummary(occurrence: UsageOccurrence, index: number) {
   );
 }
 
+function MaterialOccurrenceEditor({
+  material,
+  subtypeOptions,
+  onUpdateMaterial,
+}: {
+  material: InstanceMaterial;
+  subtypeOptions: FlatSubtype[];
+  onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+}) {
+  const [draftRows, setDraftRows] = useState<MaterialRowDraft[]>(() => buildDraftRows(material.bom_entries));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraftRows(buildDraftRows(material.bom_entries));
+    setError(null);
+  }, [material]);
+
+  const baselineSignature = `${material.mode}:${serializeBomRows(buildDraftRows(material.bom_entries))}`;
+
+  async function persistRows(rows: MaterialRowDraft[], mode: string) {
+    setSaving(true);
+    setError(null);
+    try {
+      await onUpdateMaterial(material.rule_id, {
+        mode,
+        entries: rows.map((row) => ({
+          subtype_id: row.subtype_id,
+          quantity: parseNullableNumber(row.quantity),
+          assembly_quantity: parseNullableNumber(row.assembly_quantity),
+        })),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not update material rows.";
+      setError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function persistIfChanged(rows: MaterialRowDraft[]) {
+    const nextSignature = `${material.mode}:${serializeBomRows(rows)}`;
+    if (nextSignature === baselineSignature) {
+      return;
+    }
+    await persistRows(rows, material.mode);
+  }
+
+  async function handleToggle(nextChecked: boolean) {
+    if (nextChecked && subtypeOptions.length === 0) {
+      setError("Add project subtypes before enabling subtype-specific quantities.");
+      return;
+    }
+    const nextMode = nextChecked ? "per_subtype" : "general";
+    const nextRows = nextChecked
+      ? subtypeOptions.map((subtype) => ({
+          subtype_id: subtype.id,
+          quantity: "",
+          assembly_quantity: "",
+        }))
+      : [{ subtype_id: null, quantity: "", assembly_quantity: "" }];
+    setDraftRows(nextRows);
+    await persistRows(nextRows, nextMode);
+  }
+
+  return (
+    <div className="bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
+      <div className="relative flex items-center justify-between gap-3 p-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-black/40">
+        <div className="flex items-center gap-3 min-w-0">
+          <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2 min-w-0">
+            <span className="truncate">{material.material_name}</span>
+            <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
+              {material.sku}
+            </span>
+          </h5>
+          <label className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 shrink-0">
+            <span>Subtypes</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={material.mode === "per_subtype"}
+              disabled={saving || (subtypeOptions.length === 0 && material.mode !== "per_subtype")}
+              onClick={() => void handleToggle(material.mode !== "per_subtype")}
+              className={`relative h-6 w-11 rounded-full transition-all duration-200 ease-out ${
+                material.mode === "per_subtype"
+                  ? "bg-accent-500 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.85)]"
+                  : "bg-zinc-300 dark:bg-zinc-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+              } disabled:opacity-50`}
+            >
+              <span
+                className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-transform duration-200 ease-out"
+                style={{
+                  transform: material.mode === "per_subtype" ? "translateX(20px)" : "translateX(0px)",
+                }}
+              />
+            </button>
+          </label>
+        </div>
+        <div className="text-right flex flex-col items-end shrink-0">
+          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
+          <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
+            {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
+          </span>
+        </div>
+        <div className="absolute right-3 bottom-1.5 min-w-14 text-right text-[10px] font-mono text-zinc-500 pointer-events-none">
+          <span className={saving ? "opacity-100" : "opacity-0"}>Saving...</span>
+        </div>
+      </div>
+      {material.notes ? (
+        <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white dark:bg-black/20 shadow-sm">
+          {material.notes}
+        </div>
+      ) : null}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse text-sm">
+          <thead className="bg-white dark:bg-black/40 border-b border-black/5 dark:border-white/5">
+            <tr>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtype</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Quantity</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Assembly Kit</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unit</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Source</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Formula</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {material.bom_entries.map((row, index) => (
+              <tr key={`${material.rule_id}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
+                <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">
+                  <div style={{ paddingLeft: `${row.subtype_depth * 14}px` }}>{row.subtype}</div>
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-sm w-1/6">
+                  <input
+                    value={draftRows[index]?.quantity ?? ""}
+                    type="number"
+                    step="any"
+                    disabled={saving}
+                    onChange={(event) =>
+                      setDraftRows((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, quantity: event.target.value } : item,
+                        ),
+                      )
+                    }
+                    onBlur={(event) => {
+                      const nextRows = draftRows.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, quantity: event.target.value } : item,
+                      );
+                      void persistIfChanged(nextRows);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    className="w-24 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-right"
+                  />
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-sm text-zinc-500 w-1/6">
+                  <input
+                    value={draftRows[index]?.assembly_quantity ?? ""}
+                    type="number"
+                    step="any"
+                    disabled={saving}
+                    onChange={(event) =>
+                      setDraftRows((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
+                        ),
+                      )
+                    }
+                    onBlur={(event) => {
+                      const nextRows = draftRows.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
+                      );
+                      void persistIfChanged(nextRows);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        event.currentTarget.blur();
+                      }
+                    }}
+                    className="w-24 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-right"
+                  />
+                </td>
+                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
+                <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{row.calculation_mode}</td>
+                <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
+                  {row.calculation_formula || "-"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {error ? <div className="px-3 pb-3 text-xs text-red-700 dark:text-red-300">{error}</div> : null}
+    </div>
+  );
+}
+
 function InstanceCard({
-  projectId,
-  categoryId,
   instance,
+  subtypeOptions,
   onEdit,
   onDelete,
+  onUpdateMaterial,
 }: {
-  projectId: number;
-  categoryId: number;
   instance: ProjectInstance;
+  subtypeOptions: FlatSubtype[];
   onEdit: () => void;
   onDelete: () => void;
+  onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const iconClass = instance.type === "accessory" ? "ph-flask" : "ph-wall";
@@ -481,7 +834,31 @@ function InstanceCard({
           </div>
           <div>
             <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2">
-              {instance.name}
+              <span>{instance.name}</span>
+              <button
+                type="button"
+                aria-label={`Edit ${instance.name}`}
+                title="Edit instance"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-300 transition-colors hover:bg-zinc-100 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-white"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEdit();
+                }}
+              >
+                <i className="ph-bold ph-pencil-simple" />
+              </button>
+              <button
+                type="button"
+                aria-label={`Delete ${instance.name}`}
+                title="Delete instance"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 transition-colors hover:bg-red-200 dark:hover:bg-red-500/20"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete();
+                }}
+              >
+                <i className="ph-bold ph-trash" />
+              </button>
               <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
                 {instance.short_name || instance.name}
               </span>
@@ -550,23 +927,6 @@ function InstanceCard({
                 </h6>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "No installation notes."}</p>
               </div>
-
-              <div className="flex items-center gap-3 pt-4 border-t border-black/10 dark:border-white/10">
-                <button
-                  type="button"
-                  className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors flex items-center gap-2"
-                  onClick={onEdit}
-                >
-                  <i className="ph-bold ph-pencil-simple" /> Edit Instance
-                </button>
-                <button
-                  type="button"
-                  className="px-3 py-1.5 bg-red-100 dark:bg-red-500/10 hover:bg-red-200 dark:hover:bg-red-500/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-500/20 rounded text-xs font-semibold transition-colors flex items-center gap-2"
-                  onClick={onDelete}
-                >
-                  <i className="ph-bold ph-trash" /> Delete
-                </button>
-              </div>
             </div>
 
             <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
@@ -602,69 +962,12 @@ function InstanceCard({
             <div className="space-y-4">
               {instance.materials.length ? (
                 instance.materials.map((material) => (
-                  <div key={`${instance.id}-${material.sku}`} className="bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
-                    <div className="flex items-center justify-between p-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-black/40">
-                      <div className="flex items-center gap-3">
-                        <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2">{material.material_name}</h5>
-                        <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
-                          {material.sku}
-                        </span>
-                      </div>
-                      <div className="text-right flex flex-col items-end">
-                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
-                        <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
-                          {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {material.notes ? (
-                      <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white dark:bg-black/20 shadow-sm">{material.notes}</div>
-                    ) : null}
-
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse text-sm">
-                        <thead className="bg-white dark:bg-black/40 border-b border-black/5 dark:border-white/5">
-                          <tr>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtype</th>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">
-                              Quantity
-                            </th>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">
-                              Assembly Kit
-                            </th>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unit</th>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Source</th>
-                            <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Formula</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5">
-                          {material.bom_entries.length ? (
-                            material.bom_entries.map((row, index) => (
-                              <tr key={`${material.sku}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
-                                <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">{row.subtype}</td>
-                                <td className="px-3 py-2 text-right font-mono text-sm w-1/6">{formatQuantity(row.quantity)}</td>
-                                <td className="px-3 py-2 text-right font-mono text-sm text-zinc-500 w-1/6">
-                                  {formatQuantity(row.assembly_quantity)}
-                                </td>
-                                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
-                                <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{row.calculation_mode}</td>
-                                <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
-                                  {row.calculation_formula || "-"}
-                                </td>
-                              </tr>
-                            ))
-                          ) : (
-                            <tr>
-                              <td colSpan={6} className="px-3 py-4 text-center text-zinc-500 font-mono text-xs">
-                                Applicable, but no BOM row stored yet.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                  <MaterialOccurrenceEditor
+                    key={`${instance.id}-${material.rule_id}`}
+                    material={material}
+                    subtypeOptions={subtypeOptions}
+                    onUpdateMaterial={onUpdateMaterial}
+                  />
                 ))
               ) : (
                 <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
@@ -774,8 +1077,15 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         attribute_values: payload.attribute_values,
       };
       await api.updateProjectInstance(projectId, activeInstance.id, request);
+      setData((current) => {
+        if (!current) {
+          return current;
+        }
+        return updateCategoryInstance(current, modalState.categoryId, activeInstance.id, (instance) =>
+          patchEditedInstance(instance, payload),
+        );
+      });
       setModalState(null);
-      await loadProject();
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not update project instance.";
       setError(message);
@@ -802,6 +1112,44 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     }
   }
 
+  async function handleUpdateMaterialOccurrence(
+    instanceId: number,
+    ruleId: number,
+    payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> },
+  ) {
+    setError(null);
+    try {
+      await api.updateMaterialOccurrence(projectId, instanceId, ruleId, payload);
+      setData((current) => {
+        if (!current) {
+          return current;
+        }
+        const subtypeOptions = flattenSubtypeTree(current.subtypes);
+        const category = current.categories.find((item) => item.instances.some((instance) => instance.id === instanceId));
+        if (!category) {
+          return current;
+        }
+        return updateCategoryInstance(current, category.id, instanceId, (instance) => ({
+          ...instance,
+          materials: instance.materials.map((material) => {
+            if (material.rule_id !== ruleId) {
+              return material;
+            }
+            return {
+              ...material,
+              mode: payload.mode,
+              bom_entries: buildLocalBomEntries(payload.mode, payload.entries, material, subtypeOptions),
+            };
+          }),
+        }));
+      });
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not update material rows.";
+      setError(message);
+      throw err;
+    }
+  }
+
   if (loading) {
     return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading project...</div>;
   }
@@ -811,6 +1159,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   }
 
   const categoryTree = buildCategoryTree(data.categories);
+  const flatSubtypeOptions = flattenSubtypeTree(data.subtypes);
 
   return (
     <div className="max-w-[1600px] mx-auto">
@@ -858,15 +1207,6 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
               <ProjectCategoryTree nodes={categoryTree} filterTerm={categorySearch} />
             </div>
           </div>
-
-          <div className="liquid-glass rounded-2xl p-5">
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <i className="ph-bold ph-git-branch text-zinc-600 dark:text-zinc-400" /> Subtype Tree
-            </h3>
-            <ul className="space-y-1">
-              {data.subtypes.length ? data.subtypes.map((subtype) => renderSubtypeTree(subtype)) : <li className="text-xs font-mono text-zinc-500">No subtype breakdown defined.</li>}
-            </ul>
-          </div>
         </div>
 
         <div className="xl:col-span-9 flex flex-col gap-6">
@@ -910,11 +1250,11 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                   category.instances.map((instance) => (
                     <InstanceCard
                       key={instance.id}
-                      projectId={projectId}
-                      categoryId={category.id}
                       instance={instance}
+                      subtypeOptions={flatSubtypeOptions}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
+                      onUpdateMaterial={(ruleId, payload) => handleUpdateMaterialOccurrence(instance.id, ruleId, payload)}
                     />
                   ))
                 ) : (

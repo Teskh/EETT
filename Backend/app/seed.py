@@ -403,6 +403,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=door_instance,
+                material_rule=always_rule,
                 material=anchor_screw,
                 quantity=24,
                 assembly_quantity=24,
@@ -413,6 +414,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=door_instance,
+                material_rule=smart_rule,
                 material=smart_lock_kit,
                 quantity=3,
                 assembly_quantity=3,
@@ -423,6 +425,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=window_instance,
+                material_rule=window_glass_rule,
                 material=laminated_glass,
                 subtype=subtype_standard,
                 quantity=3.2,
@@ -434,6 +437,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=window_instance,
+                material_rule=window_glass_rule,
                 material=laminated_glass,
                 subtype=subtype_premium,
                 quantity=4.1,
@@ -445,6 +449,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=window_instance,
+                material_rule=window_silicone_rule,
                 material=silicone,
                 quantity=None,
                 assembly_quantity=None,
@@ -455,6 +460,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=trim_instance,
+                material_rule=trim_rule,
                 material=frame_trim,
                 quantity=0,
                 assembly_quantity=0,
@@ -465,6 +471,7 @@ def seed_demo_dataset(session: Session) -> None:
             ProjectBomEntry(
                 project=execution_project,
                 instance=cabinet_instance,
+                material_rule=cabinet_rule,
                 material=cabinet_board,
                 quantity=5.25,
                 assembly_quantity=0,

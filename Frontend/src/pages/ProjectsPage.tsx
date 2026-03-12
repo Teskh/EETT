@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 
+import { Modal } from "../components/Modal";
 import { ApiError, api } from "../lib/api";
-import type { CreateProjectRequest, ProjectsBoardData, SessionUser } from "../lib/types";
+import type { CreateProjectRequest, ProjectDetailData, ProjectsBoardData, ProjectSubtype, SessionUser } from "../lib/types";
 
 type ProjectsPageProps = {
   onNavigate: (to: string) => void;
@@ -22,12 +23,102 @@ const initialProjectForm: CreateProjectRequest = {
   status: "template",
 };
 
+type SubtypeModalState = {
+  projectId: number;
+  projectName: string;
+} | null;
+
+function SubtypeNodeEditor({
+  subtype,
+  pendingSubtypeId,
+  onCreateChild,
+  onRename,
+  onDelete,
+}: {
+  subtype: ProjectSubtype;
+  pendingSubtypeId: number | "root" | null;
+  onCreateChild: (parentId: number) => Promise<void>;
+  onRename: (subtypeId: number, name: string) => Promise<void>;
+  onDelete: (subtypeId: number) => Promise<void>;
+}) {
+  const [draftName, setDraftName] = useState(subtype.name);
+
+  useEffect(() => {
+    setDraftName(subtype.name);
+  }, [subtype.name]);
+
+  async function handleBlur() {
+    const nextName = draftName.trim();
+    if (!nextName || nextName === subtype.name) {
+      setDraftName(subtype.name);
+      return;
+    }
+    await onRename(subtype.id, nextName);
+  }
+
+  return (
+    <li>
+      <div className="rounded-lg border border-black/10 dark:border-white/10 bg-black/5 dark:bg-black/30 p-2.5">
+        <div className="flex items-center gap-2">
+          <i className="ph-fill ph-git-branch text-zinc-500" />
+          <input
+            value={draftName}
+            onChange={(event) => setDraftName(event.target.value)}
+            onBlur={() => void handleBlur()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            className="min-w-0 flex-1 bg-white dark:bg-black/30 border border-black/10 dark:border-white/10 rounded px-2 py-1 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-accent-500/50"
+          />
+          <button
+            type="button"
+            disabled={pendingSubtypeId === subtype.id}
+            onClick={() => void onCreateChild(subtype.id)}
+            className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 disabled:opacity-50"
+          >
+            Child
+          </button>
+          <button
+            type="button"
+            disabled={pendingSubtypeId === subtype.id}
+            onClick={() => void onDelete(subtype.id)}
+            className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-[10px] font-semibold uppercase tracking-widest text-red-700 dark:text-red-300 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+      {subtype.children.length ? (
+        <ul className="ml-5 mt-1 space-y-1 border-l border-black/10 dark:border-white/10 pl-3">
+          {subtype.children.map((child) => (
+            <SubtypeNodeEditor
+              key={child.id}
+              subtype={child}
+              pendingSubtypeId={pendingSubtypeId}
+              onCreateChild={onCreateChild}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </li>
+  );
+}
+
 export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [data, setData] = useState<ProjectsBoardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<CreateProjectRequest>(initialProjectForm);
   const [saving, setSaving] = useState(false);
+  const [subtypeModal, setSubtypeModal] = useState<SubtypeModalState>(null);
+  const [subtypeProject, setSubtypeProject] = useState<ProjectDetailData | null>(null);
+  const [subtypeLoading, setSubtypeLoading] = useState(false);
+  const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
 
   async function loadProjects() {
     setLoading(true);
@@ -46,6 +137,41 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     void loadProjects();
   }, []);
 
+  useEffect(() => {
+    if (!subtypeModal) {
+      setSubtypeProject(null);
+      return;
+    }
+
+    const projectId = subtypeModal.projectId;
+    let active = true;
+    async function loadSubtypeProject() {
+      setSubtypeLoading(true);
+      setError(null);
+      try {
+        const detail = await api.getProject(projectId);
+        if (active) {
+          setSubtypeProject(detail);
+        }
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "Could not load project subtypes.";
+        if (active) {
+          setError(message);
+          setSubtypeProject(null);
+        }
+      } finally {
+        if (active) {
+          setSubtypeLoading(false);
+        }
+      }
+    }
+
+    void loadSubtypeProject();
+    return () => {
+      active = false;
+    };
+  }, [subtypeModal]);
+
   async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -63,6 +189,71 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       setError(message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function refreshSubtypeProject(projectId: number) {
+    const detail = await api.getProject(projectId);
+    setSubtypeProject(detail);
+  }
+
+  async function handleCreateSubtype(parentId: number | null) {
+    if (!subtypeModal) {
+      return;
+    }
+    const promptLabel = parentId === null ? "New root subtype name" : "New child subtype name";
+    const name = window.prompt(promptLabel);
+    if (!name || !name.trim()) {
+      return;
+    }
+    setPendingSubtypeId(parentId ?? "root");
+    setError(null);
+    try {
+      await api.createProjectSubtype(subtypeModal.projectId, { name: name.trim(), parent_id: parentId });
+      await refreshSubtypeProject(subtypeModal.projectId);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not create subtype.";
+      setError(message);
+    } finally {
+      setPendingSubtypeId(null);
+    }
+  }
+
+  async function handleRenameSubtype(subtypeId: number, name: string) {
+    if (!subtypeModal) {
+      return;
+    }
+    setPendingSubtypeId(subtypeId);
+    setError(null);
+    try {
+      await api.updateProjectSubtype(subtypeModal.projectId, subtypeId, { name });
+      await refreshSubtypeProject(subtypeModal.projectId);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not rename subtype.";
+      setError(message);
+    } finally {
+      setPendingSubtypeId(null);
+    }
+  }
+
+  async function handleDeleteSubtype(subtypeId: number) {
+    if (!subtypeModal) {
+      return;
+    }
+    const confirmed = window.confirm("Delete this subtype and all nested subtype rows?");
+    if (!confirmed) {
+      return;
+    }
+    setPendingSubtypeId(subtypeId);
+    setError(null);
+    try {
+      await api.deleteProjectSubtype(subtypeModal.projectId, subtypeId);
+      await refreshSubtypeProject(subtypeModal.projectId);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not delete subtype.";
+      setError(message);
+    } finally {
+      setPendingSubtypeId(null);
     }
   }
 
@@ -168,12 +359,23 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
                             <i className="ph-bold ph-stack" /> {project.instance_count} instances
                           </div>
-                          <button 
-                            className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
-                            onClick={() => onNavigate(`/projects/${project.id}`)}
-                          >
-                            Open Project
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!currentUser.permissions.project_edit}
+                              className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 disabled:opacity-50 disabled:hover:bg-zinc-50 dark:disabled:hover:bg-white/5"
+                              onClick={() => setSubtypeModal({ projectId: project.id, projectName: project.name })}
+                              title={currentUser.permissions.project_edit ? "Manage project subtypes" : "This role cannot edit project subtypes"}
+                            >
+                              Subtypes
+                            </button>
+                            <button 
+                              className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
+                              onClick={() => onNavigate(`/projects/${project.id}`)}
+                            >
+                              Open Project
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ))
@@ -188,6 +390,57 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
           })}
         </div>
       ) : null}
+
+      <Modal
+        open={subtypeModal !== null}
+        title={subtypeModal?.projectName || "Project Subtypes"}
+        kicker="Subtype Manager"
+        onClose={() => setSubtypeModal(null)}
+        panelClassName="max-w-3xl"
+      >
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            Manage the project subtype hierarchy from the board instead of inside the project workspace.
+          </p>
+          <button
+            type="button"
+            disabled={pendingSubtypeId === "root"}
+            onClick={() => void handleCreateSubtype(null)}
+            className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold disabled:opacity-50"
+          >
+            Add Root Subtype
+          </button>
+        </div>
+
+        {subtypeLoading ? (
+          <div className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
+            Loading subtypes...
+          </div>
+        ) : subtypeProject ? (
+          <ul className="space-y-2">
+            {subtypeProject.subtypes.length ? (
+              subtypeProject.subtypes.map((subtype) => (
+                <SubtypeNodeEditor
+                  key={subtype.id}
+                  subtype={subtype}
+                  pendingSubtypeId={pendingSubtypeId}
+                  onCreateChild={handleCreateSubtype}
+                  onRename={handleRenameSubtype}
+                  onDelete={handleDeleteSubtype}
+                />
+              ))
+            ) : (
+              <li className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
+                No subtype breakdown defined.
+              </li>
+            )}
+          </ul>
+        ) : (
+          <div className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
+            Could not load subtypes.
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
