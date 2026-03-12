@@ -129,6 +129,23 @@ def create_component(
     return component
 
 
+def get_catalog_component_data(session: Session, component_id: int) -> dict | None:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id)
+        .options(
+            selectinload(CatalogComponent.attribute_definitions).selectinload(CatalogAttributeDefinition.options),
+            selectinload(CatalogComponent.material_rules).selectinload(ComponentMaterialRule.material),
+            selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.condition_groups)
+            .selectinload(MaterialRuleGroup.conditions),
+        )
+    )
+    if component is None:
+        return None
+    return _serialize_component(component)
+
+
 def update_component(
     session: Session,
     *,

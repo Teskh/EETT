@@ -16,6 +16,7 @@ from app.api_models import (
     ApprovalModel,
     AttributeValueInputModel,
     CatalogCategoryCreateRequest,
+    CatalogComponentMutationResultModel,
     CatalogCategoryLinksUpdateRequest,
     CatalogComponentAttributesReplaceRequest,
     CatalogComponentCreateRequest,
@@ -34,7 +35,9 @@ from app.api_models import (
     NotificationModel,
     ProjectDetailResponse,
     ProjectCreateRequest,
+    ProjectInstanceMutationResultModel,
     ProjectOccurrenceUpdateRequest,
+    ProjectOccurrenceMutationResultModel,
     ProjectInstanceCreateRequest,
     ProjectInstanceUpdateRequest,
     ProjectSubtypeCreateRequest,
@@ -68,6 +71,7 @@ from app.services.catalog import (
     create_attribute_definition,
     delete_attribute_definition,
     delete_component,
+    get_catalog_component_data,
     replace_component_material_rules,
     replace_component_attributes,
     search_material_candidates,
@@ -95,6 +99,8 @@ from app.services.projects import (
     delete_project_instance_occurrence,
     delete_project_subtype,
     delete_project_instance,
+    get_project_instance_data,
+    get_project_occurrence_data,
     get_instance_sync_preview,
     get_project_view_data,
     get_project_with_details,
@@ -685,7 +691,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {"ok": True, "category_id": category.id}
 
-    @app.post("/api/v1/catalog/components", response_model=MutationResultModel)
+    @app.post("/api/v1/catalog/components", response_model=CatalogComponentMutationResultModel)
     async def create_catalog_component_v1(
         payload: CatalogComponentCreateRequest,
         session: Session = Depends(get_session),
@@ -703,9 +709,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             installation=payload.installation,
             unit_type=payload.unit_type,
         )
-        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+        return {
+            "ok": True,
+            "category_id": component.category_id,
+            "component_id": component.id,
+            "component": get_catalog_component_data(session, component.id),
+        }
 
-    @app.put("/api/v1/catalog/components/{component_id}", response_model=MutationResultModel)
+    @app.put("/api/v1/catalog/components/{component_id}", response_model=CatalogComponentMutationResultModel)
     async def update_catalog_component_v1(
         component_id: int,
         payload: CatalogComponentUpdateRequest,
@@ -726,7 +737,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if component is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
-        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+        return {
+            "ok": True,
+            "category_id": component.category_id,
+            "component_id": component.id,
+            "component": get_catalog_component_data(session, component.id),
+        }
 
     @app.delete("/api/v1/catalog/components/{component_id}", response_model=MutationResultModel)
     async def delete_catalog_component_v1(
@@ -743,7 +759,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Catalog component not found")
         return {"ok": True, "category_id": deleted_category_id, "deleted_id": component_id}
 
-    @app.put("/api/v1/catalog/components/{component_id}/attributes", response_model=MutationResultModel)
+    @app.put("/api/v1/catalog/components/{component_id}/attributes", response_model=CatalogComponentMutationResultModel)
     async def replace_catalog_component_attributes_v1(
         component_id: int,
         payload: CatalogComponentAttributesReplaceRequest,
@@ -759,9 +775,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if component is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
-        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+        return {
+            "ok": True,
+            "category_id": component.category_id,
+            "component_id": component.id,
+            "component": get_catalog_component_data(session, component.id),
+        }
 
-    @app.put("/api/v1/catalog/components/{component_id}/materials", response_model=MutationResultModel)
+    @app.put("/api/v1/catalog/components/{component_id}/materials", response_model=CatalogComponentMutationResultModel)
     async def replace_catalog_component_materials_v1(
         component_id: int,
         payload: CatalogComponentMaterialsReplaceRequest,
@@ -776,7 +797,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if component is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
-        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+        return {
+            "ok": True,
+            "category_id": component.category_id,
+            "component_id": component.id,
+            "component": get_catalog_component_data(session, component.id),
+        }
 
     @app.put("/api/v1/catalog/categories/{category_id}/links", response_model=MutationResultModel)
     async def update_catalog_category_links_v1(
@@ -919,7 +945,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project subtype not found")
         return {"ok": True, "project_id": project.id, "deleted_id": subtype_id}
 
-    @app.post("/api/v1/projects/{project_id}/instances", response_model=MutationResultModel)
+    @app.post("/api/v1/projects/{project_id}/instances", response_model=ProjectInstanceMutationResultModel)
     async def create_project_instance_v1(
         project_id: int,
         payload: ProjectInstanceCreateRequest,
@@ -946,9 +972,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return {"ok": True, "project_id": project_id, "category_id": payload.category_id, "instance_id": instance.id}
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "category_id": payload.category_id,
+            "instance_id": instance.id,
+            "instance": get_project_instance_data(session, project_id, instance.id),
+        }
 
-    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=MutationResultModel)
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=ProjectInstanceMutationResultModel)
     async def update_project_instance_v1(
         project_id: int,
         instance_id: int,
@@ -974,9 +1006,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if instance is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
-        return {"ok": True, "project_id": project_id, "instance_id": instance.id}
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "instance_id": instance.id,
+            "instance": get_project_instance_data(session, project_id, instance.id),
+        }
 
-    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences", response_model=MutationResultModel)
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences", response_model=ProjectOccurrenceMutationResultModel)
     async def create_project_occurrence_v1(
         project_id: int,
         instance_id: int,
@@ -1002,9 +1039,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if occurrence is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
-        return {"ok": True, "project_id": project_id, "instance_id": instance_id, "occurrence_id": occurrence.id}
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "instance_id": instance_id,
+            "occurrence_id": occurrence.id,
+            "occurrence": get_project_occurrence_data(session, project_id, instance_id, occurrence.id),
+        }
 
-    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=MutationResultModel)
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=ProjectOccurrenceMutationResultModel)
     async def update_project_occurrence_v1(
         project_id: int,
         instance_id: int,
@@ -1032,7 +1075,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if occurrence is None:
             raise HTTPException(status_code=404, detail="Project occurrence not found")
-        return {"ok": True, "project_id": project_id, "instance_id": instance_id, "occurrence_id": occurrence.id}
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "instance_id": instance_id,
+            "occurrence_id": occurrence.id,
+            "occurrence": get_project_occurrence_data(session, project_id, instance_id, occurrence.id),
+        }
 
     @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=MutationResultModel)
     async def delete_project_occurrence_v1(

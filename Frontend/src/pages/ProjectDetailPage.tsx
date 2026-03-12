@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, startTransition, useEffect, useRef, useState } from "react";
 
 import { Modal } from "../components/Modal";
 import { ApiError, api } from "../lib/api";
@@ -164,6 +164,10 @@ function buildDraftRows(rows: BomEntry[]): MaterialRowDraft[] {
   }));
 }
 
+function buildMaterialDraftSignature(mode: string, rows: MaterialRowDraft[]) {
+  return `${mode}:${serializeBomRows(rows)}`;
+}
+
 function parseNullableNumber(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -240,6 +244,76 @@ function buildLocalBomEntries(
   ];
 }
 
+function parseDisplayNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildDraftDisplayRows(
+  mode: string,
+  draftRows: MaterialRowDraft[],
+  material: InstanceMaterial,
+  subtypeOptions: FlatSubtype[],
+): BomEntry[] {
+  const bySubtypeId = new Map(material.bom_entries.map((entry) => [entry.subtype_id, entry]));
+
+  if (mode === "per_subtype") {
+    return subtypeOptions.map((subtype) => {
+      const draftRow = draftRows.find((row) => row.subtype_id === subtype.id) || {
+        subtype_id: subtype.id,
+        quantity: "",
+        assembly_quantity: "",
+      };
+      const persisted = bySubtypeId.get(subtype.id);
+      const quantity = parseDisplayNumber(draftRow.quantity);
+      const assemblyQuantity = parseDisplayNumber(draftRow.assembly_quantity);
+      return {
+        subtype_id: subtype.id,
+        subtype: subtype.name,
+        subtype_depth: subtype.depth,
+        quantity,
+        quantity_state: quantityStateForValue(quantity),
+        assembly_quantity: assemblyQuantity,
+        assembly_quantity_state: quantityStateForValue(assemblyQuantity),
+        unit: material.unit,
+        calculation_mode: persisted?.calculation_mode || "manual",
+        calculation_formula: persisted?.calculation_formula || null,
+        calculation_explanation: persisted?.calculation_explanation || null,
+        is_persisted: Boolean(persisted),
+      };
+    });
+  }
+
+  const generalDraft = draftRows[0] || {
+    subtype_id: null,
+    quantity: "",
+    assembly_quantity: "",
+  };
+  const persisted = bySubtypeId.get(null) || null;
+  const quantity = parseDisplayNumber(generalDraft.quantity);
+  const assemblyQuantity = parseDisplayNumber(generalDraft.assembly_quantity);
+  return [
+    {
+      subtype_id: null,
+      subtype: "General",
+      subtype_depth: 0,
+      quantity,
+      quantity_state: quantityStateForValue(quantity),
+      assembly_quantity: assemblyQuantity,
+      assembly_quantity_state: quantityStateForValue(assemblyQuantity),
+      unit: material.unit,
+      calculation_mode: persisted?.calculation_mode || "manual",
+      calculation_formula: persisted?.calculation_formula || null,
+      calculation_explanation: persisted?.calculation_explanation || null,
+      is_persisted: Boolean(persisted),
+    },
+  ];
+}
+
 function quantityClass(value: number | null) {
   if (value === null) {
     return "text-zinc-500";
@@ -264,53 +338,6 @@ function normalizeEditableAttributes(attributes: EditableAttribute[]): EditableA
   }));
 }
 
-function patchEditedInstance(
-  instance: ProjectInstance,
-  payload: {
-    name: string;
-    short_name: string | null;
-    description: string | null;
-    short_description: string | null;
-    installation: string | null;
-    unit_amount: number | null;
-    attribute_values: AttributeValueInput[];
-  },
-): ProjectInstance {
-  const nextValues = new Map(payload.attribute_values.map((attribute) => [attribute.name, attribute.value ?? null]));
-
-  return {
-    ...instance,
-    name: payload.name,
-    short_name: payload.short_name,
-    description: payload.description,
-    short_description: payload.short_description,
-    installation: payload.installation,
-    unit_amount: payload.unit_amount,
-    editable_attributes: instance.editable_attributes.map((attribute) => ({
-      ...attribute,
-      value: nextValues.has(attribute.name) ? nextValues.get(attribute.name) ?? null : attribute.value,
-    })),
-    attributes: instance.attributes.map((group) =>
-      group.application_label !== null
-        ? group
-        : {
-            ...group,
-            values: group.values.map((value) => ({
-              ...value,
-              value: nextValues.has(value.name) ? nextValues.get(value.name) ?? null : value.value,
-            })),
-          },
-    ),
-    sync_state: {
-      ...instance.sync_state,
-      status: "customized",
-      is_outdated: false,
-      last_synced_at: new Date().toISOString(),
-      notes: "Project instance customized after snapshot creation.",
-    },
-  };
-}
-
 function updateCategoryInstance(
   data: ProjectDetailData,
   categoryId: number,
@@ -328,6 +355,149 @@ function updateCategoryInstance(
           },
     ),
   };
+}
+
+function sortInstances(instances: ProjectInstance[]) {
+  return [...instances].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function upsertCategoryInstance(
+  data: ProjectDetailData,
+  categoryId: number,
+  nextInstance: ProjectInstance,
+): ProjectDetailData {
+  const nextData = {
+    ...data,
+    categories: data.categories.map((category) => {
+      const exists = category.id === categoryId && category.instances.some((instance) => instance.id === nextInstance.id);
+      const nextInstances = category.instances.map((instance) => {
+        const baseInstance = category.id === categoryId && instance.id === nextInstance.id ? nextInstance : instance;
+        return {
+          ...baseInstance,
+          outgoing_occurrences: baseInstance.outgoing_occurrences.map((occurrence) => ({
+            ...occurrence,
+            targets: occurrence.targets.map((target) =>
+              target.instance_id === nextInstance.id ? { ...target, instance_name: nextInstance.name } : target,
+            ),
+          })),
+        };
+      });
+
+      if (category.id !== categoryId) {
+        return {
+          ...category,
+          instances: nextInstances,
+        };
+      }
+
+      return {
+        ...category,
+        instances: sortInstances(exists ? nextInstances : [...nextInstances, nextInstance]),
+      };
+    }),
+  };
+  return withRecomputedIncomingOccurrences(nextData);
+}
+
+function upsertOccurrence(occurrences: UsageOccurrence[], nextOccurrence: UsageOccurrence) {
+  const existingIndex = occurrences.findIndex((occurrence) => occurrence.id === nextOccurrence.id);
+  if (existingIndex === -1) {
+    return [...occurrences, nextOccurrence];
+  }
+  return occurrences.map((occurrence) => (occurrence.id === nextOccurrence.id ? nextOccurrence : occurrence));
+}
+
+function withRecomputedIncomingOccurrences(data: ProjectDetailData): ProjectDetailData {
+  const incomingByInstanceId = new Map<number, UsageOccurrence[]>();
+
+  for (const category of data.categories) {
+    for (const instance of category.instances) {
+      for (const occurrence of instance.outgoing_occurrences) {
+        for (const target of occurrence.targets) {
+          const current = incomingByInstanceId.get(target.instance_id) || [];
+          current.push(occurrence);
+          incomingByInstanceId.set(target.instance_id, current);
+        }
+      }
+    }
+  }
+
+  return {
+    ...data,
+    categories: data.categories.map((category) => ({
+      ...category,
+      instances: category.instances.map((instance) => ({
+        ...instance,
+        incoming_occurrences: incomingByInstanceId.get(instance.id) || [],
+      })),
+    })),
+  };
+}
+
+function applyOccurrenceToProject(
+  data: ProjectDetailData,
+  sourceInstanceId: number,
+  occurrence: UsageOccurrence,
+): ProjectDetailData {
+  const nextData = {
+    ...data,
+    categories: data.categories.map((category) => ({
+      ...category,
+      instances: category.instances.map((instance) =>
+        instance.id === sourceInstanceId
+          ? { ...instance, outgoing_occurrences: upsertOccurrence(instance.outgoing_occurrences, occurrence) }
+          : instance,
+      ),
+    })),
+  };
+  return withRecomputedIncomingOccurrences(nextData);
+}
+
+function removeOccurrenceFromProject(
+  data: ProjectDetailData,
+  sourceInstanceId: number,
+  occurrenceId: number,
+): ProjectDetailData {
+  const nextData = {
+    ...data,
+    categories: data.categories.map((category) => ({
+      ...category,
+      instances: category.instances.map((instance) =>
+        instance.id === sourceInstanceId
+          ? {
+              ...instance,
+              outgoing_occurrences: instance.outgoing_occurrences.filter((occurrence) => occurrence.id !== occurrenceId),
+            }
+          : instance,
+      ),
+    })),
+  };
+  return withRecomputedIncomingOccurrences(nextData);
+}
+
+function removeInstanceFromProject(data: ProjectDetailData, instanceId: number): ProjectDetailData {
+  const nextCategories = data.categories.map((category) => ({
+    ...category,
+    instances: category.instances
+      .filter((instance) => instance.id !== instanceId)
+      .map((instance) => ({
+        ...instance,
+        outgoing_occurrences: instance.outgoing_occurrences.map((occurrence) => ({
+          ...occurrence,
+          targets: occurrence.targets.filter((target) => target.instance_id !== instanceId),
+        })),
+      })),
+  }));
+
+  const nextData = {
+    ...data,
+    project: {
+      ...data.project,
+      instance_count: Math.max(0, data.project.instance_count - 1),
+    },
+    categories: nextCategories,
+  };
+  return withRecomputedIncomingOccurrences(nextData);
 }
 
 function buildAttributesFromComponent(component: AvailableComponent | undefined): EditableAttribute[] {
@@ -871,42 +1041,73 @@ function MaterialOccurrenceEditor({
   onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
 }) {
   const [draftRows, setDraftRows] = useState<MaterialRowDraft[]>(() => buildDraftRows(material.bom_entries));
+  const [draftMode, setDraftMode] = useState(material.mode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const serverSignatureRef = useRef(buildMaterialDraftSignature(material.mode, buildDraftRows(material.bom_entries)));
+  const saveQueueRef = useRef<{
+    inFlight: boolean;
+    queued: { mode: string; rows: MaterialRowDraft[] } | null;
+  }>({
+    inFlight: false,
+    queued: null,
+  });
+  const draftSignature = buildMaterialDraftSignature(draftMode, draftRows);
+  const displayRows = buildDraftDisplayRows(draftMode, draftRows, material, subtypeOptions);
 
   useEffect(() => {
-    setDraftRows(buildDraftRows(material.bom_entries));
-    setError(null);
+    const nextRows = buildDraftRows(material.bom_entries);
+    const serverSignature = buildMaterialDraftSignature(material.mode, nextRows);
+    serverSignatureRef.current = serverSignature;
+    if (draftSignature === serverSignature) {
+      setDraftMode(material.mode);
+      setDraftRows(nextRows);
+      setError(null);
+    }
   }, [material]);
 
-  const baselineSignature = `${material.mode}:${serializeBomRows(buildDraftRows(material.bom_entries))}`;
-
-  async function persistRows(rows: MaterialRowDraft[], mode: string) {
-    setSaving(true);
-    setError(null);
-    try {
-      await onUpdateMaterial(material.rule_id, {
-        mode,
-        entries: rows.map((row) => ({
-          subtype_id: row.subtype_id,
-          quantity: parseNullableNumber(row.quantity),
-          assembly_quantity: parseNullableNumber(row.assembly_quantity),
-        })),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not update material rows.";
-      setError(message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function persistIfChanged(rows: MaterialRowDraft[]) {
-    const nextSignature = `${material.mode}:${serializeBomRows(rows)}`;
-    if (nextSignature === baselineSignature) {
+  async function pumpSaveQueue(mode: string, rows: MaterialRowDraft[]) {
+    if (saveQueueRef.current.inFlight) {
+      saveQueueRef.current.queued = { mode, rows };
+      setSaving(true);
       return;
     }
-    await persistRows(rows, material.mode);
+
+    saveQueueRef.current.inFlight = true;
+    setSaving(true);
+
+    let nextPayload: { mode: string; rows: MaterialRowDraft[] } | null = { mode, rows };
+    while (nextPayload) {
+      setError(null);
+      try {
+        await onUpdateMaterial(material.rule_id, {
+          mode: nextPayload.mode,
+          entries: nextPayload.rows.map((row) => ({
+            subtype_id: row.subtype_id,
+            quantity: parseNullableNumber(row.quantity),
+            assembly_quantity: parseNullableNumber(row.assembly_quantity),
+          })),
+        });
+        serverSignatureRef.current = buildMaterialDraftSignature(nextPayload.mode, nextPayload.rows);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not update material rows.";
+        setError(message);
+      }
+
+      nextPayload = saveQueueRef.current.queued;
+      saveQueueRef.current.queued = null;
+    }
+
+    saveQueueRef.current.inFlight = false;
+    setSaving(false);
+  }
+
+  function persistIfChanged(rows: MaterialRowDraft[], mode: string) {
+    const nextSignature = buildMaterialDraftSignature(mode, rows);
+    if (nextSignature === serverSignatureRef.current) {
+      return;
+    }
+    void pumpSaveQueue(mode, rows);
   }
 
   async function handleToggle(nextChecked: boolean) {
@@ -922,8 +1123,9 @@ function MaterialOccurrenceEditor({
           assembly_quantity: "",
         }))
       : [{ subtype_id: null, quantity: "", assembly_quantity: "" }];
+    setDraftMode(nextMode);
     setDraftRows(nextRows);
-    await persistRows(nextRows, nextMode);
+    persistIfChanged(nextRows, nextMode);
   }
 
   return (
@@ -941,11 +1143,11 @@ function MaterialOccurrenceEditor({
             <button
               type="button"
               role="switch"
-              aria-checked={material.mode === "per_subtype"}
-              disabled={saving || (subtypeOptions.length === 0 && material.mode !== "per_subtype")}
-              onClick={() => void handleToggle(material.mode !== "per_subtype")}
+              aria-checked={draftMode === "per_subtype"}
+              disabled={subtypeOptions.length === 0 && draftMode !== "per_subtype"}
+              onClick={() => void handleToggle(draftMode !== "per_subtype")}
               className={`relative h-6 w-11 rounded-full transition-all duration-200 ease-out ${
-                material.mode === "per_subtype"
+                draftMode === "per_subtype"
                   ? "bg-accent-500 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.85)]"
                   : "bg-zinc-300 dark:bg-zinc-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
               } disabled:opacity-50`}
@@ -953,7 +1155,7 @@ function MaterialOccurrenceEditor({
               <span
                 className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-transform duration-200 ease-out"
                 style={{
-                  transform: material.mode === "per_subtype" ? "translateX(20px)" : "translateX(0px)",
+                  transform: draftMode === "per_subtype" ? "translateX(20px)" : "translateX(0px)",
                 }}
               />
             </button>
@@ -987,7 +1189,7 @@ function MaterialOccurrenceEditor({
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {material.bom_entries.map((row, index) => (
+            {displayRows.map((row, index) => (
               <tr key={`${material.rule_id}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
                 <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">
                   <div style={{ paddingLeft: `${row.subtype_depth * 14}px` }}>{row.subtype}</div>
@@ -997,7 +1199,6 @@ function MaterialOccurrenceEditor({
                     value={draftRows[index]?.quantity ?? ""}
                     type="number"
                     step="any"
-                    disabled={saving}
                     onChange={(event) =>
                       setDraftRows((current) =>
                         current.map((item, itemIndex) =>
@@ -1009,7 +1210,7 @@ function MaterialOccurrenceEditor({
                       const nextRows = draftRows.map((item, itemIndex) =>
                         itemIndex === index ? { ...item, quantity: event.target.value } : item,
                       );
-                      void persistIfChanged(nextRows);
+                      persistIfChanged(nextRows, draftMode);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -1025,7 +1226,6 @@ function MaterialOccurrenceEditor({
                     value={draftRows[index]?.assembly_quantity ?? ""}
                     type="number"
                     step="any"
-                    disabled={saving}
                     onChange={(event) =>
                       setDraftRows((current) =>
                         current.map((item, itemIndex) =>
@@ -1037,7 +1237,7 @@ function MaterialOccurrenceEditor({
                       const nextRows = draftRows.map((item, itemIndex) =>
                         itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
                       );
-                      void persistIfChanged(nextRows);
+                      persistIfChanged(nextRows, draftMode);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -1308,7 +1508,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     }
     setSubmitting(true);
     try {
-      await api.createProjectInstance(projectId, {
+      const result = await api.createProjectInstance(projectId, {
         category_id: activeCategory.id,
         component_id: payload.component_id,
         name: payload.name,
@@ -1319,8 +1519,10 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
       });
+      if (result.instance) {
+        setData((current) => (current ? upsertCategoryInstance(current, activeCategory.id, result.instance as ProjectInstance) : current));
+      }
       setModalState(null);
-      await loadProject();
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not create project instance.";
       setError(message);
@@ -1352,15 +1554,10 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
       };
-      await api.updateProjectInstance(projectId, activeInstance.id, request);
-      setData((current) => {
-        if (!current) {
-          return current;
-        }
-        return updateCategoryInstance(current, modalState.categoryId, activeInstance.id, (instance) =>
-          patchEditedInstance(instance, payload),
-        );
-      });
+      const result = await api.updateProjectInstance(projectId, activeInstance.id, request);
+      if (result.instance) {
+        setData((current) => (current ? upsertCategoryInstance(current, modalState.categoryId, result.instance as ProjectInstance) : current));
+      }
       setModalState(null);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not update project instance.";
@@ -1378,7 +1575,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     setError(null);
     try {
       await api.deleteProjectInstance(projectId, instanceId);
-      await loadProject();
+      setData((current) => (current ? removeInstanceFromProject(current, instanceId) : current));
       if (window.location.hash === `#category-${categoryId}`) {
         window.location.hash = `category-${categoryId}`;
       }
@@ -1396,28 +1593,30 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     setError(null);
     try {
       await api.updateMaterialOccurrence(projectId, instanceId, ruleId, payload);
-      setData((current) => {
-        if (!current) {
-          return current;
-        }
-        const subtypeOptions = flattenSubtypeTree(current.subtypes);
-        const category = current.categories.find((item) => item.instances.some((instance) => instance.id === instanceId));
-        if (!category) {
-          return current;
-        }
-        return updateCategoryInstance(current, category.id, instanceId, (instance) => ({
-          ...instance,
-          materials: instance.materials.map((material) => {
-            if (material.rule_id !== ruleId) {
-              return material;
-            }
-            return {
-              ...material,
-              mode: payload.mode,
-              bom_entries: buildLocalBomEntries(payload.mode, payload.entries, material, subtypeOptions),
-            };
-          }),
-        }));
+      startTransition(() => {
+        setData((current) => {
+          if (!current) {
+            return current;
+          }
+          const subtypeOptions = flattenSubtypeTree(current.subtypes);
+          const category = current.categories.find((item) => item.instances.some((instance) => instance.id === instanceId));
+          if (!category) {
+            return current;
+          }
+          return updateCategoryInstance(current, category.id, instanceId, (instance) => ({
+            ...instance,
+            materials: instance.materials.map((material) => {
+              if (material.rule_id !== ruleId) {
+                return material;
+              }
+              return {
+                ...material,
+                mode: payload.mode,
+                bom_entries: buildLocalBomEntries(payload.mode, payload.entries, material, subtypeOptions),
+              };
+            }),
+          }));
+        });
       });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not update material rows.";
@@ -1432,8 +1631,12 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   ) {
     setError(null);
     try {
-      await api.createProjectOccurrence(projectId, instanceId, payload);
-      await loadProject();
+      const result = await api.createProjectOccurrence(projectId, instanceId, payload);
+      if (result.occurrence) {
+        setData((current) =>
+          current ? applyOccurrenceToProject(current, instanceId, result.occurrence as UsageOccurrence) : current,
+        );
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not create usage.";
       setError(message);
@@ -1448,8 +1651,12 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   ) {
     setError(null);
     try {
-      await api.updateProjectOccurrence(projectId, instanceId, occurrenceId, payload);
-      await loadProject();
+      const result = await api.updateProjectOccurrence(projectId, instanceId, occurrenceId, payload);
+      if (result.occurrence) {
+        setData((current) =>
+          current ? applyOccurrenceToProject(current, instanceId, result.occurrence as UsageOccurrence) : current,
+        );
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not update usage.";
       setError(message);
@@ -1461,7 +1668,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     setError(null);
     try {
       await api.deleteProjectOccurrence(projectId, instanceId, occurrenceId);
-      await loadProject();
+      setData((current) => (current ? removeOccurrenceFromProject(current, instanceId, occurrenceId) : current));
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not delete usage.";
       setError(message);

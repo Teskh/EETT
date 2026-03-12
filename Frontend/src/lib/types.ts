@@ -437,4 +437,7 @@ export type MutationResult = {
   occurrence_id?: number | null;
   deleted_id?: number | null;
   linked_category_ids?: number[];
+  component?: CatalogComponent | null;
+  instance?: ProjectInstance | null;
+  occurrence?: UsageOccurrence | null;
 };

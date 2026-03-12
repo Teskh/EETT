@@ -378,6 +378,18 @@ class ProjectInstanceModel(BaseModel):
     material_mode: str
 
 
+class CatalogComponentMutationResultModel(MutationResultModel):
+    component: CatalogComponentModel | None = None
+
+
+class ProjectInstanceMutationResultModel(MutationResultModel):
+    instance: ProjectInstanceModel | None = None
+
+
+class ProjectOccurrenceMutationResultModel(MutationResultModel):
+    occurrence: OccurrenceModel | None = None
+
+
 class CategorySectionModel(BaseModel):
     id: int
     name: str

@@ -356,6 +356,40 @@ def delete_project_instance(session: Session, *, project: Project, instance_id: 
     return True
 
 
+def get_project_instance_data(session: Session, project_id: int, instance_id: int) -> dict | None:
+    project = get_project_with_details(session, project_id)
+    if project is None:
+        return None
+
+    instance = next((row for row in project.instances if row.id == instance_id), None)
+    if instance is None:
+        return None
+
+    flat_subtypes = _flatten_subtypes(project.subtypes)
+    return _serialize_instance(instance, flat_subtypes, project.material_mode)
+
+
+def get_project_occurrence_data(
+    session: Session,
+    project_id: int,
+    instance_id: int,
+    occurrence_id: int,
+) -> dict | None:
+    project = get_project_with_details(session, project_id)
+    if project is None:
+        return None
+
+    instance = next((row for row in project.instances if row.id == instance_id), None)
+    if instance is None:
+        return None
+
+    occurrence = next((row for row in instance.outgoing_occurrences if row.id == occurrence_id), None)
+    if occurrence is None:
+        return None
+
+    return _serialize_occurrence(occurrence)
+
+
 def get_project_view_data(session: Session, project_id: int, user: User | None = None) -> dict | None:
     project = get_project_with_details(session, project_id)
     if project is None:

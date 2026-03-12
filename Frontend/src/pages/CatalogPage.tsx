@@ -21,7 +21,8 @@ type CatalogPageProps = {
 
 type ComponentCardProps = {
   component: CatalogComponent;
-  onRefresh: () => Promise<void>;
+  onComponentSaved: (component: CatalogComponent) => void;
+  onComponentDeleted: (componentId: number) => void;
 };
 
 const initialCategoryForm: CreateCategoryRequest = {
@@ -138,7 +139,7 @@ function CatalogTree({
   );
 }
 
-function ComponentCard({ component, onRefresh }: ComponentCardProps) {
+function ComponentCard({ component, onComponentSaved, onComponentDeleted }: ComponentCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [attributeSaving, setAttributeSaving] = useState(false);
@@ -170,8 +171,10 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
     event.preventDefault();
     setSaving(true);
     try {
-      await api.updateComponent(component.id, form);
-      await onRefresh();
+      const result = await api.updateComponent(component.id, form);
+      if (result.component) {
+        onComponentSaved(result.component);
+      }
     } finally {
       setSaving(false);
     }
@@ -185,7 +188,7 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
     setSaving(true);
     try {
       await api.deleteComponent(component.id);
-      await onRefresh();
+      onComponentDeleted(component.id);
     } finally {
       setSaving(false);
     }
@@ -194,8 +197,10 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   async function handleSaveAttributes(scope: string, attributes: CatalogAttribute[]) {
     setAttributeSaving(true);
     try {
-      await api.replaceComponentAttributes(component.id, scope, attributes);
-      await onRefresh();
+      const result = await api.replaceComponentAttributes(component.id, scope, attributes);
+      if (result.component) {
+        onComponentSaved(result.component);
+      }
     } finally {
       setAttributeSaving(false);
     }
@@ -204,8 +209,10 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   async function handleSaveMaterialRules(rules: CatalogMaterialRule[]) {
     setMaterialSaving(true);
     try {
-      await api.replaceComponentMaterialRules(component.id, rules);
-      await onRefresh();
+      const result = await api.replaceComponentMaterialRules(component.id, rules);
+      if (result.component) {
+        onComponentSaved(result.component);
+      }
     } finally {
       setMaterialSaving(false);
     }
@@ -416,6 +423,89 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   );
 }
 
+function sortComponents(components: CatalogComponent[]) {
+  return [...components].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function updateTreeComponentCount(nodes: CatalogTreeNode[], categoryId: number, delta: number): CatalogTreeNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    component_count: node.id === categoryId ? Math.max(0, node.component_count + delta) : node.component_count,
+    children: updateTreeComponentCount(node.children, categoryId, delta),
+  }));
+}
+
+function upsertSelectedComponent(data: CatalogPageData, nextComponent: CatalogComponent): CatalogPageData {
+  if (!data.selected || data.selected.id !== nextComponent.category_id) {
+    return data;
+  }
+
+  const exists = data.selected.components.some((component) => component.id === nextComponent.id);
+  return {
+    ...data,
+    selected: {
+      ...data.selected,
+      components: sortComponents(
+        exists
+          ? data.selected.components.map((component) => (component.id === nextComponent.id ? nextComponent : component))
+          : [...data.selected.components, nextComponent],
+      ),
+    },
+    summary: exists
+      ? data.summary
+      : {
+          ...data.summary,
+          components: data.summary.components + 1,
+        },
+    tree: exists ? data.tree : updateTreeComponentCount(data.tree, nextComponent.category_id, 1),
+  };
+}
+
+function removeSelectedComponent(data: CatalogPageData, componentId: number): CatalogPageData {
+  if (!data.selected) {
+    return data;
+  }
+
+  const nextComponents = data.selected.components.filter((component) => component.id !== componentId);
+  if (nextComponents.length === data.selected.components.length) {
+    return data;
+  }
+
+  return {
+    ...data,
+    summary: {
+      ...data.summary,
+      components: Math.max(0, data.summary.components - 1),
+    },
+    tree: updateTreeComponentCount(data.tree, data.selected.id, -1),
+    selected: {
+      ...data.selected,
+      components: nextComponents,
+    },
+  };
+}
+
+function patchSelectedLinks(data: CatalogPageData, linkedCategoryIds: number[]): CatalogPageData {
+  if (!data.selected) {
+    return data;
+  }
+
+  const linkedIdSet = new Set(linkedCategoryIds);
+  const linkedCategories = data.link_targets
+    .filter((target) => linkedIdSet.has(target.id))
+    .map((target) => ({ id: target.id, name: target.name }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    ...data,
+    selected: {
+      ...data.selected,
+      linked_category_ids: [...linkedCategoryIds],
+      linked_categories: linkedCategories,
+    },
+  };
+}
+
 export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
   const [data, setData] = useState<CatalogPageData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -488,12 +578,14 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
     setSavingComponent(true);
     setError(null);
     try {
-      await api.createComponent({
+      const result = await api.createComponent({
         ...componentForm,
         category_id: data.selected.id,
       });
       setComponentForm((current) => ({ ...initialComponentForm, category_id: current.category_id }));
-      await loadCatalog();
+      if (result.component) {
+        setData((current) => (current ? upsertSelectedComponent(current, result.component as CatalogComponent) : current));
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not create component.";
       setError(message);
@@ -510,7 +602,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
     setError(null);
     try {
       await api.updateCategoryLinks(data.selected.id, selectedLinks);
-      await loadCatalog();
+      setData((current) => (current ? patchSelectedLinks(current, selectedLinks) : current));
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not save linked-category rules.";
       setError(message);
@@ -779,7 +871,16 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
               <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {selected.components.length ? (
                   selected.components.map((component) => (
-                    <ComponentCard key={component.id} component={component} onRefresh={loadCatalog} />
+                    <ComponentCard
+                      key={component.id}
+                      component={component}
+                      onComponentSaved={(nextComponent) =>
+                        setData((current) => (current ? upsertSelectedComponent(current, nextComponent) : current))
+                      }
+                      onComponentDeleted={(componentId) =>
+                        setData((current) => (current ? removeSelectedComponent(current, componentId) : current))
+                      }
+                    />
                   ))
                 ) : (
                   <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-lg">
