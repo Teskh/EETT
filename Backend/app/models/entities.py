@@ -57,6 +57,11 @@ class AttributeValueType(str, Enum):
     SELECT = "select"
 
 
+class AttributeScope(str, Enum):
+    BASE = "base"
+    USAGE = "usage"
+
+
 class BomCalculationMode(str, Enum):
     MANUAL = "manual"
     AUTO = "auto"
@@ -246,6 +251,11 @@ class CatalogAttributeDefinition(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     component_id: Mapped[int] = mapped_column(ForeignKey("catalog_components.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    scope: Mapped[AttributeScope] = mapped_column(
+        enum_column(AttributeScope, "attribute_scope"),
+        default=AttributeScope.BASE,
+        nullable=False,
+    )
     value_type: Mapped[AttributeValueType] = mapped_column(
         enum_column(AttributeValueType, "attribute_value_type"),
         default=AttributeValueType.TEXT,

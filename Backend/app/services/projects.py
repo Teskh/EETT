@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
+    AttributeScope,
     CatalogAttributeDefinition,
     CatalogCategory,
     CatalogCategoryLink,
@@ -250,6 +251,97 @@ def update_project_instance(
     session.commit()
     session.refresh(instance)
     return instance
+
+
+def create_project_instance_occurrence(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    relationship_type: str,
+    context_label: str | None,
+    target_instance_id: int | None,
+    attribute_values: dict[str, str | None] | None = None,
+) -> ProjectInstanceOccurrence | None:
+    instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
+    if instance is None:
+        return None
+
+    occurrence = ProjectInstanceOccurrence(
+        source_instance=instance,
+        relationship_type=(relationship_type or "").strip() or "uses",
+        context_label=(context_label or "").strip() or None,
+        context_notes=None,
+        sort_order=(instance.outgoing_occurrences[-1].sort_order + 1) if instance.outgoing_occurrences else 1,
+    )
+    session.add(occurrence)
+    session.flush()
+    _replace_occurrence_target(
+        session,
+        project=project,
+        source_instance=instance,
+        occurrence=occurrence,
+        target_instance_id=target_instance_id,
+    )
+    _replace_occurrence_attribute_values(instance, occurrence, attribute_values or {})
+    session.commit()
+    session.refresh(occurrence)
+    return occurrence
+
+
+def update_project_instance_occurrence(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    occurrence_id: int,
+    relationship_type: str,
+    context_label: str | None,
+    target_instance_id: int | None,
+    attribute_values: dict[str, str | None] | None = None,
+) -> ProjectInstanceOccurrence | None:
+    instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
+    if instance is None:
+        return None
+
+    occurrence = next((row for row in instance.outgoing_occurrences if row.id == occurrence_id), None)
+    if occurrence is None:
+        return None
+
+    occurrence.relationship_type = (relationship_type or "").strip() or occurrence.relationship_type or "uses"
+    occurrence.context_label = (context_label or "").strip() or None
+    occurrence.context_notes = None
+    _replace_occurrence_target(
+        session,
+        project=project,
+        source_instance=instance,
+        occurrence=occurrence,
+        target_instance_id=target_instance_id,
+    )
+    _replace_occurrence_attribute_values(instance, occurrence, attribute_values or {})
+    session.commit()
+    session.refresh(occurrence)
+    return occurrence
+
+
+def delete_project_instance_occurrence(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    occurrence_id: int,
+) -> bool:
+    instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
+    if instance is None:
+        return False
+
+    occurrence = next((row for row in instance.outgoing_occurrences if row.id == occurrence_id), None)
+    if occurrence is None:
+        return False
+
+    session.delete(occurrence)
+    session.commit()
+    return True
 
 
 def delete_project_instance(session: Session, *, project: Project, instance_id: int) -> bool:
@@ -534,7 +626,7 @@ def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None
 
     base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
     instance_attributes = [value.attribute_name for value in base_group.attribute_values] if base_group else []
-    component_attributes = [definition.name for definition in instance.component.attribute_definitions]
+    component_attributes = [definition.name for definition in _component_attribute_definitions(instance.component, AttributeScope.BASE)]
     if instance_attributes != component_attributes:
         changes.append(
             {
@@ -610,6 +702,7 @@ def _build_category_sections(
         "name": category.name,
         "scope": category.scope.value,
         "depth": depth,
+        "linked_category_ids": [link.linked_category_id for link in category.outgoing_links],
         "linked_categories": [link.linked_category.name for link in category.outgoing_links],
         "available_components": [
             {
@@ -620,14 +713,8 @@ def _build_category_sections(
                 "description": component.description,
                 "short_description": component.short_description,
                 "installation": component.installation,
-                "attributes": [
-                    {
-                        "name": definition.name,
-                        "value_type": definition.value_type.value,
-                        "options": [option.value for option in definition.options],
-                    }
-                    for definition in component.attribute_definitions
-                ],
+                "base_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.BASE)],
+                "usage_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.USAGE)],
             }
             for component in sorted(category.components, key=lambda item: item.name)
         ],
@@ -653,6 +740,8 @@ def _serialize_instance(
     flat_subtypes: list[dict],
     project_material_mode: ProjectMaterialMode | None,
 ) -> dict:
+    base_definitions = _component_attribute_definitions(instance.component, AttributeScope.BASE)
+    usage_definitions = _component_attribute_definitions(instance.component, AttributeScope.USAGE)
     legacy_linked_accessories = [
         {
             "name": link.child_instance.name,
@@ -754,13 +843,12 @@ def _serialize_instance(
         "unit_amount": instance.unit_amount,
         "editable_attributes": [
             {
-                "name": definition.name,
-                "value_type": definition.value_type.value,
-                "options": [option.value for option in definition.options],
+                **_serialize_editable_definition(definition),
                 "value": base_attribute_values.get(definition.name),
             }
-            for definition in instance.component.attribute_definitions
+            for definition in base_definitions
         ],
+        "usage_attribute_definitions": [_serialize_editable_definition(definition) for definition in usage_definitions],
         "attributes": grouped_attributes,
         "linked_accessories": linked_accessories,
         "linked_to": linked_to,
@@ -790,13 +878,13 @@ def _serialize_instance(
 
 def _serialize_occurrence(occurrence: ProjectInstanceOccurrence) -> dict:
     return {
+        "id": occurrence.id,
         "relationship_type": occurrence.relationship_type,
         "context_label": occurrence.context_label,
-        "context_notes": occurrence.context_notes,
         "targets": [
             {
+                "instance_id": target.target_instance_id,
                 "instance_name": target.target_instance.name,
-                "role_label": target.role_label,
             }
             for target in occurrence.targets
         ],
@@ -821,6 +909,109 @@ def _merge_link_badges(*badge_groups: list[dict]) -> list[dict]:
             seen.add(key)
             merged.append(badge)
     return merged
+
+
+def _serialize_editable_definition(definition: CatalogAttributeDefinition) -> dict:
+    return {
+        "name": definition.name,
+        "value_type": definition.value_type.value,
+        "options": [option.value for option in definition.options],
+    }
+
+
+def _component_attribute_definitions(
+    component: CatalogComponent,
+    scope: AttributeScope,
+) -> list[CatalogAttributeDefinition]:
+    return [definition for definition in component.attribute_definitions if definition.scope == scope]
+
+
+def _load_instance_for_occurrence_edit(
+    session: Session,
+    *,
+    project_id: int,
+    instance_id: int,
+) -> ProjectInstance | None:
+    return session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project_id)
+        .options(
+            selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.attribute_definitions)
+            .selectinload(CatalogAttributeDefinition.options),
+            selectinload(ProjectInstance.outgoing_occurrences)
+            .selectinload(ProjectInstanceOccurrence.targets)
+            .selectinload(ProjectInstanceOccurrenceTarget.target_instance),
+            selectinload(ProjectInstance.outgoing_occurrences)
+            .selectinload(ProjectInstanceOccurrence.attribute_values),
+        )
+    )
+
+
+def _replace_occurrence_target(
+    session: Session,
+    *,
+    project: Project,
+    source_instance: ProjectInstance,
+    occurrence: ProjectInstanceOccurrence,
+    target_instance_id: int | None,
+) -> None:
+    occurrence.targets.clear()
+    if target_instance_id is None:
+        return
+
+    if target_instance_id == source_instance.id:
+        raise ValueError("An occurrence cannot target its own source instance.")
+
+    target_instance = session.scalar(
+        select(ProjectInstance).where(ProjectInstance.id == target_instance_id, ProjectInstance.project_id == project.id)
+    )
+    if target_instance is None:
+        raise ValueError("Target instance was not found in this project.")
+
+    occurrence.targets.append(
+        ProjectInstanceOccurrenceTarget(
+            target_instance=target_instance,
+            role_label=None,
+            sort_order=1,
+        )
+    )
+
+
+def _replace_occurrence_attribute_values(
+    instance: ProjectInstance,
+    occurrence: ProjectInstanceOccurrence,
+    attribute_values: dict[str, str | None],
+) -> None:
+    defined_names = {definition.name for definition in _component_attribute_definitions(instance.component, AttributeScope.USAGE)}
+    occurrence.attribute_values.clear()
+    for index, definition in enumerate(_component_attribute_definitions(instance.component, AttributeScope.USAGE), start=1):
+        value = attribute_values.get(definition.name)
+        normalized = value.strip() if isinstance(value, str) else value
+        if not normalized:
+            continue
+        occurrence.attribute_values.append(
+            ProjectInstanceOccurrenceAttributeValue(
+                attribute_name=definition.name,
+                value=normalized,
+                sort_order=index,
+            )
+        )
+
+    # Preserve unknown legacy values until the catalog definition is explicitly cleaned up.
+    for name, value in attribute_values.items():
+        if name in defined_names:
+            continue
+        normalized = value.strip() if isinstance(value, str) else value
+        if not normalized:
+            continue
+        occurrence.attribute_values.append(
+            ProjectInstanceOccurrenceAttributeValue(
+                attribute_name=name,
+                value=normalized,
+                sort_order=len(occurrence.attribute_values) + 1,
+            )
+        )
 
 
 def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[dict]:
@@ -925,7 +1116,7 @@ def _sync_base_attribute_group(instance: ProjectInstance) -> None:
 
     existing_values = {value.attribute_name: value for value in base_group.attribute_values}
     target_names = []
-    for index, definition in enumerate(instance.component.attribute_definitions, start=1):
+    for index, definition in enumerate(_component_attribute_definitions(instance.component, AttributeScope.BASE), start=1):
         target_names.append(definition.name)
         current = existing_values.get(definition.name)
         if current is None:

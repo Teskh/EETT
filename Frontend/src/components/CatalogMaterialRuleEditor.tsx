@@ -168,7 +168,9 @@ function getAttributeMeta(attributeName: string, attributes: CatalogAttribute[])
 }
 
 function buildAttributeChoices(component: CatalogComponent, rules: EditableRule[]) {
-  const byName = new Map(component.attributes.map((attribute) => [attribute.name, attribute]));
+  const byName = new Map(
+    [...component.base_attributes, ...component.usage_attributes].map((attribute) => [attribute.name, attribute]),
+  );
   for (const rule of rules) {
     for (const group of rule.conditions) {
       for (const clause of group.clauses) {

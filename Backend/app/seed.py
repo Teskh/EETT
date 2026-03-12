@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.database import Base
 from app.models import (
     ApprovalStatus,
+    AttributeScope,
     AttributeValueType,
     AuxiliaryMaterial,
     CatalogAttributeDefinition,
@@ -37,7 +38,6 @@ from app.models import (
     ProjectInstance,
     ProjectInstanceAttributeGroup,
     ProjectInstanceAttributeValue,
-    ProjectInstanceLink,
     ProjectInstanceMedia,
     ProjectInstanceOccurrence,
     ProjectInstanceOccurrenceAttributeValue,
@@ -205,9 +205,9 @@ def seed_demo_dataset(session: Session) -> None:
     add_attribute(session, door, "Lock Type", AttributeValueType.SELECT, 3, ["Mechanical", "Smart", "Biometric"])
     add_attribute(session, window, "Width", AttributeValueType.NUMBER, 1)
     add_attribute(session, window, "Glazing", AttributeValueType.SELECT, 2, ["Standard", "Laminated"])
-    add_attribute(session, smart_lock, "Finish", AttributeValueType.SELECT, 1, ["Black", "Silver"])
-    add_attribute(session, smart_lock, "Handing", AttributeValueType.SELECT, 2, ["Left", "Right"])
-    add_attribute(session, trim_kit, "Color", AttributeValueType.SELECT, 1, ["White", "Charcoal"])
+    add_attribute(session, smart_lock, "Finish", AttributeValueType.SELECT, 1, ["Black", "Silver"], scope=AttributeScope.USAGE)
+    add_attribute(session, smart_lock, "Handing", AttributeValueType.SELECT, 2, ["Left", "Right"], scope=AttributeScope.USAGE)
+    add_attribute(session, trim_kit, "Color", AttributeValueType.SELECT, 1, ["White", "Charcoal"], scope=AttributeScope.USAGE)
     add_attribute(session, cabinet, "Countertop", AttributeValueType.SELECT, 1, ["Laminate", "Quartz"])
 
     anchor_screw = Material(sku="MAT-001", name="Anchor Screw 5x70", unit="ea")
@@ -342,8 +342,6 @@ def seed_demo_dataset(session: Session) -> None:
 
     add_instance_group(session, door_instance, "Base Attributes", [("Width", "900"), ("Finish", "Walnut"), ("Lock Type", "Smart")])
     add_instance_group(session, window_instance, "Base Attributes", [("Width", "1800"), ("Glazing", "Laminated")])
-    add_instance_group(session, lock_instance, "Door A Application", [("Finish", "Black"), ("Handing", "Left")], application_label="Attached to Door A")
-    add_instance_group(session, trim_instance, "Window Application", [("Color", "White")], application_label="Attached to Living Window")
     add_instance_group(session, cabinet_instance, "Base Attributes", [("Countertop", "Quartz")])
 
     session.add_all(
@@ -390,13 +388,26 @@ def seed_demo_dataset(session: Session) -> None:
         ]
     )
 
-    session.add_all(
-        [
-            ProjectInstanceLink(parent_instance=door_instance, child_instance=lock_instance, application_label="Main leaf", sort_order=1),
-            ProjectInstanceLink(parent_instance=window_instance, child_instance=trim_instance, application_label="Interior perimeter", sort_order=1),
-        ]
+    ensure_occurrence(
+        session,
+        source_instance=lock_instance,
+        relationship_type="secures",
+        context_label="Door A smart lock",
+        context_notes=None,
+        sort_order=1,
+        targets=[(door_instance, "Host item")],
+        attributes=[("Finish", "Black"), ("Handing", "Left")],
     )
-    session.flush()
+    ensure_occurrence(
+        session,
+        source_instance=trim_instance,
+        relationship_type="finishes",
+        context_label="Living window trim",
+        context_notes=None,
+        sort_order=1,
+        targets=[(window_instance, "Perimeter")],
+        attributes=[("Color", "White")],
+    )
 
     session.add_all(
         [
@@ -1028,8 +1039,22 @@ def ensure_linked_accessory_demo(
     ensure_component_attribute(session, toilet, "Type", AttributeValueType.SELECT, 1, ["Close Coupled", "Wall Hung"])
     ensure_component_attribute(session, paint, "Base", AttributeValueType.SELECT, 1, ["Waterborne", "Solvent"])
     ensure_component_attribute(session, paint, "Sheen", AttributeValueType.SELECT, 2, ["Satin", "Gloss"])
+    ensure_component_attribute(session, paint, "Color", AttributeValueType.SELECT, 1, ["Black", "Red", "White"], scope=AttributeScope.USAGE)
+    ensure_component_attribute(session, paint, "Area", AttributeValueType.TEXT, 2, scope=AttributeScope.USAGE)
+    ensure_component_attribute(session, paint, "Finish", AttributeValueType.SELECT, 3, ["Satin", "Gloss"], scope=AttributeScope.USAGE)
     ensure_component_attribute(session, caulking, "Chemistry", AttributeValueType.SELECT, 1, ["Sanitary", "Neutral Cure"])
     ensure_component_attribute(session, caulking, "Movement Class", AttributeValueType.SELECT, 2, ["12.5", "20"])
+    ensure_component_attribute(session, caulking, "Color", AttributeValueType.SELECT, 1, ["Gray", "White"], scope=AttributeScope.USAGE)
+    ensure_component_attribute(
+        session,
+        caulking,
+        "Applicability",
+        AttributeValueType.SELECT,
+        2,
+        ["Toilet base to floor", "Toilet base to wall", "Wall to ceiling", "Countertop to wall"],
+        scope=AttributeScope.USAGE,
+    )
+    ensure_component_attribute(session, caulking, "Area", AttributeValueType.TEXT, 3, scope=AttributeScope.USAGE)
 
     enamel_material = ensure_material(session, sku="MAT-007", name="Exterior Enamel Topcoat", unit="l")
     caulk_material = ensure_material(session, sku="MAT-008", name="Elastic Sealant Cartridge", unit="cartridge")
@@ -1169,7 +1194,7 @@ def ensure_linked_accessory_demo(
         context_notes=None,
         sort_order=1,
         targets=[(toilet_instance, "Fixture")],
-        attributes=[("Color", "Gray"), ("Side", "Floor"), ("Joint", "Perimeter")],
+        attributes=[("Color", "Gray"), ("Applicability", "Toilet base to floor"), ("Area", "Perimeter")],
     )
     ensure_occurrence(
         session,
@@ -1179,7 +1204,7 @@ def ensure_linked_accessory_demo(
         context_notes=None,
         sort_order=2,
         targets=[(toilet_instance, "Fixture")],
-        attributes=[("Color", "White"), ("Side", "Wall"), ("Joint", "Back edge")],
+        attributes=[("Color", "White"), ("Applicability", "Toilet base to wall"), ("Area", "Back edge")],
     )
     ensure_occurrence(
         session,
@@ -1189,7 +1214,7 @@ def ensure_linked_accessory_demo(
         context_notes=None,
         sort_order=3,
         targets=[],
-        attributes=[("Color", "Gray"), ("Area", "Kitchen ceiling line")],
+        attributes=[("Color", "Gray"), ("Applicability", "Wall to ceiling"), ("Area", "Kitchen ceiling line")],
     )
     if kitchen_instance is not None:
         ensure_occurrence(
@@ -1200,7 +1225,7 @@ def ensure_linked_accessory_demo(
             context_notes=None,
             sort_order=4,
             targets=[(kitchen_instance, "Host zone")],
-            attributes=[("Color", "White"), ("Area", "Backsplash return")],
+            attributes=[("Color", "White"), ("Applicability", "Countertop to wall"), ("Area", "Backsplash return")],
         )
 
 
@@ -1286,18 +1311,21 @@ def ensure_component_attribute(
     value_type: AttributeValueType,
     sort_order: int,
     options: list[str] | None = None,
+    scope: AttributeScope = AttributeScope.BASE,
 ) -> CatalogAttributeDefinition:
     definition = session.scalar(
         select(CatalogAttributeDefinition).where(
             CatalogAttributeDefinition.component_id == component.id,
             CatalogAttributeDefinition.name == name,
+            CatalogAttributeDefinition.scope == scope,
         )
     )
     if definition is None:
-        definition = CatalogAttributeDefinition(component=component, name=name, value_type=value_type, sort_order=sort_order)
+        definition = CatalogAttributeDefinition(component=component, name=name, scope=scope, value_type=value_type, sort_order=sort_order)
         session.add(definition)
         session.flush()
     else:
+        definition.scope = scope
         definition.value_type = value_type
         definition.sort_order = sort_order
 
@@ -1539,10 +1567,12 @@ def add_attribute(
     value_type: AttributeValueType,
     sort_order: int,
     options: list[str] | None = None,
+    scope: AttributeScope = AttributeScope.BASE,
 ) -> CatalogAttributeDefinition:
     definition = CatalogAttributeDefinition(
         component=component,
         name=name,
+        scope=scope,
         value_type=value_type,
         sort_order=sort_order,
     )

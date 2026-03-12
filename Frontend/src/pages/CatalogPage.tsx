@@ -191,10 +191,10 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
     }
   }
 
-  async function handleSaveAttributes(attributes: CatalogAttribute[]) {
+  async function handleSaveAttributes(scope: string, attributes: CatalogAttribute[]) {
     setAttributeSaving(true);
     try {
-      await api.replaceComponentAttributes(component.id, attributes);
+      await api.replaceComponentAttributes(component.id, scope, attributes);
       await onRefresh();
     } finally {
       setAttributeSaving(false);
@@ -324,10 +324,28 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
             </div>
 
             <div>
-              <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                <i className="ph-bold ph-list-dashes text-zinc-600" /> Attributes
-              </h6>
-              <CatalogAttributeEditor initialAttributes={component.attributes} saving={attributeSaving} onSave={handleSaveAttributes} />
+              <div className="space-y-5">
+                <div>
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i className="ph-bold ph-list-dashes text-zinc-600" /> Base Attributes
+                  </h6>
+                  <CatalogAttributeEditor
+                    initialAttributes={component.base_attributes}
+                    saving={attributeSaving}
+                    onSave={(attributes) => handleSaveAttributes("base", attributes)}
+                  />
+                </div>
+                <div>
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Attributes
+                  </h6>
+                  <CatalogAttributeEditor
+                    initialAttributes={component.usage_attributes}
+                    saving={attributeSaving}
+                    onSave={(attributes) => handleSaveAttributes("usage", attributes)}
+                  />
+                </div>
+              </div>
             </div>
           </div>
 

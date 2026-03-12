@@ -16,6 +16,7 @@ import type {
   ProjectsBoardData,
   SessionUser,
   UpdateMaterialOccurrenceRequest,
+  UpdateProjectOccurrenceRequest,
   UpdateProjectSubtypeRequest,
   UpdateUserRequest,
   UpdateComponentRequest,
@@ -126,10 +127,10 @@ export const api = {
       method: "DELETE",
     });
   },
-  replaceComponentAttributes(componentId: number, attributes: CatalogAttribute[]) {
+  replaceComponentAttributes(componentId: number, scope: string, attributes: CatalogAttribute[]) {
     return request<MutationResult>(`/api/v1/catalog/components/${componentId}/attributes`, {
       method: "PUT",
-      body: JSON.stringify({ attributes }),
+      body: JSON.stringify({ scope, attributes }),
     });
   },
   updateCategoryLinks(categoryId: number, linkedCategoryIds: number[]) {
@@ -187,6 +188,23 @@ export const api = {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+    });
+  },
+  createProjectOccurrence(projectId: number, instanceId: number, payload: UpdateProjectOccurrenceRequest) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number, payload: UpdateProjectOccurrenceRequest) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences/${occurrenceId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences/${occurrenceId}`, {
+      method: "DELETE",
     });
   },
   deleteProjectInstance(projectId: number, instanceId: number) {

@@ -74,6 +74,7 @@ class MutationResultModel(BaseModel):
     component_id: int | None = None
     project_id: int | None = None
     instance_id: int | None = None
+    occurrence_id: int | None = None
     subtype_id: int | None = None
     deleted_id: int | None = None
     linked_category_ids: list[int] = Field(default_factory=list)
@@ -109,11 +110,13 @@ class CatalogComponentUpdateRequest(BaseModel):
 
 class CatalogAttributePayloadModel(BaseModel):
     name: str
+    scope: str = "base"
     value_type: str
     options: list[str] = Field(default_factory=list)
 
 
 class CatalogComponentAttributesReplaceRequest(BaseModel):
+    scope: str = "base"
     attributes: list[CatalogAttributePayloadModel] = Field(default_factory=list)
 
 
@@ -324,7 +327,8 @@ class AvailableComponentModel(BaseModel):
     description: str | None
     short_description: str | None
     installation: str | None
-    attributes: list[EditableAttributeModel]
+    base_attributes: list[EditableAttributeModel]
+    usage_attributes: list[EditableAttributeModel]
 
 
 class InstanceLinkModel(BaseModel):
@@ -339,14 +343,14 @@ class OccurrenceAttributeModel(BaseModel):
 
 
 class OccurrenceTargetModel(BaseModel):
+    instance_id: int
     instance_name: str
-    role_label: str | None
 
 
 class OccurrenceModel(BaseModel):
+    id: int
     relationship_type: str
     context_label: str | None
-    context_notes: str | None
     targets: list[OccurrenceTargetModel]
     attributes: list[OccurrenceAttributeModel]
 
@@ -361,6 +365,7 @@ class ProjectInstanceModel(BaseModel):
     installation: str | None
     unit_amount: float | None
     editable_attributes: list[EditableAttributeModel] = Field(default_factory=list)
+    usage_attribute_definitions: list[EditableAttributeModel] = Field(default_factory=list)
     attributes: list[AttributeGroupModel]
     linked_accessories: list[InstanceLinkModel]
     linked_to: list[InstanceLinkModel]
@@ -378,6 +383,7 @@ class CategorySectionModel(BaseModel):
     name: str
     scope: str
     depth: int
+    linked_category_ids: list[int] = Field(default_factory=list)
     linked_categories: list[str]
     available_components: list[AvailableComponentModel] = Field(default_factory=list)
     instances: list[ProjectInstanceModel]
@@ -413,6 +419,13 @@ class ProjectDetailResponse(BaseModel):
     subtypes: list[ProjectSubtypeModel]
     categories: list[CategorySectionModel]
     auxiliary_materials: list[AuxiliaryMaterialSelectionModel]
+
+
+class ProjectOccurrenceUpdateRequest(BaseModel):
+    relationship_type: str = "uses"
+    context_label: str | None = None
+    target_instance_id: int | None = None
+    attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
 
 
 class SyncFieldChangeModel(BaseModel):

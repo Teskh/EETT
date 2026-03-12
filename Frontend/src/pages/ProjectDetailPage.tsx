@@ -12,6 +12,7 @@ import type {
   ProjectDetailData,
   ProjectInstance,
   ProjectSubtype,
+  UpdateProjectOccurrenceRequest,
   UpdateProjectInstanceRequest,
   UsageOccurrence,
 } from "../lib/types";
@@ -52,6 +53,13 @@ type MaterialRowDraft = {
   subtype_id: number | null;
   quantity: string;
   assembly_quantity: string;
+};
+type TargetOption = {
+  instance_id: number;
+  instance_name: string;
+  category_id: number;
+  category_name: string;
+  type: string;
 };
 
 function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNode[] {
@@ -326,12 +334,30 @@ function buildAttributesFromComponent(component: AvailableComponent | undefined)
   if (!component) {
     return [];
   }
-  return component.attributes.map((attribute) => ({
+  return component.base_attributes.map((attribute) => ({
     name: attribute.name,
     value_type: attribute.value_type,
     options: attribute.options,
     value: "",
   }));
+}
+
+function buildOccurrenceAttributeDrafts(instance: ProjectInstance, occurrence?: UsageOccurrence): EditableAttribute[] {
+  const values = new Map((occurrence?.attributes || []).map((attribute) => [attribute.name, attribute.value ?? ""]));
+  const drafts = instance.usage_attribute_definitions.map((attribute) => ({
+    ...attribute,
+    value: values.get(attribute.name) ?? "",
+  }));
+  const definedNames = new Set(instance.usage_attribute_definitions.map((attribute) => attribute.name));
+  const extras = (occurrence?.attributes || [])
+    .filter((attribute) => !definedNames.has(attribute.name))
+    .map((attribute) => ({
+      name: attribute.name,
+      value_type: "text",
+      options: [],
+      value: attribute.value ?? "",
+    }));
+  return normalizeEditableAttributes([...drafts, ...extras]);
 }
 
 function InstanceFormModal({
@@ -569,27 +595,24 @@ function InstanceFormModal({
   );
 }
 
+function getOccurrencePrimaryLabel(occurrence: UsageOccurrence) {
+  return occurrence.context_label || occurrence.targets[0]?.instance_name || "Usage occurrence";
+}
+
 function renderOccurrenceSummary(occurrence: UsageOccurrence, index: number) {
-  const targets = occurrence.targets.length
-    ? occurrence.targets
-        .map((target) => (target.role_label ? `${target.instance_name} (${target.role_label})` : target.instance_name))
-        .join(", ")
-    : "Freeform context";
+  const primaryLabel = getOccurrencePrimaryLabel(occurrence);
 
   return (
-    <div key={`${occurrence.relationship_type}-${occurrence.context_label || "occurrence"}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <div>
-          <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{occurrence.context_label || "Usage occurrence"}</div>
-          <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
-        </div>
-        <div className="text-right text-[11px] text-zinc-600 dark:text-zinc-400 max-w-[50%]">{targets}</div>
+    <div key={`${occurrence.relationship_type}-${primaryLabel}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
+      <div className="mb-2">
+        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</div>
+        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
       </div>
       {occurrence.attributes.length ? (
         <div className="flex flex-wrap gap-1.5 mb-2">
           {occurrence.attributes.map((attribute) => (
             <span
-              key={`${occurrence.context_label || "occurrence"}-${attribute.name}`}
+              key={`${primaryLabel}-${attribute.name}`}
               className="px-2 py-0.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 text-[10px] font-mono text-zinc-700 dark:text-zinc-300"
             >
               {attribute.name}: {attribute.value || "-"}
@@ -597,6 +620,243 @@ function renderOccurrenceSummary(occurrence: UsageOccurrence, index: number) {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function OccurrenceEditorCard({
+  instance,
+  occurrence,
+  targetOptions,
+  onSave,
+  onDelete,
+  saveLabel,
+}: {
+  instance: ProjectInstance;
+  occurrence?: UsageOccurrence;
+  targetOptions: TargetOption[];
+  onSave: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+  onDelete?: () => Promise<void>;
+  saveLabel: string;
+}) {
+  const [contextLabel, setContextLabel] = useState(occurrence?.context_label || "");
+  const [targetInstanceId, setTargetInstanceId] = useState<string>(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
+  const [attributes, setAttributes] = useState<EditableAttribute[]>(() => buildOccurrenceAttributeDrafts(instance, occurrence));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setContextLabel(occurrence?.context_label || "");
+    setTargetInstanceId(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
+    setAttributes(buildOccurrenceAttributeDrafts(instance, occurrence));
+    setError(null);
+  }, [instance, occurrence]);
+
+  async function handleSave() {
+    const trimmedContextLabel = contextLabel.trim();
+    if (!targetInstanceId && !trimmedContextLabel) {
+      setError("Select a linked item or enter a freeform location.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        relationship_type: occurrence?.relationship_type || "uses",
+        context_label: targetInstanceId ? null : trimmedContextLabel || null,
+        target_instance_id: targetInstanceId ? Number(targetInstanceId) : null,
+        attribute_values: attributes.map((attribute) => ({
+          name: attribute.name,
+          value: (attribute.value || "").trim() || null,
+        })),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save usage.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!onDelete || !window.confirm("Delete this usage?")) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onDelete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete usage.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Linked Item</label>
+          <select
+            value={targetInstanceId}
+            onChange={(event) => {
+              setTargetInstanceId(event.target.value);
+              if (event.target.value) {
+                setContextLabel("");
+              }
+            }}
+            className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+          >
+            <option value="">No linked item</option>
+            {targetOptions.map((target) => (
+              <option key={target.instance_id} value={target.instance_id}>
+                {target.instance_name} ({target.category_name})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Freeform Location</label>
+          <input
+            value={contextLabel}
+            disabled={Boolean(targetInstanceId)}
+            onChange={(event) => setContextLabel(event.target.value)}
+            placeholder="e.g. Kitchen wall to ceiling juncture"
+            className="w-full rounded border border-black/10 dark:border-white/10 bg-white disabled:bg-zinc-100 dark:bg-black/30 dark:disabled:bg-white/5 px-2 py-1.5 text-sm disabled:text-zinc-500"
+          />
+          <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            {targetInstanceId ? "Clear the linked item to type a freeform location instead." : "Use this when the usage does not point to a project item."}
+          </div>
+        </div>
+      </div>
+
+      {attributes.length ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {attributes.map((attribute) => (
+            <div key={`${occurrence?.id || "new"}-${attribute.name}`} className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{attribute.name}</label>
+              {attribute.value_type === "select" ? (
+                <select
+                  value={attribute.value || ""}
+                  onChange={(event) =>
+                    setAttributes((current) =>
+                      current.map((item) => (item.name === attribute.name ? { ...item, value: event.target.value } : item)),
+                    )
+                  }
+                  className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+                >
+                  <option value="">Select value</option>
+                  {attribute.options.map((option) => (
+                    <option key={`${attribute.name}-${option}`} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={attribute.value || ""}
+                  type={attribute.value_type === "number" ? "number" : "text"}
+                  onChange={(event) =>
+                    setAttributes((current) =>
+                      current.map((item) => (item.name === attribute.name ? { ...item, value: event.target.value } : item)),
+                    )
+                  }
+                  className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-3">
+        {error ? <div className="text-xs text-red-700 dark:text-red-300">{error}</div> : <div />}
+        <div className="flex items-center gap-2">
+          {onDelete ? (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => void handleDelete()}
+              className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          ) : null}
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void handleSave()}
+            className="px-3 py-1.5 rounded bg-accent-500 hover:bg-accent-400 text-xs font-semibold text-zinc-950 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : saveLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsageManager({
+  instance,
+  targetOptions,
+  onCreateOccurrence,
+  onUpdateOccurrence,
+  onDeleteOccurrence,
+}: {
+  instance: ProjectInstance;
+  targetOptions: TargetOption[];
+  onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+  onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+  onDeleteOccurrence: (occurrenceId: number) => Promise<void>;
+}) {
+  const [creating, setCreating] = useState(false);
+
+  return (
+    <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+          <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usages
+        </h6>
+        <button
+          type="button"
+          onClick={() => setCreating((current) => !current)}
+          className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold"
+        >
+          {creating ? "Cancel" : "Add usage"}
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {instance.outgoing_occurrences.map((occurrence) => (
+          <OccurrenceEditorCard
+            key={occurrence.id}
+            instance={instance}
+            occurrence={occurrence}
+            targetOptions={targetOptions}
+            saveLabel="Save usage"
+            onSave={(payload) => onUpdateOccurrence(occurrence.id, payload)}
+            onDelete={() => onDeleteOccurrence(occurrence.id)}
+          />
+        ))}
+
+        {creating ? (
+          <OccurrenceEditorCard
+            instance={instance}
+            targetOptions={targetOptions}
+            saveLabel="Create usage"
+            onSave={async (payload) => {
+              await onCreateOccurrence(payload);
+              setCreating(false);
+            }}
+          />
+        ) : null}
+
+        {!instance.outgoing_occurrences.length && !creating ? (
+          <div className="text-center py-4 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
+            No usages defined yet.
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -806,14 +1066,22 @@ function MaterialOccurrenceEditor({
 function InstanceCard({
   instance,
   subtypeOptions,
+  targetOptions,
   onEdit,
   onDelete,
+  onCreateOccurrence,
+  onUpdateOccurrence,
+  onDeleteOccurrence,
   onUpdateMaterial,
 }: {
   instance: ProjectInstance;
   subtypeOptions: FlatSubtype[];
+  targetOptions: TargetOption[];
   onEdit: () => void;
   onDelete: () => void;
+  onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+  onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+  onDeleteOccurrence: (occurrenceId: number) => Promise<void>;
   onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -899,7 +1167,15 @@ function InstanceCard({
                 </div>
               </div>
 
-              {instance.outgoing_occurrences.length ? (
+              {instance.type === "accessory" ? (
+                <UsageManager
+                  instance={instance}
+                  targetOptions={targetOptions}
+                  onCreateOccurrence={onCreateOccurrence}
+                  onUpdateOccurrence={onUpdateOccurrence}
+                  onDeleteOccurrence={onDeleteOccurrence}
+                />
+              ) : instance.outgoing_occurrences.length ? (
                 <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                     <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Summary
@@ -1150,6 +1426,49 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
     }
   }
 
+  async function handleCreateOccurrence(
+    instanceId: number,
+    payload: UpdateProjectOccurrenceRequest,
+  ) {
+    setError(null);
+    try {
+      await api.createProjectOccurrence(projectId, instanceId, payload);
+      await loadProject();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not create usage.";
+      setError(message);
+      throw err;
+    }
+  }
+
+  async function handleUpdateOccurrence(
+    instanceId: number,
+    occurrenceId: number,
+    payload: UpdateProjectOccurrenceRequest,
+  ) {
+    setError(null);
+    try {
+      await api.updateProjectOccurrence(projectId, instanceId, occurrenceId, payload);
+      await loadProject();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not update usage.";
+      setError(message);
+      throw err;
+    }
+  }
+
+  async function handleDeleteOccurrence(instanceId: number, occurrenceId: number) {
+    setError(null);
+    try {
+      await api.deleteProjectOccurrence(projectId, instanceId, occurrenceId);
+      await loadProject();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not delete usage.";
+      setError(message);
+      throw err;
+    }
+  }
+
   if (loading) {
     return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading project...</div>;
   }
@@ -1160,6 +1479,17 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
 
   const categoryTree = buildCategoryTree(data.categories);
   const flatSubtypeOptions = flattenSubtypeTree(data.subtypes);
+  const targetOptions: TargetOption[] = data.categories.flatMap((category) =>
+    category.instances
+      .filter((instance) => instance.type === "item")
+      .map((instance) => ({
+        instance_id: instance.id,
+        instance_name: instance.name,
+        category_id: category.id,
+        category_name: category.name,
+        type: instance.type,
+      })),
+  );
 
   return (
     <div className="max-w-[1600px] mx-auto">
@@ -1252,8 +1582,16 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                       key={instance.id}
                       instance={instance}
                       subtypeOptions={flatSubtypeOptions}
+                      targetOptions={targetOptions.filter(
+                        (target) =>
+                          target.instance_id !== instance.id &&
+                          (category.linked_category_ids.length === 0 || category.linked_category_ids.includes(target.category_id)),
+                      )}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
+                      onCreateOccurrence={(payload) => handleCreateOccurrence(instance.id, payload)}
+                      onUpdateOccurrence={(occurrenceId, payload) => handleUpdateOccurrence(instance.id, occurrenceId, payload)}
+                      onDeleteOccurrence={(occurrenceId) => handleDeleteOccurrence(instance.id, occurrenceId)}
                       onUpdateMaterial={(ruleId, payload) => handleUpdateMaterialOccurrence(instance.id, ruleId, payload)}
                     />
                   ))

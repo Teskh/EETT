@@ -34,6 +34,7 @@ from app.api_models import (
     NotificationModel,
     ProjectDetailResponse,
     ProjectCreateRequest,
+    ProjectOccurrenceUpdateRequest,
     ProjectInstanceCreateRequest,
     ProjectInstanceUpdateRequest,
     ProjectSubtypeCreateRequest,
@@ -89,7 +90,9 @@ from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
     create_project,
     create_project_instance,
+    create_project_instance_occurrence,
     create_project_subtype,
+    delete_project_instance_occurrence,
     delete_project_subtype,
     delete_project_instance,
     get_instance_sync_preview,
@@ -99,6 +102,7 @@ from app.services.projects import (
     refresh_instance_snapshot,
     replace_project_material_occurrence,
     set_project_material_mode,
+    update_project_instance_occurrence,
     update_project_subtype,
     update_project_instance,
 )
@@ -403,6 +407,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         component = replace_component_attributes(
             session,
             component_id=component_id,
+            scope="base",
             attributes=attributes,
         )
         if component is None:
@@ -749,6 +754,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         component = replace_component_attributes(
             session,
             component_id=component_id,
+            scope=payload.scope,
             attributes=[attribute.model_dump() for attribute in payload.attributes],
         )
         if component is None:
@@ -969,6 +975,86 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if instance is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project_id, "instance_id": instance.id}
+
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences", response_model=MutationResultModel)
+    async def create_project_occurrence_v1(
+        project_id: int,
+        instance_id: int,
+        payload: ProjectOccurrenceUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            occurrence = create_project_instance_occurrence(
+                session,
+                project=project,
+                instance_id=instance_id,
+                relationship_type=payload.relationship_type,
+                context_label=payload.context_label,
+                target_instance_id=payload.target_instance_id,
+                attribute_values=parse_attribute_values_rows(payload.attribute_values),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if occurrence is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project_id, "instance_id": instance_id, "occurrence_id": occurrence.id}
+
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=MutationResultModel)
+    async def update_project_occurrence_v1(
+        project_id: int,
+        instance_id: int,
+        occurrence_id: int,
+        payload: ProjectOccurrenceUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            occurrence = update_project_instance_occurrence(
+                session,
+                project=project,
+                instance_id=instance_id,
+                occurrence_id=occurrence_id,
+                relationship_type=payload.relationship_type,
+                context_label=payload.context_label,
+                target_instance_id=payload.target_instance_id,
+                attribute_values=parse_attribute_values_rows(payload.attribute_values),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if occurrence is None:
+            raise HTTPException(status_code=404, detail="Project occurrence not found")
+        return {"ok": True, "project_id": project_id, "instance_id": instance_id, "occurrence_id": occurrence.id}
+
+    @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=MutationResultModel)
+    async def delete_project_occurrence_v1(
+        project_id: int,
+        instance_id: int,
+        occurrence_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        deleted = delete_project_instance_occurrence(
+            session,
+            project=project,
+            instance_id=instance_id,
+            occurrence_id=occurrence_id,
+        )
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project occurrence not found")
+        return {"ok": True, "project_id": project_id, "instance_id": instance_id, "deleted_id": occurrence_id}
 
     @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=MutationResultModel)
     async def delete_project_instance_v1(

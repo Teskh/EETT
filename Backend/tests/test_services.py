@@ -640,6 +640,95 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(len(railing_instance["incoming_occurrences"]), 1)
         self.assertEqual(railing_instance["incoming_occurrences"][0]["context_label"], "Primary railing bars")
 
+    def test_project_view_exposes_usage_attribute_definitions_for_occurrence_editing(self) -> None:
+        with self.session_factory() as session:
+            detail = get_project_view_data(session, 2)
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+
+        sealants_section = next(section for section in detail["categories"] if section["name"] == "Sealants")
+        caulking_instance = next(item for item in sealants_section["instances"] if item["name"] == "Elastic Caulking Package")
+        self.assertEqual(
+            [row["name"] for row in caulking_instance["usage_attribute_definitions"]],
+            ["Color", "Applicability", "Area"],
+        )
+
+    def test_project_occurrence_api_supports_create_update_and_delete(self) -> None:
+        with self.session_factory() as session:
+            caulking_instance = session.scalar(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.name == "Elastic Caulking Package")
+            )
+            toilet_instance = session.scalar(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.name == "Bathroom Toilet")
+            )
+
+        self.assertIsNotNone(caulking_instance)
+        self.assertIsNotNone(toilet_instance)
+        assert caulking_instance is not None
+        assert toilet_instance is not None
+
+        create_response = self.client.post(
+            f"/api/v1/projects/2/instances/{caulking_instance.id}/occurrences",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "relationship_type": "seals",
+                "context_label": "Mirror splashback return",
+                "target_instance_id": toilet_instance.id,
+                "attribute_values": [
+                    {"name": "Color", "value": "White"},
+                    {"name": "Applicability", "value": "Toilet base to wall"},
+                    {"name": "Area", "value": "Mirror return"},
+                ],
+            },
+        )
+        self.assertEqual(create_response.status_code, 200)
+        occurrence_id = create_response.json()["occurrence_id"]
+
+        detail_after_create = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail_after_create.status_code, 200)
+        sealants_section = next(section for section in detail_after_create.json()["categories"] if section["name"] == "Sealants")
+        caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
+        created_occurrence = next(item for item in caulking_payload["outgoing_occurrences"] if item["id"] == occurrence_id)
+        self.assertEqual(created_occurrence["targets"][0]["instance_id"], toilet_instance.id)
+        self.assertEqual(created_occurrence["attributes"][1]["name"], "Applicability")
+
+        update_response = self.client.put(
+            f"/api/v1/projects/2/instances/{caulking_instance.id}/occurrences/{occurrence_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "relationship_type": "seals",
+                "context_label": "Mirror splashback return revised",
+                "target_instance_id": None,
+                "attribute_values": [
+                    {"name": "Color", "value": "Gray"},
+                    {"name": "Applicability", "value": "Wall to ceiling"},
+                    {"name": "Area", "value": "Mirror crown line"},
+                ],
+            },
+        )
+        self.assertEqual(update_response.status_code, 200)
+
+        detail_after_update = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail_after_update.status_code, 200)
+        sealants_section = next(section for section in detail_after_update.json()["categories"] if section["name"] == "Sealants")
+        caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
+        updated_occurrence = next(item for item in caulking_payload["outgoing_occurrences"] if item["id"] == occurrence_id)
+        self.assertEqual(updated_occurrence["context_label"], "Mirror splashback return revised")
+        self.assertEqual(updated_occurrence["targets"], [])
+
+        delete_response = self.client.delete(
+            f"/api/v1/projects/2/instances/{caulking_instance.id}/occurrences/{occurrence_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(delete_response.status_code, 200)
+
+        detail_after_delete = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail_after_delete.status_code, 200)
+        sealants_section = next(section for section in detail_after_delete.json()["categories"] if section["name"] == "Sealants")
+        caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
+        self.assertFalse(any(item["id"] == occurrence_id for item in caulking_payload["outgoing_occurrences"]))
+
     def test_html_renderers_include_core_screen_content(self) -> None:
         with self.session_factory() as session:
             catalog = get_catalog_page_data(session)

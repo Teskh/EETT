@@ -72,6 +72,7 @@ export type CatalogTreeNode = {
 export type CatalogAttribute = {
   id?: number;
   name: string;
+  scope?: string;
   value_type: string;
   options: string[];
 };
@@ -123,7 +124,8 @@ export type CatalogComponent = {
   short_description: string | null;
   installation: string | null;
   unit_type: string | null;
-  attributes: CatalogAttribute[];
+  base_attributes: CatalogAttribute[];
+  usage_attributes: CatalogAttribute[];
   material_rules: CatalogMaterialRule[];
 };
 
@@ -209,14 +211,14 @@ export type OccurrenceAttribute = {
 };
 
 export type OccurrenceTarget = {
+  instance_id: number;
   instance_name: string;
-  role_label: string | null;
 };
 
 export type UsageOccurrence = {
+  id: number;
   relationship_type: string;
   context_label: string | null;
-  context_notes: string | null;
   targets: OccurrenceTarget[];
   attributes: OccurrenceAttribute[];
 };
@@ -277,7 +279,8 @@ export type AvailableComponent = {
   description: string | null;
   short_description: string | null;
   installation: string | null;
-  attributes: CatalogAttribute[];
+  base_attributes: CatalogAttribute[];
+  usage_attributes: CatalogAttribute[];
 };
 
 export type ProjectInstance = {
@@ -290,6 +293,7 @@ export type ProjectInstance = {
   installation: string | null;
   unit_amount: number | null;
   editable_attributes: EditableAttribute[];
+  usage_attribute_definitions: EditableAttribute[];
   attributes: AttributeGroup[];
   linked_accessories: InstanceLink[];
   linked_to: InstanceLink[];
@@ -307,6 +311,7 @@ export type ProjectCategorySection = {
   name: string;
   scope: string;
   depth: number;
+  linked_category_ids: number[];
   linked_categories: string[];
   available_components: AvailableComponent[];
   instances: ProjectInstance[];
@@ -396,6 +401,13 @@ export type UpdateProjectInstanceRequest = {
   attribute_values?: AttributeValueInput[];
 };
 
+export type UpdateProjectOccurrenceRequest = {
+  relationship_type: string;
+  context_label: string | null;
+  target_instance_id: number | null;
+  attribute_values: AttributeValueInput[];
+};
+
 export type CreateProjectSubtypeRequest = {
   name: string;
   parent_id?: number | null;
@@ -422,6 +434,7 @@ export type MutationResult = {
   component_id?: number | null;
   project_id?: number | null;
   instance_id?: number | null;
+  occurrence_id?: number | null;
   deleted_id?: number | null;
   linked_category_ids?: number[];
 };

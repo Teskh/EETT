@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
+    AttributeScope,
     AttributeValueType,
     CatalogAttributeDefinition,
     CatalogAttributeOption,
@@ -178,6 +179,7 @@ def create_attribute_definition(
     name: str,
     value_type: str,
     options_text: str | None,
+    scope: str = AttributeScope.BASE.value,
 ) -> CatalogAttributeDefinition | None:
     component = session.scalar(
         select(CatalogComponent)
@@ -190,8 +192,11 @@ def create_attribute_definition(
     definition = CatalogAttributeDefinition(
         component=component,
         name=name.strip(),
+        scope=AttributeScope(scope),
         value_type=AttributeValueType(value_type),
-        sort_order=(component.attribute_definitions[-1].sort_order + 1) if component.attribute_definitions else 1,
+        sort_order=(_attribute_definitions_for_scope(component, AttributeScope(scope))[-1].sort_order + 1)
+        if _attribute_definitions_for_scope(component, AttributeScope(scope))
+        else 1,
     )
     session.add(definition)
     session.flush()
@@ -209,6 +214,7 @@ def update_attribute_definition(
     name: str,
     value_type: str,
     options_text: str | None,
+    scope: str | None = None,
 ) -> CatalogAttributeDefinition | None:
     definition = session.scalar(
         select(CatalogAttributeDefinition)
@@ -222,6 +228,8 @@ def update_attribute_definition(
         return None
 
     definition.name = name.strip()
+    if scope is not None:
+        definition.scope = AttributeScope(scope)
     definition.value_type = AttributeValueType(value_type)
     _replace_attribute_options(definition, options_text)
     _touch_component(definition.component)
@@ -251,6 +259,7 @@ def replace_component_attributes(
     *,
     component_id: int,
     attributes: list[dict],
+    scope: str = AttributeScope.BASE.value,
 ) -> CatalogComponent | None:
     component = session.scalar(
         select(CatalogComponent)
@@ -260,7 +269,10 @@ def replace_component_attributes(
     if component is None:
         return None
 
-    component.attribute_definitions.clear()
+    target_scope = AttributeScope(scope)
+    for definition in list(component.attribute_definitions):
+        if definition.scope == target_scope:
+            component.attribute_definitions.remove(definition)
     session.flush()
 
     for index, attribute in enumerate(attributes, start=1):
@@ -273,6 +285,7 @@ def replace_component_attributes(
         definition = CatalogAttributeDefinition(
             component=component,
             name=name,
+            scope=target_scope,
             value_type=value_type,
             sort_order=index,
         )
@@ -453,6 +466,8 @@ def _serialize_selected_category(
 
 
 def _serialize_component(component: CatalogComponent) -> dict:
+    base_attributes = [_serialize_attribute_definition(definition) for definition in _attribute_definitions_for_scope(component, AttributeScope.BASE)]
+    usage_attributes = [_serialize_attribute_definition(definition) for definition in _attribute_definitions_for_scope(component, AttributeScope.USAGE)]
     return {
         "id": component.id,
         "category_id": component.category_id,
@@ -463,15 +478,9 @@ def _serialize_component(component: CatalogComponent) -> dict:
         "short_description": component.short_description,
         "installation": component.installation,
         "unit_type": component.unit_type,
-        "attributes": [
-            {
-                "id": definition.id,
-                "name": definition.name,
-                "value_type": definition.value_type.value,
-                "options": [option.value for option in definition.options],
-            }
-            for definition in component.attribute_definitions
-        ],
+        "attributes": base_attributes,
+        "base_attributes": base_attributes,
+        "usage_attributes": usage_attributes,
         "material_rules": [
             {
                 "id": rule.id,
@@ -530,6 +539,23 @@ def _normalize_attribute_option_list(raw_value: str | list[str] | None) -> list[
         pieces = [piece.strip() for piece in chunk.split(",")]
         parts.extend(piece for piece in pieces if piece)
     return parts
+
+
+def _serialize_attribute_definition(definition: CatalogAttributeDefinition) -> dict:
+    return {
+        "id": definition.id,
+        "name": definition.name,
+        "scope": definition.scope.value,
+        "value_type": definition.value_type.value,
+        "options": [option.value for option in definition.options],
+    }
+
+
+def _attribute_definitions_for_scope(
+    component: CatalogComponent,
+    scope: AttributeScope,
+) -> list[CatalogAttributeDefinition]:
+    return [definition for definition in component.attribute_definitions if definition.scope == scope]
 
 
 def _touch_component(component: CatalogComponent) -> None:

@@ -1,5 +1,6 @@
 from .entities import (
     ApprovalStatus,
+    AttributeScope,
     AttributeValueType,
     AuxiliaryMaterial,
     BomCalculationMode,
@@ -50,6 +51,7 @@ from .entities import (
 
 __all__ = [
     "ApprovalStatus",
+    "AttributeScope",
     "AttributeValueType",
     "AuxiliaryMaterial",
     "BomCalculationMode",
