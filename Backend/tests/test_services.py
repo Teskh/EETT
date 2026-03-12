@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Settings
 from app.database import Base, create_engine_for_url
 from app.main import create_app
-from app.models import CatalogCategory, CatalogComponent, Project
+from app.models import CatalogCategory, CatalogComponent, Project, ProjectBomEntry
 from app.seed import seed_demo_data_if_empty
 from app.services.catalog import (
     create_attribute_definition,
@@ -20,7 +20,9 @@ from app.services.catalog import (
     create_component,
     delete_attribute_definition,
     get_catalog_page_data,
+    replace_component_material_rules,
     replace_component_attributes,
+    search_material_candidates,
     update_attribute_definition,
 )
 from app.services.projects import (
@@ -45,13 +47,23 @@ class ServiceLayerTests(unittest.TestCase):
         self.settings = Settings(
             database_url=self.test_database_url,
             seed_demo_data=True,
+            environment="test",
+            allow_trusted_user_header=True,
         )
         self.engine = create_engine_for_url(self.settings.database_url)
         self.session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
         Base.metadata.drop_all(self.engine)
         Base.metadata.create_all(self.engine)
         seed_demo_data_if_empty(self.session_factory)
-        self.app = create_app(Settings(database_url=self.test_database_url, seed_demo_data=False, require_schema=True))
+        self.app = create_app(
+            Settings(
+                database_url=self.test_database_url,
+                seed_demo_data=False,
+                require_schema=True,
+                environment="test",
+                allow_trusted_user_header=True,
+            )
+        )
         self.client = TestClient(self.app)
 
     def tearDown(self) -> None:
@@ -220,6 +232,107 @@ class ServiceLayerTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(get_instance_sync_preview(session, instance.id)["is_outdated"])
+
+    def test_replace_component_material_rules_removes_orphan_bom_rows_for_existing_instances(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Entry Door"))
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+            door_instance = next(
+                instance for instance in project.instances if instance.name == "Door A"
+            ) if project is not None else None
+
+            self.assertIsNotNone(component)
+            self.assertIsNotNone(project)
+            self.assertIsNotNone(door_instance)
+            assert component is not None
+            assert project is not None
+            assert door_instance is not None
+
+            updated_component = replace_component_material_rules(
+                session,
+                component_id=component.id,
+                rules=[
+                    {
+                        "material_name": "Anchor Screw 5x70",
+                        "sku": "MAT-001",
+                        "unit": "ea",
+                        "unit_qty_per_unit": 8,
+                        "notes": "Door still needs fixing hardware.",
+                        "conditions": [],
+                    }
+                ],
+            )
+
+            self.assertIsNotNone(updated_component)
+
+            remaining_bom_rows = session.scalars(
+                select(ProjectBomEntry)
+                .where(ProjectBomEntry.instance_id == door_instance.id)
+                .order_by(ProjectBomEntry.material_id)
+            ).all()
+            self.assertEqual([row.material.sku for row in remaining_bom_rows], ["MAT-001"])
+
+            detail = get_project_view_data(session, project.id)
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            door_section = next(section for section in detail["categories"] if section["name"] == "Doors")
+            door_instance = next(item for item in door_section["instances"] if item["name"] == "Door A")
+            self.assertEqual([material["sku"] for material in door_instance["materials"]], ["MAT-001"])
+
+            catalog_payload = get_catalog_page_data(session, selected_category_id=component.category_id)
+            selected_component = next(
+                item for item in catalog_payload["selected"]["components"] if item["id"] == component.id
+            )
+            self.assertIsNotNone(selected_component["material_rules"][0]["id"])
+            self.assertEqual(selected_component["material_rules"][0]["material_id"], remaining_bom_rows[0].material_id)
+
+    def test_catalog_material_api_supports_search_and_bulk_rule_save(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Sliding Window"))
+            self.assertIsNotNone(component)
+            assert component is not None
+            component_id = component.id
+            category_id = component.category_id
+
+            local_results = search_material_candidates(session, query="MAT-00")
+            self.assertTrue(any(result["sku"] == "MAT-003" for result in local_results))
+
+        search_response = self.client.get(
+            "/api/v1/catalog/materials/search?q=MAT-003",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(search_response.status_code, 200)
+        self.assertTrue(any(result["sku"] == "MAT-003" for result in search_response.json()["results"]))
+
+        replace_response = self.client.put(
+            f"/api/v1/catalog/components/{component_id}/materials",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "rules": [
+                    {
+                        "material_name": "Neutral Cure Silicone",
+                        "sku": "MAT-006",
+                        "unit": "cartridge",
+                        "unit_qty_per_unit": 0.25,
+                        "notes": "Seal perimeter after glazing adjustment.",
+                        "conditions": [],
+                    }
+                ]
+            },
+        )
+        self.assertEqual(replace_response.status_code, 200)
+        self.assertEqual(replace_response.json()["component_id"], component_id)
+
+        catalog_response = self.client.get(
+            f"/api/v1/catalog?category_id={category_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(catalog_response.status_code, 200)
+        selected_component = next(
+            item for item in catalog_response.json()["selected"]["components"] if item["id"] == component_id
+        )
+        self.assertEqual([rule["sku"] for rule in selected_component["material_rules"]], ["MAT-006"])
+        self.assertIsNotNone(selected_component["material_rules"][0]["id"])
 
     def test_catalog_and_project_crud_routes_work(self) -> None:
         create_catalog_component_response = self.client.post(
@@ -548,6 +661,8 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(session_payload["username"], "viewer")
         self.assertIn("viewer", session_payload["roles"])
         self.assertFalse(session_payload["permissions"]["catalog_edit"])
+        self.assertFalse(session_payload["permissions"]["project_create"])
+        self.assertFalse(session_payload["permissions"]["user_admin"])
 
         projects_response = self.client.get("/api/v1/projects", headers={"X-Spec-Sheets-User": "viewer"})
         self.assertEqual(projects_response.status_code, 200)
@@ -555,6 +670,73 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(payload["grouped_projects"]["template"], [])
         execution_names = [project["name"] for project in payload["grouped_projects"]["execution"]]
         self.assertIn("Casa Robles - Block A", execution_names)
+
+    def test_login_logout_and_user_admin_endpoints_require_sysadmin(self) -> None:
+        unauthorized_users = self.client.get("/api/v1/users")
+        self.assertEqual(unauthorized_users.status_code, 401)
+
+        bad_login = self.client.post("/api/v1/login", json={"username": "sysadmin", "password": "wrong"})
+        self.assertEqual(bad_login.status_code, 401)
+
+        login_response = self.client.post("/api/v1/login", json={"username": "sysadmin", "password": "adminpass"})
+        self.assertEqual(login_response.status_code, 200)
+        self.assertTrue(login_response.json()["permissions"]["user_admin"])
+
+        users_response = self.client.get("/api/v1/users")
+        self.assertEqual(users_response.status_code, 200)
+        sysadmin_id = next(user["id"] for user in users_response.json()["users"] if user["username"] == "sysadmin")
+        roles = {role["code"] for role in users_response.json()["roles"]}
+        self.assertEqual(roles, {"admin", "editor", "ot", "viewer"})
+
+        create_user_response = self.client.post(
+            "/api/v1/users",
+            json={
+                "username": "fieldlead",
+                "display_name": "Field Lead",
+                "email": "fieldlead@specsheets.local",
+                "password": "fieldpass",
+                "role_codes": ["viewer"],
+                "is_active": True,
+            },
+        )
+        self.assertEqual(create_user_response.status_code, 200)
+        self.assertEqual(create_user_response.json()["username"], "fieldlead")
+
+        viewer_forbidden = self.client.get("/api/v1/users", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(viewer_forbidden.status_code, 403)
+
+        update_user_response = self.client.put(
+            f"/api/v1/users/{create_user_response.json()['id']}",
+            json={
+                "display_name": "Field Lead Updated",
+                "email": "fieldlead@specsheets.local",
+                "password": "fieldpass2",
+                "role_codes": ["ot"],
+                "is_active": True,
+            },
+        )
+        self.assertEqual(update_user_response.status_code, 200)
+        self.assertEqual(update_user_response.json()["roles"], ["ot"])
+
+        logout_response = self.client.post("/api/v1/logout")
+        self.assertEqual(logout_response.status_code, 204)
+
+        updated_login = self.client.post("/api/v1/login", json={"username": "fieldlead", "password": "fieldpass2"})
+        self.assertEqual(updated_login.status_code, 200)
+        self.assertIn("ot", updated_login.json()["roles"])
+
+        delete_with_non_sysadmin = self.client.delete(f"/api/v1/users/{create_user_response.json()['id']}")
+        self.assertEqual(delete_with_non_sysadmin.status_code, 403)
+
+        self.client.post("/api/v1/logout")
+        relogin_sysadmin = self.client.post("/api/v1/login", json={"username": "sysadmin", "password": "adminpass"})
+        self.assertEqual(relogin_sysadmin.status_code, 200)
+
+        delete_user_response = self.client.delete(f"/api/v1/users/{create_user_response.json()['id']}")
+        self.assertEqual(delete_user_response.status_code, 200)
+
+        delete_reserved_sysadmin = self.client.delete(f"/api/v1/users/{sysadmin_id}")
+        self.assertEqual(delete_reserved_sysadmin.status_code, 422)
 
     def test_sync_preview_and_material_mode_endpoints(self) -> None:
         mode_response = self.client.get("/api/v1/projects/2/material-mode", headers={"X-Spec-Sheets-User": "editor"})

@@ -1,16 +1,23 @@
 import type {
   CatalogAttribute,
+  CatalogMaterialRule,
+  CatalogMaterialSearchResponse,
   CatalogPageData,
+  CreateUserRequest,
   CreateCategoryRequest,
   CreateComponentRequest,
   CreateProjectInstanceRequest,
   CreateProjectRequest,
+  LoginRequest,
+  ManagedUser,
   MutationResult,
   ProjectDetailData,
   ProjectsBoardData,
   SessionUser,
+  UpdateUserRequest,
   UpdateComponentRequest,
   UpdateProjectInstanceRequest,
+  UserDirectory,
 } from "./types";
 
 class ApiError extends Error {
@@ -55,8 +62,39 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 export { ApiError };
 
 export const api = {
+  login(payload: LoginRequest) {
+    return request<SessionUser>("/api/v1/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  logout() {
+    return request<void>("/api/v1/logout", {
+      method: "POST",
+    });
+  },
   getSession() {
     return request<SessionUser>("/api/v1/session");
+  },
+  getUsers() {
+    return request<UserDirectory>("/api/v1/users");
+  },
+  createUser(payload: CreateUserRequest) {
+    return request<ManagedUser>("/api/v1/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateUser(userId: number, payload: UpdateUserRequest) {
+    return request<ManagedUser>(`/api/v1/users/${userId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteUser(userId: number) {
+    return request<MutationResult>(`/api/v1/users/${userId}`, {
+      method: "DELETE",
+    });
   },
   getCatalog(categoryId?: number | null) {
     const query = categoryId ? `?category_id=${categoryId}` : "";
@@ -96,6 +134,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ linked_category_ids: linkedCategoryIds }),
     });
+  },
+  replaceComponentMaterialRules(componentId: number, rules: CatalogMaterialRule[]) {
+    return request<MutationResult>(`/api/v1/catalog/components/${componentId}/materials`, {
+      method: "PUT",
+      body: JSON.stringify({ rules }),
+    });
+  },
+  searchCatalogMaterials(query: string, limit = 12) {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    return request<CatalogMaterialSearchResponse>(`/api/v1/catalog/materials/search?${params.toString()}`);
   },
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");

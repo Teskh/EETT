@@ -53,6 +53,7 @@ from app.models import (
     UserRole,
 )
 from app.models.entities import BomCalculationMode, CategoryScope, utcnow
+from app.services.auth import ROLE_DEFINITIONS, hash_password
 
 
 def init_database(engine, session_factory, seed_demo_data: bool = True) -> None:
@@ -74,23 +75,58 @@ def seed_demo_data_if_empty(session_factory: sessionmaker[Session]) -> None:
 
 
 def seed_demo_dataset(session: Session) -> None:
-    admin_role = Role(code="admin", name="Admin", description="Full access including ERP/admin tooling.")
-    editor_role = Role(code="editor", name="Editor", description="Can edit catalog and projects.")
-    viewer_role = Role(code="viewer", name="Viewer", description="Read-only project and output access.")
-    session.add_all([admin_role, editor_role, viewer_role])
+    roles_by_code = {
+        role_definition.code: Role(
+            code=role_definition.code,
+            name=role_definition.name,
+            description=role_definition.description,
+        )
+        for role_definition in ROLE_DEFINITIONS
+    }
+    session.add_all(list(roles_by_code.values()))
     session.flush()
 
-    admin_user = User(username="admin", display_name="Admin User", email="admin@specsheets.local")
-    editor_user = User(username="editor", display_name="Project Editor", email="editor@specsheets.local")
-    viewer_user = User(username="viewer", display_name="Project Viewer", email="viewer@specsheets.local")
-    session.add_all([admin_user, editor_user, viewer_user])
+    sysadmin_user = User(
+        username="sysadmin",
+        display_name="System Administrator",
+        email="sysadmin@specsheets.local",
+        password_hash=hash_password("adminpass"),
+    )
+    admin_user = User(
+        username="admin",
+        display_name="Admin User",
+        email="admin@specsheets.local",
+        password_hash=hash_password("adminlocalpass"),
+    )
+    editor_user = User(
+        username="editor",
+        display_name="Project Editor",
+        email="editor@specsheets.local",
+        password_hash=hash_password("editorpass"),
+    )
+    ot_user = User(
+        username="ot",
+        display_name="OT User",
+        email="ot@specsheets.local",
+        password_hash=hash_password("otpass"),
+    )
+    viewer_user = User(
+        username="viewer",
+        display_name="Project Viewer",
+        email="viewer@specsheets.local",
+        password_hash=hash_password("viewerpass"),
+    )
+    session.add_all([sysadmin_user, admin_user, editor_user, ot_user, viewer_user])
     session.flush()
 
     session.add_all(
         [
-            UserRole(user=admin_user, role=admin_role),
-            UserRole(user=editor_user, role=editor_role),
-            UserRole(user=viewer_user, role=viewer_role),
+            UserRole(user=sysadmin_user, role=roles_by_code["sysadmin"]),
+            UserRole(user=sysadmin_user, role=roles_by_code["admin"]),
+            UserRole(user=admin_user, role=roles_by_code["admin"]),
+            UserRole(user=editor_user, role=roles_by_code["editor"]),
+            UserRole(user=ot_user, role=roles_by_code["ot"]),
+            UserRole(user=viewer_user, role=roles_by_code["viewer"]),
         ]
     )
 
@@ -598,17 +634,34 @@ def seed_demo_dataset(session: Session) -> None:
 
 
 def backfill_demo_supporting_records(session: Session) -> None:
-    admin_role = ensure_role(session, "admin", "Admin", "Full access including ERP/admin tooling.")
-    editor_role = ensure_role(session, "editor", "Editor", "Can edit catalog and projects.")
-    viewer_role = ensure_role(session, "viewer", "Viewer", "Read-only project and output access.")
+    roles_by_code = {
+        role_definition.code: ensure_role(
+            session,
+            role_definition.code,
+            role_definition.name,
+            role_definition.description,
+        )
+        for role_definition in ROLE_DEFINITIONS
+    }
 
-    admin_user = ensure_user(session, "admin", "Admin User", "admin@specsheets.local")
-    editor_user = ensure_user(session, "editor", "Project Editor", "editor@specsheets.local")
-    viewer_user = ensure_user(session, "viewer", "Project Viewer", "viewer@specsheets.local")
+    sysadmin_user = ensure_user(
+        session,
+        "sysadmin",
+        "System Administrator",
+        "sysadmin@specsheets.local",
+        "adminpass",
+    )
+    admin_user = ensure_user(session, "admin", "Admin User", "admin@specsheets.local", "adminlocalpass")
+    editor_user = ensure_user(session, "editor", "Project Editor", "editor@specsheets.local", "editorpass")
+    ot_user = ensure_user(session, "ot", "OT User", "ot@specsheets.local", "otpass")
+    viewer_user = ensure_user(session, "viewer", "Project Viewer", "viewer@specsheets.local", "viewerpass")
 
-    ensure_user_role(session, admin_user, admin_role)
-    ensure_user_role(session, editor_user, editor_role)
-    ensure_user_role(session, viewer_user, viewer_role)
+    ensure_user_role(session, sysadmin_user, roles_by_code["sysadmin"])
+    ensure_user_role(session, sysadmin_user, roles_by_code["admin"])
+    ensure_user_role(session, admin_user, roles_by_code["admin"])
+    ensure_user_role(session, editor_user, roles_by_code["editor"])
+    ensure_user_role(session, ot_user, roles_by_code["ot"])
+    ensure_user_role(session, viewer_user, roles_by_code["viewer"])
 
     projects = {project.name: project for project in session.scalars(select(Project)).all()}
     instances = {instance.name: instance for instance in session.scalars(select(ProjectInstance)).all()}
@@ -789,12 +842,14 @@ def ensure_role(session: Session, code: str, name: str, description: str) -> Rol
     return role
 
 
-def ensure_user(session: Session, username: str, display_name: str, email: str) -> User:
+def ensure_user(session: Session, username: str, display_name: str, email: str, password: str) -> User:
     user = session.scalar(select(User).where(User.username == username))
     if user is None:
-        user = User(username=username, display_name=display_name, email=email)
+        user = User(username=username, display_name=display_name, email=email, password_hash=hash_password(password))
         session.add(user)
         session.flush()
+    elif not user.password_hash:
+        user.password_hash = hash_password(password)
     return user
 
 

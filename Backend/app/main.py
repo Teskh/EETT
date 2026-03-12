@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.middleware.sessions import SessionMiddleware
 
 from app.api_models import (
     ActivityLogModel,
@@ -18,12 +19,16 @@ from app.api_models import (
     CatalogCategoryLinksUpdateRequest,
     CatalogComponentAttributesReplaceRequest,
     CatalogComponentCreateRequest,
+    CatalogComponentMaterialsReplaceRequest,
     CatalogComponentUpdateRequest,
+    CatalogMaterialSearchResponse,
     CatalogResponse,
     CommentModel,
     DashboardResponse,
     ExportJobModel,
+    LoginRequest,
     MaterialModeResponse,
+    ManagedUserModel,
     MutationResultModel,
     NotificationModel,
     ProjectDetailResponse,
@@ -35,25 +40,33 @@ from app.api_models import (
     PublicProjectSkuResponse,
     SessionUserResponse,
     SyncPreviewResponse,
+    UserCreateRequest,
+    UserDirectoryResponse,
+    UserUpdateRequest,
 )
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
 from app.seed import seed_demo_data_if_empty
 from app.services.auth import (
-    build_permission_payload,
+    authenticate_user,
     get_current_user,
+    resolve_current_user,
+    require_project_create,
     require_catalog_edit,
     require_erp_admin,
     require_project_edit,
     require_project_view,
-    role_codes,
+    require_user_admin,
+    serialize_session_user,
 )
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
 from app.services.catalog import (
     create_attribute_definition,
     delete_attribute_definition,
     delete_component,
+    replace_component_material_rules,
     replace_component_attributes,
+    search_material_candidates,
     update_attribute_definition,
     update_component,
 )
@@ -68,6 +81,7 @@ from app.services.collaboration import (
     request_project_approval,
 )
 from app.services.dashboard import get_project_material_dashboard
+from app.services.erp import erp_search_available, search_erp_material_candidates
 from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
     create_project,
@@ -82,6 +96,7 @@ from app.services.projects import (
     update_project_instance,
 )
 from app.services.public_api import list_project_public_skus, list_public_projects
+from app.services.user_admin import create_user, delete_user, list_users, serialize_role_catalog, serialize_user, update_user
 from app.ui import render_catalog_page, render_home_page, render_project_detail_page, render_projects_page
 
 
@@ -108,6 +123,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=settings.session_secret,
+        session_cookie=settings.session_cookie_name,
+        same_site="lax",
+        https_only=settings.environment == "production",
+    )
 
     static_dir = Path(__file__).resolve().parent / "static"
     frontend_index = static_dir / "app" / "index.html"
@@ -118,10 +140,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield session
 
     def get_actor_user(
+        request: Request,
         session: Session = Depends(get_session),
         x_spec_sheets_user: Annotated[str | None, Header()] = None,
     ):
-        return get_current_user(session, x_spec_sheets_user)
+        return get_current_user(
+            session,
+            session_username=request.session.get("username"),
+            trusted_username=x_spec_sheets_user,
+            allow_trusted_username=request.app.state.settings.allow_trusted_user_header,
+        )
+
+    def get_optional_actor_user(
+        request: Request,
+        session: Session = Depends(get_session),
+        x_spec_sheets_user: Annotated[str | None, Header()] = None,
+    ):
+        return resolve_current_user(
+            session,
+            session_username=request.session.get("username"),
+            trusted_username=x_spec_sheets_user,
+            allow_trusted_username=request.app.state.settings.allow_trusted_user_header,
+        )
 
     def parse_optional_float(raw_value: str | None) -> float | None:
         value = (raw_value or "").strip()
@@ -162,21 +202,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             values[name] = row.value.strip() if row.value is not None else None
         return values
 
-    def serve_frontend_app(fallback_html: str) -> FileResponse | HTMLResponse:
+    def serve_frontend_app(fallback_html: str | None = None) -> FileResponse | HTMLResponse:
         if frontend_index.exists():
             return FileResponse(frontend_index)
-        return HTMLResponse(fallback_html)
+        return HTMLResponse(fallback_html or "")
 
     @app.get("/", response_class=HTMLResponse)
     async def home() -> str:
+        return serve_frontend_app(render_home_page())
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/catalog", response_class=HTMLResponse)
     async def catalog(
         category_id: int | None = None,
         session: Session = Depends(get_session),
-        current_user=Depends(get_actor_user),
+        current_user=Depends(get_optional_actor_user),
     ) -> str:
+        if frontend_index.exists():
+            return serve_frontend_app()
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
         require_catalog_edit(current_user)
         data = get_catalog_page_data(session, selected_category_id=category_id)
         selected = data["selected"]
@@ -370,7 +418,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={category_id}", status_code=303)
 
     @app.get("/projects", response_class=HTMLResponse)
-    async def projects(session: Session = Depends(get_session), current_user=Depends(get_actor_user)) -> str:
+    async def projects(session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+        if frontend_index.exists():
+            return serve_frontend_app()
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
         data = get_projects_page_data(session, user=current_user)
         return serve_frontend_app(render_projects_page(data))
 
@@ -382,13 +434,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        if not build_permission_payload(current_user)["catalog_edit"]:
-            raise HTTPException(status_code=403, detail="Project edit permission required")
+        require_project_create(current_user)
         project = create_project(session, name=name, description=description, status=status, actor_user=current_user)
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)) -> str:
+    async def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+        if frontend_index.exists():
+            return serve_frontend_app()
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -397,6 +452,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return serve_frontend_app(render_project_detail_page(data))
+
+    @app.get("/users", response_class=HTMLResponse)
+    async def user_editor_page() -> str:
+        return serve_frontend_app(render_home_page())
 
     @app.post("/projects/{project_id}/instances")
     async def create_project_instance_route(
@@ -503,14 +562,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
 
+    @app.post("/api/v1/login", response_model=SessionUserResponse)
+    async def login_api(
+        payload: LoginRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        user = authenticate_user(session, payload.username, payload.password)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        request.session.clear()
+        request.session["username"] = user.username
+        return serialize_session_user(user)
+
+    @app.post("/api/v1/logout", status_code=204)
+    async def logout_api(request: Request) -> Response:
+        request.session.clear()
+        return Response(status_code=204)
+
     @app.get("/api/v1/session", response_model=SessionUserResponse)
     async def session_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        return serialize_session_user(current_user)
+
+    @app.get("/api/v1/users", response_model=UserDirectoryResponse)
+    async def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        require_user_admin(current_user)
         return {
-            "username": current_user.username,
-            "display_name": current_user.display_name,
-            "roles": sorted(role_codes(current_user)),
-            "permissions": build_permission_payload(current_user),
+            "users": [serialize_user(user) for user in list_users(session)],
+            "roles": serialize_role_catalog(),
         }
+
+    @app.post("/api/v1/users", response_model=ManagedUserModel)
+    async def create_user_api(
+        payload: UserCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            user = create_user(
+                session,
+                username=payload.username,
+                display_name=payload.display_name,
+                email=payload.email,
+                password=payload.password,
+                role_codes_to_assign=payload.role_codes,
+                is_active=payload.is_active,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return serialize_user(user)
+
+    @app.put("/api/v1/users/{user_id}", response_model=ManagedUserModel)
+    async def update_user_api(
+        user_id: int,
+        payload: UserUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            user = update_user(
+                session,
+                user_id=user_id,
+                display_name=payload.display_name,
+                email=payload.email,
+                password=payload.password,
+                role_codes_to_assign=payload.role_codes,
+                is_active=payload.is_active,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return serialize_user(user)
+
+    @app.delete("/api/v1/users/{user_id}", response_model=MutationResultModel)
+    async def delete_user_api(
+        user_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            deleted = delete_user(session, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"ok": True, "deleted_id": user_id}
 
     @app.get("/api/v1/catalog", response_model=CatalogResponse)
     async def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -608,6 +748,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Catalog component not found")
         return {"ok": True, "category_id": component.category_id, "component_id": component.id}
 
+    @app.put("/api/v1/catalog/components/{component_id}/materials", response_model=MutationResultModel)
+    async def replace_catalog_component_materials_v1(
+        component_id: int,
+        payload: CatalogComponentMaterialsReplaceRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        component = replace_component_material_rules(
+            session,
+            component_id=component_id,
+            rules=[rule.model_dump() for rule in payload.rules],
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return {"ok": True, "category_id": component.category_id, "component_id": component.id}
+
     @app.put("/api/v1/catalog/categories/{category_id}/links", response_model=MutationResultModel)
     async def update_catalog_category_links_v1(
         category_id: int,
@@ -619,6 +776,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         update_category_links(session, category_id=category_id, linked_category_ids=payload.linked_category_ids)
         return {"ok": True, "category_id": category_id, "linked_category_ids": payload.linked_category_ids}
 
+    @app.get("/api/v1/catalog/materials/search", response_model=CatalogMaterialSearchResponse)
+    async def search_catalog_materials_v1(
+        request: Request,
+        q: str,
+        limit: int = 12,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        capped_limit = max(1, min(limit, 20))
+        local_results = search_material_candidates(session, query=q, limit=capped_limit)
+        settings: Settings = request.app.state.settings
+        live_results = search_erp_material_candidates(q, settings, limit=capped_limit)
+
+        merged: list[dict[str, Any]] = []
+        merged_by_sku: dict[str, dict[str, Any]] = {}
+        for result in local_results:
+            merged.append(result)
+            merged_by_sku[result["sku"]] = result
+        for result in live_results:
+            existing = merged_by_sku.get(result["sku"])
+            if existing is not None:
+                existing["has_erp_data"] = True
+                if not existing.get("unit"):
+                    existing["unit"] = result.get("unit")
+                if not existing.get("name"):
+                    existing["name"] = result.get("name")
+                continue
+            merged.append(result)
+            merged_by_sku[result["sku"]] = result
+
+        return {
+            "results": merged[:capped_limit],
+            "live_erp_available": erp_search_available(settings),
+        }
+
     @app.get("/api/v1/projects", response_model=ProjectsBoardResponse)
     async def projects_v1(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return get_projects_page_data(session, user=current_user)
@@ -629,8 +822,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        if not build_permission_payload(current_user)["catalog_edit"]:
-            raise HTTPException(status_code=403, detail="Project edit permission required")
+        require_project_create(current_user)
         project = create_project(
             session,
             name=payload.name,

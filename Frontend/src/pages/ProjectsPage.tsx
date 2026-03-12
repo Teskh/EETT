@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
-import type { CreateProjectRequest, ProjectsBoardData } from "../lib/types";
+import type { CreateProjectRequest, ProjectsBoardData, SessionUser } from "../lib/types";
 
 type ProjectsPageProps = {
   onNavigate: (to: string) => void;
+  currentUser: SessionUser;
 };
 
 const orderedStatuses = ["template", "execution", "finished"];
@@ -21,7 +22,7 @@ const initialProjectForm: CreateProjectRequest = {
   status: "template",
 };
 
-export function ProjectsPage({ onNavigate }: ProjectsPageProps) {
+export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [data, setData] = useState<ProjectsBoardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,43 +69,54 @@ export function ProjectsPage({ onNavigate }: ProjectsPageProps) {
   return (
     <div className="max-w-[1600px] mx-auto flex flex-col gap-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <form className="liquid-glass rounded-2xl p-6 flex flex-col gap-4" onSubmit={handleCreateProject}>
-          <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest flex items-center gap-2">
-            <i className="ph-bold ph-folder-plus text-zinc-500 dark:text-zinc-400" /> Create Project
-          </h2>
-          <div className="space-y-3">
-            <input
-              value={form.name}
-              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-              required
-              placeholder="Project Name"
-              className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
-            />
-            <select
-              value={form.status}
-              onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
-              className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+        {currentUser.permissions.project_create ? (
+          <form className="liquid-glass rounded-2xl p-6 flex flex-col gap-4" onSubmit={handleCreateProject}>
+            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest flex items-center gap-2">
+              <i className="ph-bold ph-folder-plus text-zinc-500 dark:text-zinc-400" /> Create Project
+            </h2>
+            <div className="space-y-3">
+              <input
+                value={form.name}
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                required
+                placeholder="Project Name"
+                className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
+              />
+              <select
+                value={form.status}
+                onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
+                className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+              >
+                <option value="template">Project Template</option>
+                <option value="execution">Execution Project</option>
+                <option value="finished">Finished Project</option>
+              </select>
+              <textarea
+                value={form.description || ""}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+                rows={2}
+                placeholder="Description"
+                className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-2 px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-all flex justify-center items-center gap-2"
             >
-              <option value="template">Project Template</option>
-              <option value="execution">Execution Project</option>
-              <option value="finished">Finished Project</option>
-            </select>
-            <textarea
-              value={form.description || ""}
-              onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-              rows={2}
-              placeholder="Description"
-              className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
-            />
+              <i className="ph-bold ph-plus" /> {saving ? "Creating..." : "Create Project"}
+            </button>
+          </form>
+        ) : (
+          <div className="liquid-glass rounded-2xl p-6 flex flex-col gap-3 justify-center">
+            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest flex items-center gap-2">
+              <i className="ph-bold ph-lock text-zinc-500 dark:text-zinc-400" /> Create Project
+            </h2>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Your current role can browse projects, but project creation stays limited to editor-level users.
+            </p>
           </div>
-          <button
-            type="submit"
-            disabled={saving}
-            className="mt-2 px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-all flex justify-center items-center gap-2"
-          >
-            <i className="ph-bold ph-plus" /> {saving ? "Creating..." : "Create Project"}
-          </button>
-        </form>
+        )}
 
         <div className="md:col-span-2 liquid-glass rounded-2xl p-8 flex flex-col justify-center relative overflow-hidden group">
           

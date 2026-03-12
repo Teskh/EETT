@@ -8,10 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 class PermissionSet(BaseModel):
     catalog_edit: bool
     erp_admin: bool
+    project_create: bool
     project_edit: bool
     project_view: bool
     project_change_status: bool
     project_delete: bool
+    cost_model_export: bool
+    user_admin: bool
 
 
 class SessionUserResponse(BaseModel):
@@ -19,6 +22,50 @@ class SessionUserResponse(BaseModel):
     display_name: str
     roles: list[str]
     permissions: PermissionSet
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RoleOptionModel(BaseModel):
+    code: str
+    name: str
+    description: str
+    assignable: bool
+
+
+class ManagedUserModel(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    email: str
+    is_active: bool
+    roles: list[str]
+    created_at: str
+
+
+class UserDirectoryResponse(BaseModel):
+    users: list[ManagedUserModel]
+    roles: list[RoleOptionModel]
+
+
+class UserCreateRequest(BaseModel):
+    username: str
+    display_name: str
+    email: str
+    password: str
+    role_codes: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class UserUpdateRequest(BaseModel):
+    display_name: str
+    email: str
+    password: str | None = None
+    role_codes: list[str] = Field(default_factory=list)
+    is_active: bool = True
 
 
 class MutationResultModel(BaseModel):
@@ -71,6 +118,47 @@ class CatalogComponentAttributesReplaceRequest(BaseModel):
 
 class CatalogCategoryLinksUpdateRequest(BaseModel):
     linked_category_ids: list[int] = Field(default_factory=list)
+
+
+class CatalogMaterialClausePayloadModel(BaseModel):
+    attribute_name: str
+    operator: str
+    comparison_value: str | None = None
+    comparison_value_secondary: str | None = None
+
+
+class CatalogMaterialConditionGroupPayloadModel(BaseModel):
+    group: str
+    clauses: list[CatalogMaterialClausePayloadModel] = Field(default_factory=list)
+
+
+class CatalogMaterialRulePayloadModel(BaseModel):
+    id: int | None = None
+    material_id: int | None = None
+    material_name: str
+    sku: str
+    unit: str | None = None
+    unit_qty_per_unit: float | None = None
+    notes: str | None = None
+    conditions: list[CatalogMaterialConditionGroupPayloadModel] = Field(default_factory=list)
+
+
+class CatalogComponentMaterialsReplaceRequest(BaseModel):
+    rules: list[CatalogMaterialRulePayloadModel] = Field(default_factory=list)
+
+
+class CatalogMaterialSearchResultModel(BaseModel):
+    material_id: int | None = None
+    sku: str
+    name: str
+    unit: str | None = None
+    source: str
+    has_erp_data: bool = False
+
+
+class CatalogMaterialSearchResponse(BaseModel):
+    results: list[CatalogMaterialSearchResultModel] = Field(default_factory=list)
+    live_erp_available: bool
 
 
 class ProjectCreateRequest(BaseModel):

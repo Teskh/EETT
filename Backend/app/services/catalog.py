@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -13,8 +13,12 @@ from app.models import (
     CatalogCategoryLink,
     CatalogComponent,
     ComponentMaterialRule,
+    ErpMaterialCache,
     Material,
+    MaterialRuleCondition,
     MaterialRuleGroup,
+    ProjectInstance,
+    ProjectInstanceAttributeGroup,
 )
 from app.models.entities import CategoryScope, ComponentType, utcnow
 
@@ -282,6 +286,116 @@ def replace_component_attributes(
     return component
 
 
+def replace_component_material_rules(
+    session: Session,
+    *,
+    component_id: int,
+    rules: list[dict],
+) -> CatalogComponent | None:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id)
+        .options(
+            selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.condition_groups)
+            .selectinload(MaterialRuleGroup.conditions),
+            selectinload(CatalogComponent.instances)
+            .selectinload(ProjectInstance.attribute_groups)
+            .selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(CatalogComponent.instances).selectinload(ProjectInstance.bom_entries),
+        )
+    )
+    if component is None:
+        return None
+
+    component.material_rules.clear()
+    session.flush()
+
+    for index, rule_data in enumerate(rules, start=1):
+        sku = (rule_data.get("sku") or "").strip().upper()
+        material_name = (rule_data.get("material_name") or "").strip()
+        if not sku or not material_name:
+            continue
+
+        material_unit = (rule_data.get("unit") or "").strip() or None
+        material = _resolve_material(
+            session,
+            material_id=rule_data.get("material_id"),
+            sku=sku,
+            material_name=material_name,
+            unit=material_unit,
+        )
+
+        material_rule = ComponentMaterialRule(
+            component=component,
+            material=material,
+            display_order=index * 10,
+            unit=None,
+            unit_qty_per_unit=rule_data.get("unit_qty_per_unit"),
+            notes=(rule_data.get("notes") or "").strip() or None,
+        )
+        session.add(material_rule)
+        session.flush()
+
+        for group_index, group_data in enumerate(rule_data.get("conditions") or [], start=1):
+            clauses = _normalize_material_clauses(group_data.get("clauses") or [])
+            if not clauses:
+                continue
+
+            group_key = (group_data.get("group") or "").strip() or f"group-{group_index}"
+            condition_group = MaterialRuleGroup(rule=material_rule, group_key=group_key)
+            session.add(condition_group)
+            session.flush()
+
+            for clause in clauses:
+                session.add(
+                    MaterialRuleCondition(
+                        group=condition_group,
+                        attribute_name=clause["attribute_name"],
+                        operator=clause["operator"],
+                        comparison_value=clause["comparison_value"],
+                        comparison_value_secondary=clause["comparison_value_secondary"],
+                    )
+                )
+
+    _remove_orphan_bom_entries(component)
+    _touch_component(component)
+    session.commit()
+    session.refresh(component)
+    return component
+
+
+def search_material_candidates(session: Session, *, query: str, limit: int = 12) -> list[dict]:
+    normalized = query.strip()
+    if len(normalized) < 2:
+        return []
+
+    pattern = f"%{normalized}%"
+    materials = session.scalars(
+        select(Material)
+        .where(or_(Material.sku.ilike(pattern), Material.name.ilike(pattern)))
+        .order_by(Material.sku, Material.name)
+        .limit(limit)
+    ).all()
+
+    material_ids = [material.id for material in materials]
+    cached_ids = set(
+        session.scalars(select(ErpMaterialCache.material_id).where(ErpMaterialCache.material_id.in_(material_ids))).all()
+    )
+
+    return [
+        {
+            "material_id": material.id,
+            "sku": material.sku,
+            "name": material.name,
+            "unit": material.unit,
+            "source": "catalog",
+            "has_erp_data": material.id in cached_ids,
+        }
+        for material in materials
+    ]
+
+
 def update_category_links(session: Session, *, category_id: int, linked_category_ids: list[int]) -> None:
     current_links = session.scalars(
         select(CatalogCategoryLink).where(CatalogCategoryLink.category_id == category_id)
@@ -360,6 +474,8 @@ def _serialize_component(component: CatalogComponent) -> dict:
         ],
         "material_rules": [
             {
+                "id": rule.id,
+                "material_id": rule.material_id,
                 "material_name": rule.material.name,
                 "sku": rule.material.sku,
                 "unit": rule.unit or rule.material.unit,
@@ -418,3 +534,112 @@ def _normalize_attribute_option_list(raw_value: str | list[str] | None) -> list[
 
 def _touch_component(component: CatalogComponent) -> None:
     component.updated_at = utcnow()
+
+
+def _resolve_material(
+    session: Session,
+    *,
+    material_id: int | None,
+    sku: str,
+    material_name: str,
+    unit: str | None,
+) -> Material:
+    material = None
+    if material_id is not None:
+        material = session.get(Material, material_id)
+
+    existing_by_sku = session.scalar(select(Material).where(Material.sku == sku))
+    if existing_by_sku is not None:
+        material = existing_by_sku
+
+    if material is None:
+        material = Material(sku=sku, name=material_name, unit=unit)
+        session.add(material)
+        session.flush()
+        return material
+
+    material.sku = sku
+    material.name = material_name
+    material.unit = unit
+    return material
+
+
+def _normalize_material_clauses(raw_clauses: list[dict]) -> list[dict]:
+    normalized = []
+    for clause in raw_clauses:
+        attribute_name = (clause.get("attribute_name") or "").strip()
+        operator = (clause.get("operator") or "").strip().upper()
+        comparison_value = (clause.get("comparison_value") or "").strip() or None
+        comparison_value_secondary = (clause.get("comparison_value_secondary") or "").strip() or None
+        if not attribute_name or not operator:
+            continue
+        if operator != "IS NOT NULL" and comparison_value is None:
+            continue
+        if operator == "BETWEEN" and comparison_value_secondary is None:
+            continue
+        normalized.append(
+            {
+                "attribute_name": attribute_name,
+                "operator": operator,
+                "comparison_value": comparison_value,
+                "comparison_value_secondary": comparison_value_secondary,
+            }
+        )
+    return normalized
+
+
+def _remove_orphan_bom_entries(component: CatalogComponent) -> None:
+    rules = sorted(component.material_rules, key=lambda item: item.display_order)
+    for instance in component.instances:
+        attribute_values: dict[str, str | None] = {}
+        for group in instance.attribute_groups:
+            for value in group.attribute_values:
+                attribute_values[value.attribute_name] = value.value
+
+        applicable_material_ids = {
+            rule.material_id
+            for rule in rules
+            if _rule_applies(rule, attribute_values)
+        }
+        for bom_entry in list(instance.bom_entries):
+            if bom_entry.material_id not in applicable_material_ids:
+                instance.bom_entries.remove(bom_entry)
+
+
+def _rule_applies(rule: ComponentMaterialRule, attribute_values: dict[str, str | None]) -> bool:
+    if not rule.condition_groups:
+        return True
+    return any(_group_matches(group, attribute_values) for group in rule.condition_groups)
+
+
+def _group_matches(group: MaterialRuleGroup, attribute_values: dict[str, str | None]) -> bool:
+    return all(_condition_matches(condition, attribute_values) for condition in group.conditions)
+
+
+def _condition_matches(condition: MaterialRuleCondition, attribute_values: dict[str, str | None]) -> bool:
+    raw_value = attribute_values.get(condition.attribute_name)
+    operator = condition.operator.upper()
+
+    if operator == "IS NOT NULL":
+        return raw_value not in (None, "")
+    if raw_value in (None, ""):
+        return False
+    if operator == "=":
+        return raw_value == condition.comparison_value
+    if operator == ">":
+        return _to_float(raw_value) > _to_float(condition.comparison_value)
+    if operator == "<":
+        return _to_float(raw_value) < _to_float(condition.comparison_value)
+    if operator == "IN":
+        options = [value.strip() for value in (condition.comparison_value or "").split(",") if value.strip()]
+        return raw_value in options
+    if operator == "BETWEEN":
+        candidate = _to_float(raw_value)
+        return _to_float(condition.comparison_value) <= candidate <= _to_float(condition.comparison_value_secondary)
+    return False
+
+
+def _to_float(value: str | float | None) -> float:
+    if value is None:
+        return 0.0
+    return float(value)

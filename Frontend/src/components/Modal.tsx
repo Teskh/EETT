@@ -5,9 +5,10 @@ type ModalProps = PropsWithChildren<{
   title: string;
   kicker: string;
   onClose: () => void;
+  panelClassName?: string;
 }>;
 
-export function Modal({ open, title, kicker, onClose, children }: ModalProps) {
+export function Modal({ open, title, kicker, onClose, panelClassName, children }: ModalProps) {
   useEffect(() => {
     if (!open) {
       return;
@@ -39,7 +40,7 @@ export function Modal({ open, title, kicker, onClose, children }: ModalProps) {
         onClick={onClose} 
         aria-label="Close modal" 
       />
-      <section className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-2xl p-6 z-10">
+      <section className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-2xl p-6 z-10 ${panelClassName || ""}`}>
         <div className="flex items-start justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-6">
           <div>
             <p className="text-[10px] font-bold text-accent-600 dark:text-accent-500 uppercase tracking-widest mb-1 flex items-center gap-2">

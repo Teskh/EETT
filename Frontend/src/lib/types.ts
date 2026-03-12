@@ -1,10 +1,13 @@
 export type PermissionSet = {
   catalog_edit: boolean;
   erp_admin: boolean;
+  project_create: boolean;
   project_edit: boolean;
   project_view: boolean;
   project_change_status: boolean;
   project_delete: boolean;
+  cost_model_export: boolean;
+  user_admin: boolean;
 };
 
 export type SessionUser = {
@@ -12,6 +15,50 @@ export type SessionUser = {
   display_name: string;
   roles: string[];
   permissions: PermissionSet;
+};
+
+export type LoginRequest = {
+  username: string;
+  password: string;
+};
+
+export type RoleOption = {
+  code: string;
+  name: string;
+  description: string;
+  assignable: boolean;
+};
+
+export type ManagedUser = {
+  id: number;
+  username: string;
+  display_name: string;
+  email: string;
+  is_active: boolean;
+  roles: string[];
+  created_at: string;
+};
+
+export type UserDirectory = {
+  users: ManagedUser[];
+  roles: RoleOption[];
+};
+
+export type CreateUserRequest = {
+  username: string;
+  display_name: string;
+  email: string;
+  password: string;
+  role_codes: string[];
+  is_active: boolean;
+};
+
+export type UpdateUserRequest = {
+  display_name: string;
+  email: string;
+  password?: string | null;
+  role_codes: string[];
+  is_active: boolean;
 };
 
 export type CatalogTreeNode = {
@@ -42,12 +89,28 @@ export type MaterialConditionGroup = {
 };
 
 export type CatalogMaterialRule = {
+  id?: number;
+  material_id?: number | null;
   material_name: string;
   sku: string;
   unit: string | null;
   unit_qty_per_unit: number | null;
   notes: string | null;
   conditions: MaterialConditionGroup[];
+};
+
+export type CatalogMaterialSearchResult = {
+  material_id: number | null;
+  sku: string;
+  name: string;
+  unit: string | null;
+  source: string;
+  has_erp_data: boolean;
+};
+
+export type CatalogMaterialSearchResponse = {
+  results: CatalogMaterialSearchResult[];
+  live_erp_available: boolean;
 };
 
 export type CatalogComponent = {

@@ -1,22 +1,31 @@
 import { useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
-import { HomePage } from "./pages/HomePage";
+import { ApiError, api } from "./lib/api";
+import type { SessionUser } from "./lib/types";
 import { CatalogPage } from "./pages/CatalogPage";
+import { HomePage } from "./pages/HomePage";
+import { LoginPage } from "./pages/LoginPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { UsersPage } from "./pages/UsersPage";
 
 type Route =
   | { name: "home" }
+  | { name: "login" }
   | { name: "catalog"; categoryId: number | null }
   | { name: "projects" }
   | { name: "project-detail"; projectId: number }
+  | { name: "users" }
   | { name: "not-found" };
 
 function parseCurrentRoute(): Route {
   const { pathname, search } = window.location;
   if (pathname === "/") {
     return { name: "home" };
+  }
+  if (pathname === "/login") {
+    return { name: "login" };
   }
   if (pathname === "/catalog") {
     const params = new URLSearchParams(search);
@@ -26,6 +35,9 @@ function parseCurrentRoute(): Route {
   if (pathname === "/projects") {
     return { name: "projects" };
   }
+  if (pathname === "/users") {
+    return { name: "users" };
+  }
   const projectMatch = pathname.match(/^\/projects\/(\d+)$/);
   if (projectMatch) {
     return { name: "project-detail", projectId: Number(projectMatch[1]) };
@@ -33,8 +45,20 @@ function parseCurrentRoute(): Route {
   return { name: "not-found" };
 }
 
+function currentPath() {
+  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+}
+
+function AccessDenied({ message }: { message: string }) {
+  return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">{message}</div>;
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseCurrentRoute());
+  const [session, setSession] = useState<SessionUser | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   useEffect(() => {
     const handlePopstate = () => {
@@ -53,54 +77,140 @@ export function App() {
     setRoute(parseCurrentRoute());
   }
 
+  async function loadSession() {
+    setSessionLoading(true);
+    try {
+      setSession(await api.getSession());
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setSession(null);
+      } else {
+        setAuthError(err instanceof ApiError ? err.message : "Could not load session.");
+      }
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadSession();
+  }, []);
+
   useEffect(() => {
     if (route.name === "home") {
       document.title = "Launcher | Spec Sheets";
+    } else if (route.name === "login") {
+      document.title = "Login | Spec Sheets";
     } else if (route.name === "catalog") {
       document.title = "Database Editor | Spec Sheets";
     } else if (route.name === "projects") {
       document.title = "Projects | Spec Sheets";
     } else if (route.name === "project-detail") {
       document.title = "Project | Spec Sheets";
+    } else if (route.name === "users") {
+      document.title = "User Editor | Spec Sheets";
     } else {
       document.title = "Spec Sheets";
     }
   }, [route]);
 
+  useEffect(() => {
+    if (session && route.name === "login") {
+      navigate("/", true);
+    }
+  }, [route, session]);
+
+  async function handleLogin(username: string, password: string) {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const user = await api.login({ username, password });
+      setSession(user);
+      const nextPath = route.name === "login" ? "/" : currentPath();
+      navigate(nextPath === "/login" ? "/" : nextPath, true);
+    } catch (err) {
+      setAuthError(err instanceof ApiError ? err.message : "Could not sign in.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      await api.logout();
+      setSession(null);
+      navigate("/login", true);
+    } catch (err) {
+      setAuthError(err instanceof ApiError ? err.message : "Could not sign out.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  if (sessionLoading) {
+    return <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-500 flex items-center justify-center">Loading session...</div>;
+  }
+
+  if (!session) {
+    return <LoginPage onLogin={handleLogin} loading={authLoading} error={authError} />;
+  }
+
+  if (route.name === "login") {
+    return null;
+  }
+
   if (route.name === "home") {
     return (
-      <AppShell title="Launcher" activeNav="home" onNavigate={navigate}>
-        <HomePage onNavigate={navigate} />
+      <AppShell title="Launcher" activeNav="home" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <HomePage onNavigate={navigate} currentUser={session} />
       </AppShell>
     );
   }
 
   if (route.name === "projects") {
     return (
-      <AppShell title="Projects" activeNav="projects" onNavigate={navigate}>
-        <ProjectsPage onNavigate={navigate} />
+      <AppShell title="Projects" activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <ProjectsPage onNavigate={navigate} currentUser={session} />
       </AppShell>
     );
   }
 
   if (route.name === "catalog") {
     return (
-      <AppShell title="Database Editor" activeNav="catalog" onNavigate={navigate}>
-        <CatalogPage categoryId={route.categoryId} onNavigate={navigate} />
+      <AppShell title="Database Editor" activeNav="catalog" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        {session.permissions.catalog_edit ? (
+          <CatalogPage categoryId={route.categoryId} onNavigate={navigate} />
+        ) : (
+          <AccessDenied message="This role cannot open the catalog editor." />
+        )}
       </AppShell>
     );
   }
 
   if (route.name === "project-detail") {
     return (
-      <AppShell title={`Project ${route.projectId}`} activeNav="projects" onNavigate={navigate}>
+      <AppShell title={`Project ${route.projectId}`} activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
         <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} />
       </AppShell>
     );
   }
 
+  if (route.name === "users") {
+    return (
+      <AppShell title="User Editor" activeNav="users" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        {session.permissions.user_admin ? (
+          <UsersPage currentUsername={session.username} />
+        ) : (
+          <AccessDenied message="Only the reserved sysadmin account can access the user editor." />
+        )}
+      </AppShell>
+    );
+  }
+
   return (
-    <AppShell title="Spec Sheets" activeNav="home" onNavigate={navigate}>
+    <AppShell title="Spec Sheets" activeNav="home" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
       <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">This route is not implemented yet.</div>
     </AppShell>
   );

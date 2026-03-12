@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { CatalogAttributeEditor } from "../components/CatalogAttributeEditor";
+import { CatalogMaterialRuleEditor } from "../components/CatalogMaterialRuleEditor";
 import { ApiError, api } from "../lib/api";
 import type {
   CatalogAttribute,
@@ -141,6 +142,8 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [attributeSaving, setAttributeSaving] = useState(false);
+  const [materialSaving, setMaterialSaving] = useState(false);
+  const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
   const [form, setForm] = useState<UpdateComponentRequest>({
     name: component.name,
     short_name: component.short_name || "",
@@ -195,6 +198,16 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
       await onRefresh();
     } finally {
       setAttributeSaving(false);
+    }
+  }
+
+  async function handleSaveMaterialRules(rules: CatalogMaterialRule[]) {
+    setMaterialSaving(true);
+    try {
+      await api.replaceComponentMaterialRules(component.id, rules);
+      await onRefresh();
+    } finally {
+      setMaterialSaving(false);
     }
   }
 
@@ -319,9 +332,19 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
           </div>
 
           <div>
-            <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-              <i className="ph-bold ph-boxes text-zinc-600" /> Material Rules
-            </h6>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                <i className="ph-bold ph-boxes text-zinc-600" /> Material Rules
+              </h6>
+              <button
+                type="button"
+                onClick={() => setMaterialEditorOpen(true)}
+                className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 rounded text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2"
+              >
+                <i className="ph-bold ph-sliders-horizontal" />
+                Manage materials
+              </button>
+            </div>
             <table className="w-full text-left border-collapse text-sm border border-black/10 dark:border-white/10 rounded overflow-hidden">
               <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
                 <tr>
@@ -360,6 +383,15 @@ function ComponentCard({ component, onRefresh }: ComponentCardProps) {
               </tbody>
             </table>
           </div>
+
+          <CatalogMaterialRuleEditor
+            component={component}
+            open={materialEditorOpen}
+            saving={materialSaving}
+            onClose={() => setMaterialEditorOpen(false)}
+            onSave={handleSaveMaterialRules}
+            onSearch={(query) => api.searchCatalogMaterials(query)}
+          />
         </div>
       ) : null}
     </div>
