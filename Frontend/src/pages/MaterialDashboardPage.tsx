@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useDeferredValue, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
@@ -410,6 +410,7 @@ function MovementHistoryCard({
   const [selection, setSelection] = useState<ChartSelection | null>(null);
   const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
   const [dragCurrentIndex, setDragCurrentIndex] = useState<number | null>(null);
+  const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
   const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
 
@@ -417,6 +418,7 @@ function MovementHistoryCard({
     setSelection(null);
     setDragAnchorIndex(null);
     setDragCurrentIndex(null);
+    setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
   }, [selected?.sku, history?.generated_at, detail?.stock_on_hand]);
 
@@ -447,6 +449,7 @@ function MovementHistoryCard({
   const selectionBounds = activeSelection ? getSelectionBounds(activeSelection) : null;
   const selectionStart = selectionBounds && chart ? chart.points[selectionBounds.startIndex] : null;
   const selectionEnd = selectionBounds && chart ? chart.points[selectionBounds.endIndex] : null;
+  const hoveredPoint = chart && hoveredPointIndex !== null ? chart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
   const isBlockingLoad = (!detail && detailLoading) || (!history && historyLoading);
   const isRefreshing = detailRefreshing || historyRefreshing;
@@ -481,17 +484,19 @@ function MovementHistoryCard({
     if (pointIndex === null) {
       return;
     }
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragAnchorIndex(pointIndex);
     setDragCurrentIndex(pointIndex);
+    setHoveredPointIndex(pointIndex);
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
-    if (dragAnchorIndex === null) {
-      return;
-    }
     const pointIndex = getPointIndexFromEvent(event);
-    if (pointIndex === null) {
+    if (pointIndex !== null) {
+      setHoveredPointIndex(pointIndex);
+    }
+    if (dragAnchorIndex === null || pointIndex === null) {
       return;
     }
     setDragCurrentIndex(pointIndex);
@@ -505,6 +510,7 @@ function MovementHistoryCard({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setHoveredPointIndex(pointIndex);
     if (pointIndex !== null && pointIndex !== dragAnchorIndex) {
       setSelection({ startIndex: dragAnchorIndex, endIndex: pointIndex });
     }
@@ -518,6 +524,14 @@ function MovementHistoryCard({
     }
     setDragAnchorIndex(null);
     setDragCurrentIndex(null);
+    setHoveredPointIndex(null);
+  }
+
+  function handlePointerLeave() {
+    if (dragAnchorIndex !== null) {
+      return;
+    }
+    setHoveredPointIndex(null);
   }
 
   return (
@@ -576,11 +590,14 @@ function MovementHistoryCard({
             ) : history && chart ? (
               <svg
                 viewBox={`0 0 ${chart.width} ${chart.height}`}
-                className="w-full h-full max-h-[400px] overflow-visible cursor-crosshair touch-none"
+                className="w-full h-full max-h-[400px] overflow-visible cursor-crosshair touch-none select-none"
+                focusable="false"
+                style={{ userSelect: "none", WebkitUserSelect: "none" }}
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerCancel}
+                onPointerLeave={handlePointerLeave}
               >
                 <defs>
                   {selectionStart && selectionEnd ? (
@@ -606,7 +623,7 @@ function MovementHistoryCard({
                         stroke="rgba(113,113,122,0.18)"
                         strokeDasharray="4 6"
                       />
-                      <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                      <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
                         {formatNumber(chart.maxValue * stop)}
                       </text>
                     </g>
@@ -656,10 +673,11 @@ function MovementHistoryCard({
                     key={`base-${point.date}`}
                     cx={point.x}
                     cy={point.y}
-                    r={2.5}
+                    r={hoveredPoint?.index === point.index ? 5 : 2.5}
                     fill="rgb(245 158 11)"
                     opacity={selectionBounds ? 0.25 : 1}
                     className="transition-opacity duration-300"
+                    pointerEvents="none"
                   />
                 ))}
 
@@ -681,21 +699,63 @@ function MovementHistoryCard({
                           key={`hi-${point.date}`}
                           cx={point.x}
                           cy={point.y}
-                          r={4.5}
+                          r={hoveredPoint?.index === point.index ? 5.5 : 4.5}
                           fill="rgb(245 158 11)"
                           stroke="rgb(255 255 255)"
                           strokeWidth="1.5"
                           className="dark:stroke-zinc-900"
+                          pointerEvents="none"
                         />
                       );
                     })}
                   </g>
                 ) : null}
 
-                <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
+                {hoveredPoint ? (
+                  <g pointerEvents="none">
+                    <line
+                      x1={hoveredPoint.x}
+                      y1={chart.padding.top}
+                      x2={hoveredPoint.x}
+                      y2={chart.padding.top + chart.plotHeight}
+                      stroke="rgba(245, 158, 11, 0.35)"
+                      strokeDasharray="4 4"
+                    />
+                    <circle
+                      cx={hoveredPoint.x}
+                      cy={hoveredPoint.y}
+                      r={6}
+                      fill="rgb(245 158 11)"
+                      stroke="rgb(255 255 255)"
+                      strokeWidth="2"
+                      className="dark:stroke-zinc-900"
+                    />
+                    <g
+                      transform={`translate(${clamp(hoveredPoint.x - 68, chart.padding.left, chart.width - chart.padding.right - 136)}, ${
+                        hoveredPoint.y < chart.padding.top + 56 ? hoveredPoint.y + 14 : hoveredPoint.y - 54
+                      })`}
+                    >
+                      <rect
+                        width="136"
+                        height="42"
+                        rx="10"
+                        fill="rgba(24, 24, 27, 0.92)"
+                        className="dark:fill-zinc-950/95"
+                      />
+                      <text x="12" y="17" fontSize="11" fill="white" opacity="0.9">
+                        {formatDate(hoveredPoint.date)}
+                      </text>
+                      <text x="12" y="31" fontSize="12" fill="white" fontWeight="700">
+                        Stock: {formatNumber(hoveredPoint.value)}
+                      </text>
+                    </g>
+                  </g>
+                ) : null}
+
+                <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
                   {formatDate(chart.points[0]?.date)}
                 </text>
-                <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
                   {formatDate(chart.points[chart.points.length - 1]?.date)}
                 </text>
               </svg>
@@ -1124,10 +1184,7 @@ export function MaterialDashboardPage() {
                 <div className="relative">
                   <input
                     value={materialSearch}
-                    onChange={(event) => {
-                      const nextValue = event.target.value;
-                      startTransition(() => setMaterialSearch(nextValue));
-                    }}
+                    onChange={(event) => setMaterialSearch(event.target.value)}
                     className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
                     placeholder="SKU or material name"
                   />
