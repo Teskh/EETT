@@ -1143,6 +1143,73 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertTrue(all("project" in group for group in history.json()))
         self.assertTrue(all(group["project"]["status"] == "execution" for group in history.json()))
 
+    def test_material_changes_within_a_minute_are_collapsed_into_one_summary_group(self) -> None:
+        detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail.status_code, 200)
+        windows = next(section for section in detail.json()["categories"] if section["name"] == "Windows")
+        instance = windows["instances"][0]
+        material = instance["materials"][0]
+
+        first_row = material["bom_entries"][0]
+        first_update = self.client.put(
+            f"/api/v1/projects/2/instances/{instance['id']}/materials/{material['rule_id']}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": material["mode"],
+                "entries": [
+                    {
+                        "subtype_id": entry["subtype_id"],
+                        "quantity": (entry["quantity"] or 0) + 2 if index == 0 else entry["quantity"],
+                        "assembly_quantity": entry["assembly_quantity"],
+                    }
+                    for index, entry in enumerate(material["bom_entries"])
+                ],
+            },
+        )
+        self.assertEqual(first_update.status_code, 200)
+
+        second_update = self.client.put(
+            f"/api/v1/projects/2/instances/{instance['id']}/materials/{material['rule_id']}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": material["mode"],
+                "entries": [
+                    {
+                        "subtype_id": entry["subtype_id"],
+                        "quantity": (entry["quantity"] or 0) + 2 if index == 0 else entry["quantity"],
+                        "assembly_quantity": (entry["assembly_quantity"] or 0) + 3 if index == 0 else entry["assembly_quantity"],
+                    }
+                    for index, entry in enumerate(material["bom_entries"])
+                ],
+            },
+        )
+        self.assertEqual(second_update.status_code, 200)
+
+        activity = self.client.get("/api/v1/projects/2/activity", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(activity.status_code, 200)
+        grouped = activity.json()
+
+        merged_group = next(
+            group
+            for group in grouped
+            if group["title"] == f"Updated materials for {instance['name']}" and group["actor"] == "Project Editor"
+        )
+        self.assertEqual(merged_group["entry_count"], 1)
+        self.assertEqual(len(merged_group["entries"]), 1)
+
+        merged_entry = merged_group["entries"][0]
+        self.assertEqual(merged_entry["headline"], "Material quantities changed")
+        self.assertEqual(merged_entry["subject_name"], material["material_name"])
+        changes_by_label = {change["label"]: (change["before"], change["after"]) for change in merged_entry["changes"]}
+        self.assertEqual(
+            changes_by_label.get(f"{first_row['subtype']} quantity"),
+            (str(first_row["quantity"]), str((first_row["quantity"] or 0) + 2)),
+        )
+        self.assertEqual(
+            changes_by_label.get(f"{first_row['subtype']} assembly quantity"),
+            (str(first_row["assembly_quantity"]), str((first_row["assembly_quantity"] or 0) + 3)),
+        )
+
     def test_v1_catalog_and_project_instance_requests_preserve_short_description(self) -> None:
         create_component_response = self.client.post(
             "/api/v1/catalog/components",

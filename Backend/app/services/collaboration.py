@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import re
 
 from sqlalchemy import select
@@ -158,7 +159,7 @@ def get_project_activity(session: Session, project_id: int) -> list[dict]:
         )
         .order_by(ProjectActivityGroup.created_at.desc())
     ).all()
-    return [_serialize_activity_group(group) for group in groups]
+    return _merge_activity_groups([_serialize_activity_group(group) for group in groups])
 
 
 def get_activity_history(session: Session, user: User) -> list[dict]:
@@ -173,11 +174,11 @@ def get_activity_history(session: Session, user: User) -> list[dict]:
         )
         .order_by(ProjectActivityGroup.created_at.desc())
     ).all()
-    return [
+    return _merge_activity_groups([
         _serialize_activity_group(group)
         for group in groups
         if group.project is not None and can_view_project(user, group.project)
-    ]
+    ])
 
 
 def get_project_approvals(session: Session, project_id: int) -> list[dict]:
@@ -354,6 +355,101 @@ def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
         "entry_count": len(entries),
         "entries": entries,
     }
+
+
+def _merge_activity_groups(groups: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    for group in groups:
+        if merged and _can_merge_activity_groups(merged[-1], group):
+            _merge_group_into_previous(merged[-1], group)
+            continue
+        merged.append(group)
+    return merged
+
+
+def _can_merge_activity_groups(newer_group: dict, older_group: dict) -> bool:
+    if newer_group["project"]["id"] != older_group["project"]["id"]:
+        return False
+    if newer_group.get("actor") != older_group.get("actor"):
+        return False
+    if newer_group.get("title") != older_group.get("title"):
+        return False
+    if newer_group.get("entry_count") != 1 or older_group.get("entry_count") != 1:
+        return False
+    newer_entry = newer_group["entries"][0]
+    older_entry = older_group["entries"][0]
+    if not _can_merge_material_entries(newer_entry, older_entry):
+        return False
+    return _within_merge_window(newer_group["created_at"], older_group["created_at"], seconds=60)
+
+
+def _can_merge_material_entries(newer_entry: dict, older_entry: dict) -> bool:
+    if newer_entry.get("kind") != "material" or older_entry.get("kind") != "material":
+        return False
+    if newer_entry.get("headline") != older_entry.get("headline"):
+        return False
+    if newer_entry.get("subject_name") != older_entry.get("subject_name"):
+        return False
+    return tuple(newer_entry.get("notes") or []) == tuple(older_entry.get("notes") or [])
+
+
+def _within_merge_window(newer_created_at: str, older_created_at: str, *, seconds: int) -> bool:
+    try:
+        newer = datetime.fromisoformat(newer_created_at)
+        older = datetime.fromisoformat(older_created_at)
+    except ValueError:
+        return False
+    return newer - older <= timedelta(seconds=seconds)
+
+
+def _merge_group_into_previous(newer_group: dict, older_group: dict) -> None:
+    newer_entry = newer_group["entries"][0]
+    older_entry = older_group["entries"][0]
+    newer_entry["changes"] = _merge_entry_changes(older_entry.get("changes") or [], newer_entry.get("changes") or [])
+    newer_entry["notes"] = _merge_unique_strings((older_entry.get("notes") or []) + (newer_entry.get("notes") or []))
+    newer_group["entry_count"] = len(newer_group["entries"])
+    older_created = older_group.get("created_at")
+    newer_updated = newer_group.get("updated_at")
+    if older_created and older_created < newer_group["created_at"]:
+        newer_group["created_at"] = older_created
+    if older_group.get("updated_at") and older_group["updated_at"] > (newer_updated or ""):
+        newer_group["updated_at"] = older_group["updated_at"]
+
+
+def _merge_entry_changes(older_changes: list[dict], newer_changes: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    by_label: dict[str, dict] = {}
+    for change in older_changes + newer_changes:
+        label = str(change.get("label", "")).strip()
+        if not label:
+            continue
+        current = by_label.get(label)
+        if current is None:
+            current = {
+                "label": label,
+                "before": change.get("before"),
+                "after": change.get("after"),
+            }
+            by_label[label] = current
+            merged.append(current)
+            continue
+        if current.get("before") is None and change.get("before") is not None:
+            current["before"] = change.get("before")
+        if change.get("after") is not None:
+            current["after"] = change.get("after")
+    return [change for change in merged if change.get("before") != change.get("after")]
+
+
+def _merge_unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    return merged
 
 
 def _default_group_title(group: ProjectActivityGroup) -> str:

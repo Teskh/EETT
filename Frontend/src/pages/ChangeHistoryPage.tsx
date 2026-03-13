@@ -53,15 +53,9 @@ function ChangeRow({ change }: { change: ActivityChange }) {
 function EntryCard({ entry }: { entry: ActivityEntry }) {
   return (
     <section className="rounded-2xl border border-black/5 bg-white/70 px-4 py-4 dark:border-white/10 dark:bg-black/20">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{entry.headline}</h3>
-          {entry.subject_name ? <p className="text-sm text-zinc-600 dark:text-zinc-400">{entry.subject_name}</p> : null}
-        </div>
-        <div className="text-right text-xs text-zinc-500 dark:text-zinc-400">
-          <div>{entry.actor || "System"}</div>
-          <div>{formatTimestamp(entry.created_at)}</div>
-        </div>
+      <div className="space-y-1">
+        <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">{entry.headline}</h3>
+        {entry.subject_name ? <p className="text-sm text-zinc-600 dark:text-zinc-400">{entry.subject_name}</p> : null}
       </div>
 
       {entry.notes.length ? (
@@ -145,27 +139,6 @@ export function ChangeHistoryPage() {
         </div>
       ) : null}
 
-      <section className="liquid-glass rounded-[28px] border border-black/10 p-8 dark:border-white/10">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="space-y-3">
-            <p className="text-[10px] font-bold uppercase tracking-[0.28em] text-zinc-500">Change History</p>
-            <h1 className="max-w-3xl text-4xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-              A readable record of what changed, who changed it, and the exact values that moved.
-            </h1>
-            <p className="max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Every entry stays specific, but the page no longer exposes table names, internal IDs, or raw data dumps.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void loadHistory()}
-            className="rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 dark:border-white/10 dark:bg-white/5 dark:text-zinc-100"
-          >
-            Refresh
-          </button>
-        </div>
-      </section>
-
       <section className="liquid-glass rounded-[24px] border border-black/10 p-5 dark:border-white/10">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.8fr)_220px_220px_auto]">
           <label className="flex flex-col gap-1.5">
@@ -209,8 +182,17 @@ export function ChangeHistoryPage() {
           </label>
 
           <div className="flex items-end">
-            <div className="w-full rounded-xl bg-black/[0.04] px-4 py-2.5 text-sm text-zinc-600 dark:bg-white/[0.05] dark:text-zinc-300">
-              {summarizeCount(filteredGroups.length)}
+            <div className="flex w-full gap-3">
+              <div className="flex-1 rounded-xl bg-black/[0.04] px-4 py-2.5 text-sm text-zinc-600 dark:bg-white/[0.05] dark:text-zinc-300">
+                {summarizeCount(filteredGroups.length)}
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadHistory()}
+                className="rounded-xl border border-black/10 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-800 dark:border-white/10 dark:bg-white/5 dark:text-zinc-100"
+              >
+                Refresh
+              </button>
             </div>
           </div>
         </div>
