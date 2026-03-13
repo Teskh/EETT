@@ -118,6 +118,22 @@ type ChartSelection = {
   endIndex: number;
 };
 
+type LeadTimeReference = {
+  days: number;
+  source: "max" | "average";
+};
+
+type PurchaseOrderEstimate = {
+  bufferWeeks: number;
+  bufferBusinessDays: number;
+  minimumExpectedStock: number;
+  rateUsed: number;
+  rateSource: "selection" | "recent_30d";
+  leadTimeDays: number;
+  thresholdDate: string;
+  purchaseOrderDate: string;
+};
+
 function toStartOfDay(value: string | Date) {
   const date = value instanceof Date ? new Date(value) : new Date(value);
   date.setHours(0, 0, 0, 0);
@@ -135,6 +151,88 @@ function moveToPreviousBusinessDay(value: Date) {
     date.setDate(date.getDate() - 1);
   }
   return date;
+}
+
+function moveToNextBusinessDay(value: Date) {
+  const date = toStartOfDay(value);
+  while (isWeekend(date)) {
+    date.setDate(date.getDate() + 1);
+  }
+  return date;
+}
+
+function addBusinessDays(value: Date, offset: number) {
+  const date = moveToNextBusinessDay(value);
+  let remaining = Math.max(Math.ceil(offset), 0);
+  while (remaining > 0) {
+    date.setDate(date.getDate() + 1);
+    if (!isWeekend(date)) {
+      remaining -= 1;
+    }
+  }
+  return date;
+}
+
+function getLeadTimeReference(detail: MaterialDashboardDetailData | null): LeadTimeReference | null {
+  if (!detail) {
+    return null;
+  }
+  if (detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined && Number.isFinite(detail.max_lead_time_days)) {
+    return { days: detail.max_lead_time_days, source: "max" };
+  }
+  if (detail.average_lead_time_days !== null && detail.average_lead_time_days !== undefined && Number.isFinite(detail.average_lead_time_days)) {
+    return { days: detail.average_lead_time_days, source: "average" };
+  }
+  return null;
+}
+
+function getPurchaseOrderEstimate({
+  detail,
+  summary,
+  isCustomSelection,
+  bufferWeeks,
+}: {
+  detail: MaterialDashboardDetailData | null;
+  summary: ReturnType<typeof getSeriesSummary>;
+  isCustomSelection: boolean;
+  bufferWeeks: number;
+}): PurchaseOrderEstimate | null {
+  if (!detail || detail.stock_on_hand === null || detail.stock_on_hand === undefined || Number.isNaN(detail.stock_on_hand)) {
+    return null;
+  }
+
+  const leadTimeReference = getLeadTimeReference(detail);
+  if (!leadTimeReference) {
+    return null;
+  }
+
+  const selectionRate = summary?.averageConsumptionPerDay;
+  const recentRate = detail.average_daily_outgoing_30d;
+  const rateUsed = isCustomSelection ? selectionRate : recentRate;
+  if (rateUsed === null || rateUsed === undefined || !Number.isFinite(rateUsed) || rateUsed <= 0) {
+    return null;
+  }
+
+  const normalizedBufferWeeks = Math.max(bufferWeeks, 0);
+  const bufferBusinessDays = normalizedBufferWeeks * 5;
+  const minimumStock = rateUsed * bufferBusinessDays;
+  const today = moveToNextBusinessDay(new Date());
+  const businessDaysUntilThreshold =
+    detail.stock_on_hand <= minimumStock ? 0 : Math.ceil((detail.stock_on_hand - minimumStock) / rateUsed);
+  const leadTimeDays = Math.max(Math.ceil(leadTimeReference.days), 0);
+  const thresholdDate = addBusinessDays(today, businessDaysUntilThreshold);
+  const purchaseOrderDate = addBusinessDays(today, Math.max(businessDaysUntilThreshold - leadTimeDays, 0));
+
+  return {
+    bufferWeeks: normalizedBufferWeeks,
+    bufferBusinessDays,
+    minimumExpectedStock: minimumStock,
+    rateUsed,
+    rateSource: isCustomSelection ? "selection" : "recent_30d",
+    leadTimeDays,
+    thresholdDate: thresholdDate.toISOString(),
+    purchaseOrderDate: purchaseOrderDate.toISOString(),
+  };
 }
 
 function buildLinePath(
@@ -312,11 +410,14 @@ function MovementHistoryCard({
   const [selection, setSelection] = useState<ChartSelection | null>(null);
   const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
   const [dragCurrentIndex, setDragCurrentIndex] = useState<number | null>(null);
+  const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
+  const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
 
   useEffect(() => {
     setSelection(null);
     setDragAnchorIndex(null);
     setDragCurrentIndex(null);
+    setIsEditingBufferWeeks(false);
   }, [selected?.sku, history?.generated_at, detail?.stock_on_hand]);
 
   if (!selected) {
@@ -349,6 +450,14 @@ function MovementHistoryCard({
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
   const isBlockingLoad = (!detail && detailLoading) || (!history && historyLoading);
   const isRefreshing = detailRefreshing || historyRefreshing;
+  const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
+  const leadTimeReference = getLeadTimeReference(detail);
+  const purchaseOrderEstimate = getPurchaseOrderEstimate({
+    detail,
+    summary,
+    isCustomSelection,
+    bufferWeeks,
+  });
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
     if (!chart) {
@@ -631,10 +740,60 @@ function MovementHistoryCard({
                   label="Lead time" 
                   value={
                     !detail ? (detailLoading ? "..." : "—") 
-                    : detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined 
-                      ? `${formatNumber(detail.max_lead_time_days, 0)} d` : "—"
+                    : leadTimeReference
+                      ? `${formatNumber(leadTimeReference.days, leadTimeReference.source === "average" ? 1 : 0)} d`
+                      : "—"
                   } 
                 />
+                <MetricRow
+                  label="Buffer sem."
+                  value={
+                    isEditingBufferWeeks ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          autoFocus
+                          value={bufferWeeksInput}
+                          onChange={(event) => setBufferWeeksInput(event.target.value)}
+                          onBlur={() => setIsEditingBufferWeeks(false)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === "Escape") {
+                              setIsEditingBufferWeeks(false);
+                            }
+                          }}
+                          className="w-24 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-right text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                        />
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingBufferWeeks(true)}
+                        className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                        title="Click to edit stock buffer in weeks"
+                      >
+                        {formatNumber(bufferWeeks)}
+                        <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                      </button>
+                    )
+                  }
+                />
+                <MetricRow
+                  label="Min. stock calc."
+                  value={purchaseOrderEstimate ? formatNumber(purchaseOrderEstimate.minimumExpectedStock) : "—"}
+                />
+                <MetricRow
+                  label="Cons. usada"
+                  value={
+                    purchaseOrderEstimate
+                      ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
+                      : "—"
+                  }
+                />
+                <MetricRow label="Nueva OC" value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.purchaseOrderDate) : "—"} />
+                <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
                 <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
                 <MetricRow label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
                 <MetricRow label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />

@@ -646,11 +646,62 @@ def _get_lead_time_samples_for_product(cursor, product_code: str, *, limit: int)
 
 
 def _fetch_first_receipt_date(cursor, *, num_oc: Any, num_inter_oc: Any, num_linea: Any, product_code: str):
+    if not product_code:
+        return None
+
     oc_candidates = _normalize_identifiers(num_oc, pad_lengths=(6, 8, 10, 12))
     inter_candidates = _normalize_identifiers(num_inter_oc, pad_lengths=(6, 8, 10, 12))
     line_candidates = _normalize_identifiers(num_linea, pad_lengths=(2, 3, 4))
+    inter_column_available = True
+    process_variants = [
+        "Guía de Entrada",
+        "GUIA DE ENTRADA",
+        "Guia de Entrada",
+        "GUIA ENTRADA",
+        "GUIA DE ENT",
+        "GUIA ENTRADA RECEPCION",
+        "Guia de Entrada Recepcion",
+        "RECEPCION MERCADERIA",
+        "Recepcion Mercaderia",
+    ]
+    process_filter = " OR ".join(["Proceso = ?" for _ in process_variants])
+    type_variants = ["E", "I"]
+
+    def _coerce_fecha(row: Any):
+        for attr in ("Fecha", "fecha", "FECHA", "first_date", "FIRST_DATE", "FirstDate"):
+            if hasattr(row, attr):
+                value = getattr(row, attr)
+                if value:
+                    return value
+        try:
+            return row[0]
+        except Exception:
+            return None
+
+    def _check_gmovi(nroint: Any) -> bool:
+        if nroint is None:
+            return False
+        try:
+            cursor.execute(
+                """
+                SELECT TOP 1 CantIngresada
+                FROM softland.iw_gmovi
+                WHERE Tipo = 'E'
+                  AND NroInt = ?
+                  AND RTRIM(LTRIM(CodProd)) = ?
+                  AND COALESCE(CantIngresada, 0) > 0
+                """,
+                (nroint, product_code),
+            )
+            return cursor.fetchone() is not None
+        except Exception:
+            return False
 
     def run_query(where_clause: str, params: Sequence[object]):
+        nonlocal inter_column_available
+        if "NumInterOc" in where_clause and not inter_column_available:
+            return None
+
         cursor.execute(
             f"""
             SELECT MIN(CONVERT(date, FechaMov)) AS FirstDate
@@ -662,15 +713,79 @@ def _fetch_first_receipt_date(cursor, *, num_oc: Any, num_inter_oc: Any, num_lin
         row = cursor.fetchone()
         return getattr(row, "FirstDate", None) if row else None
 
+    def safe_run_query(where_clause: str, params: Sequence[object]):
+        nonlocal inter_column_available
+        try:
+            return run_query(where_clause, params)
+        except Exception as exc:
+            if "NumInterOc" in where_clause and _is_invalid_column_error(exc, "NumInterOc"):
+                inter_column_available = False
+            return None
+
+    seen_nroint: set[str] = set()
+    for oc_value in oc_candidates:
+        try:
+            rows = []
+            for tipo in type_variants:
+                cursor.execute(
+                    (
+                        "SELECT NroInt, CONVERT(date, Fecha) AS Fecha "
+                        "FROM softland.iw_gsaen "
+                        f"WHERE Tipo = ? AND ({process_filter}) "
+                        "AND CAST(Orden AS NVARCHAR(50)) = ? "
+                        "ORDER BY Fecha ASC"
+                    ),
+                    (tipo, *process_variants, oc_value),
+                )
+                rows.extend(cursor.fetchall())
+        except Exception:
+            rows = []
+
+        for row in rows:
+            nroint = getattr(row, "NroInt", None)
+            if nroint in seen_nroint:
+                continue
+            seen_nroint.add(nroint)
+            if _check_gmovi(nroint):
+                return _coerce_fecha(row)
+
+    for oc_value in oc_candidates:
+        if "%" in oc_value:
+            continue
+        try:
+            rows = []
+            for tipo in type_variants:
+                cursor.execute(
+                    (
+                        "SELECT NroInt, CONVERT(date, Fecha) AS Fecha "
+                        "FROM softland.iw_gsaen "
+                        f"WHERE Tipo = ? AND ({process_filter}) "
+                        "AND CAST(Orden AS NVARCHAR(50)) LIKE ? "
+                        "ORDER BY Fecha ASC"
+                    ),
+                    (tipo, *process_variants, f"%{oc_value}%"),
+                )
+                rows.extend(cursor.fetchall())
+        except Exception:
+            rows = []
+
+        for row in rows:
+            nroint = getattr(row, "NroInt", None)
+            if nroint in seen_nroint:
+                continue
+            seen_nroint.add(nroint)
+            if _check_gmovi(nroint):
+                return _coerce_fecha(row)
+
     for inter_value in inter_candidates:
-        received = run_query(
+        received = safe_run_query(
             "NumInterOc = ? AND RTRIM(LTRIM(CodProd)) = ? AND Ingresada > 0",
             (inter_value, product_code),
         )
         if received:
             return received
         for line_value in line_candidates:
-            received = run_query(
+            received = safe_run_query(
                 "NumInterOc = ? AND NumLinea = ? AND RTRIM(LTRIM(CodProd)) = ? AND Ingresada > 0",
                 (inter_value, line_value, product_code),
             )
@@ -678,14 +793,14 @@ def _fetch_first_receipt_date(cursor, *, num_oc: Any, num_inter_oc: Any, num_lin
                 return received
 
     for oc_value in oc_candidates:
-        received = run_query(
+        received = safe_run_query(
             "NumOc = ? AND RTRIM(LTRIM(CodProd)) = ? AND Ingresada > 0",
             (oc_value, product_code),
         )
         if received:
             return received
         for line_value in line_candidates:
-            received = run_query(
+            received = safe_run_query(
                 "NumOc = ? AND NumLinea = ? AND RTRIM(LTRIM(CodProd)) = ? AND Ingresada > 0",
                 (oc_value, line_value, product_code),
             )
@@ -743,6 +858,11 @@ def _coerce_date(value: Any) -> date | None:
             except ValueError:
                 continue
     return None
+
+
+def _is_invalid_column_error(exc: Exception, column_name: str) -> bool:
+    message = str(exc).lower()
+    return "invalid column name" in message and column_name.lower() in message
 
 
 def _candidate_driver_names(configured_driver: str | None) -> list[str]:
