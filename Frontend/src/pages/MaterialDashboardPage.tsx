@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { ApiError, api } from "../lib/api";
 import type {
@@ -39,6 +39,17 @@ function formatCurrency(value: number | null | undefined) {
   return currencyFormatter.format(value);
 }
 
+function formatSignedNumber(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "—";
+  }
+  const absolute = digits === 0 ? integerFormatter.format(Math.abs(value)) : numberFormatter.format(Math.abs(value));
+  if (value === 0) {
+    return absolute;
+  }
+  return `${value > 0 ? "+" : "-"}${absolute}`;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) {
     return "—";
@@ -70,58 +81,136 @@ function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardLis
   return (leftNumber - rightNumber) * sort.direction;
 }
 
+const CHART_PADDING = { top: 18, right: 18, bottom: 26, left: 40 };
+const CHART_WIDTH = 760;
+const CHART_HEIGHT = 240;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+type StockSeriesPoint = {
+  date: string;
+  value: number;
+  time: number;
+};
+
+type ChartPoint = StockSeriesPoint & {
+  index: number;
+  x: number;
+  y: number;
+};
+
+type ChartSelection = {
+  startIndex: number;
+  endIndex: number;
+};
+
 function buildLinePath(
-  points: Array<{ date: string; value: number }>,
+  points: StockSeriesPoint[],
   width: number,
   height: number,
 ) {
   if (!points.length) {
     return null;
   }
-  const padding = { top: 18, right: 18, bottom: 26, left: 40 };
+  const padding = CHART_PADDING;
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const maxValue = Math.max(...points.map((point) => point.value), 1);
-  const minDate = new Date(points[0].date).getTime();
-  const maxDate = new Date(points[points.length - 1].date).getTime();
+  const minDate = points[0].time;
+  const maxDate = points[points.length - 1].time;
   const span = Math.max(maxDate - minDate, 1);
 
-  const path = points
+  const chartPoints = points
     .map((point, index) => {
       const x =
         points.length === 1
           ? padding.left + plotWidth / 2
-          : padding.left + ((new Date(point.date).getTime() - minDate) / span) * plotWidth;
+          : padding.left + ((point.time - minDate) / span) * plotWidth;
       const y = padding.top + plotHeight - (point.value / maxValue) * plotHeight;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
+      return { ...point, index, x, y };
+    });
+
+  const path = chartPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
     .join(" ");
 
-  return { path, maxValue, padding, plotHeight, plotWidth, width, height };
+  return { path, points: chartPoints, maxValue, padding, plotHeight, plotWidth, width, height };
+}
+
+function getSelectionBounds(selection: ChartSelection) {
+  return {
+    startIndex: Math.min(selection.startIndex, selection.endIndex),
+    endIndex: Math.max(selection.startIndex, selection.endIndex),
+  };
+}
+
+function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | null) {
+  if (!points.length) {
+    return null;
+  }
+  const bounds = selection ? getSelectionBounds(selection) : { startIndex: 0, endIndex: points.length - 1 };
+  const start = points[bounds.startIndex];
+  const end = points[bounds.endIndex];
+  const elapsedDays = Math.max((end.time - start.time) / DAY_IN_MS, 1);
+  const stockDelta = end.value - start.value;
+  const consumed = start.value - end.value;
+  return {
+    start,
+    end,
+    elapsedDays,
+    stockDelta,
+    consumed,
+    averageConsumptionPerDay: consumed / elapsedDays,
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getClosestPointIndex(points: ChartPoint[], x: number) {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  for (const point of points) {
+    const distance = Math.abs(point.x - x);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = point.index;
+    }
+  }
+
+  return closestIndex;
 }
 
 function buildHistoricalStockSeries(
   movements: MaterialDashboardMovementPoint[],
   currentStock: number | null | undefined,
-) {
+): StockSeriesPoint[] {
   if (currentStock === null || currentStock === undefined || Number.isNaN(currentStock)) {
     return [];
   }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const normalizedMovements = movements
-    .map((point) => {
-      const date = new Date(point.date);
-      date.setHours(0, 0, 0, 0);
-      return {
+  const dailyMovementMap = new Map<number, { date: string; quantity: number; time: number }>();
+  for (const point of movements) {
+    const date = new Date(point.date);
+    date.setHours(0, 0, 0, 0);
+    const time = date.getTime();
+    const existing = dailyMovementMap.get(time);
+    if (existing) {
+      existing.quantity += Number(point.quantity) || 0;
+    } else {
+      dailyMovementMap.set(time, {
         date: date.toISOString(),
         quantity: Number(point.quantity) || 0,
-        time: date.getTime(),
-      };
-    })
-    .sort((left, right) => left.time - right.time);
+        time,
+      });
+    }
+  }
 
-  const history: Array<{ date: string; value: number }> = [];
+  const normalizedMovements = Array.from(dailyMovementMap.values()).sort((left, right) => left.time - right.time);
+
+  const history: StockSeriesPoint[] = [];
   let runningStock = Number(currentStock);
   for (let index = normalizedMovements.length - 1; index >= 0; index -= 1) {
     const point = normalizedMovements[index];
@@ -130,6 +219,7 @@ function buildHistoricalStockSeries(
     }
     history.unshift({
       date: point.date,
+      time: point.time,
       value: runningStock,
     });
   }
@@ -137,6 +227,7 @@ function buildHistoricalStockSeries(
   if (!history.length || new Date(history[history.length - 1].date).getTime() !== today.getTime()) {
     history.push({
       date: today.toISOString(),
+      time: today.getTime(),
       value: Number(currentStock),
     });
   }
@@ -147,6 +238,15 @@ function buildHistoricalStockSeries(
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 px-4 py-3">
+      <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">{label}</div>
+      <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
+    </div>
+  );
+}
+
+function SelectionMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-[132px] rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50/90 dark:bg-white/5 px-4 py-3">
       <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">{label}</div>
       <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
     </div>
@@ -166,6 +266,16 @@ function MovementHistoryCard({
   detailLoading: boolean;
   historyLoading: boolean;
 }) {
+  const [selection, setSelection] = useState<ChartSelection | null>(null);
+  const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
+  const [dragCurrentIndex, setDragCurrentIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelection(null);
+    setDragAnchorIndex(null);
+    setDragCurrentIndex(null);
+  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand]);
+
   if (!selected) {
     return (
       <section className="liquid-glass rounded-[28px] border border-black/10 dark:border-white/10 p-8 min-h-[320px] flex items-center justify-center">
@@ -181,7 +291,71 @@ function MovementHistoryCard({
   }
 
   const stockSeries = detail ? buildHistoricalStockSeries(history?.movements || [], detail.stock_on_hand) : [];
-  const chart = stockSeries.length ? buildLinePath(stockSeries, 760, 240) : null;
+  const chart = stockSeries.length ? buildLinePath(stockSeries, CHART_WIDTH, CHART_HEIGHT) : null;
+  const activeSelection =
+    dragAnchorIndex !== null && dragCurrentIndex !== null ? { startIndex: dragAnchorIndex, endIndex: dragCurrentIndex } : selection;
+  const summary = chart ? getSeriesSummary(chart.points, activeSelection) : null;
+  const selectionBounds = activeSelection ? getSelectionBounds(activeSelection) : null;
+  const selectionStart = selectionBounds && chart ? chart.points[selectionBounds.startIndex] : null;
+  const selectionEnd = selectionBounds && chart ? chart.points[selectionBounds.endIndex] : null;
+  const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
+
+  function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!chart) {
+      return null;
+    }
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width) {
+      return null;
+    }
+    const relativeX = ((event.clientX - bounds.left) / bounds.width) * chart.width;
+    const chartX = clamp(relativeX, chart.padding.left, chart.padding.left + chart.plotWidth);
+    return getClosestPointIndex(chart.points, chartX);
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    const pointIndex = getPointIndexFromEvent(event);
+    if (pointIndex === null) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragAnchorIndex(pointIndex);
+    setDragCurrentIndex(pointIndex);
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (dragAnchorIndex === null) {
+      return;
+    }
+    const pointIndex = getPointIndexFromEvent(event);
+    if (pointIndex === null) {
+      return;
+    }
+    setDragCurrentIndex(pointIndex);
+  }
+
+  function handlePointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    if (dragAnchorIndex === null) {
+      return;
+    }
+    const pointIndex = getPointIndexFromEvent(event);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (pointIndex !== null && pointIndex !== dragAnchorIndex) {
+      setSelection({ startIndex: dragAnchorIndex, endIndex: pointIndex });
+    }
+    setDragAnchorIndex(null);
+    setDragCurrentIndex(null);
+  }
+
+  function handlePointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setDragAnchorIndex(null);
+    setDragCurrentIndex(null);
+  }
 
   return (
     <section className="liquid-glass rounded-[28px] border border-black/10 dark:border-white/10 p-6 md:p-8">
@@ -223,41 +397,116 @@ function MovementHistoryCard({
           {historyLoading || detailLoading ? (
             <div className="h-[240px] flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
           ) : history && chart ? (
-            <svg viewBox={`0 0 ${chart.width} ${chart.height}`} className="w-full h-[240px] overflow-visible">
-              {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
-                const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
-                return (
-                  <g key={stop}>
-                    <line
-                      x1={chart.padding.left}
-                      y1={y}
-                      x2={chart.width - chart.padding.right}
-                      y2={y}
-                      stroke="rgba(113,113,122,0.18)"
-                      strokeDasharray="4 6"
+            <div className="space-y-4">
+              <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">
+                    {isCustomSelection ? "Selected Period" : `${history.movement_days}-Day Trend`}
+                  </p>
+                  <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
+                    {summary ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}` : "—"}
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Click and drag across the curve to inspect the stock variation and average consumption per day.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <SelectionMetric label="Variation" value={summary ? formatSignedNumber(summary.stockDelta) : "—"} />
+                  <SelectionMetric
+                    label="Cons./day"
+                    value={summary ? `${formatNumber(summary.averageConsumptionPerDay)} / day` : "—"}
+                  />
+                  <SelectionMetric
+                    label="Span"
+                    value={summary ? `${formatNumber(summary.elapsedDays, 0)} day${summary.elapsedDays === 1 ? "" : "s"}` : "—"}
+                  />
+                  {isCustomSelection ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelection(null)}
+                      className="rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-zinc-100 dark:hover:bg-white/10 transition-colors"
+                    >
+                      Reset range
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <svg
+                viewBox={`0 0 ${chart.width} ${chart.height}`}
+                className="w-full h-[240px] overflow-visible cursor-crosshair touch-none"
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerUp}
+                onPointerCancel={handlePointerCancel}
+              >
+                {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
+                  const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
+                  return (
+                    <g key={stop}>
+                      <line
+                        x1={chart.padding.left}
+                        y1={y}
+                        x2={chart.width - chart.padding.right}
+                        y2={y}
+                        stroke="rgba(113,113,122,0.18)"
+                        strokeDasharray="4 6"
+                      />
+                      <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                        {formatNumber(chart.maxValue * stop)}
+                      </text>
+                    </g>
+                  );
+                })}
+                {selectionStart && selectionEnd ? (
+                  <g>
+                    <rect
+                      x={Math.min(selectionStart.x, selectionEnd.x)}
+                      y={chart.padding.top}
+                      width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 2)}
+                      height={chart.plotHeight}
+                      fill="rgba(245, 158, 11, 0.12)"
                     />
-                    <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
-                      {formatNumber(chart.maxValue * stop)}
-                    </text>
+                    <line
+                      x1={selectionStart.x}
+                      y1={chart.padding.top}
+                      x2={selectionStart.x}
+                      y2={chart.padding.top + chart.plotHeight}
+                      stroke="rgba(245, 158, 11, 0.55)"
+                      strokeDasharray="4 4"
+                    />
+                    <line
+                      x1={selectionEnd.x}
+                      y1={chart.padding.top}
+                      x2={selectionEnd.x}
+                      y2={chart.padding.top + chart.plotHeight}
+                      stroke="rgba(245, 158, 11, 0.55)"
+                      strokeDasharray="4 4"
+                    />
                   </g>
-                );
-              })}
-              <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-              {stockSeries.map((point, index) => {
-                const x =
-                  stockSeries.length === 1
-                    ? chart.padding.left + chart.plotWidth / 2
-                    : chart.padding.left + (index / (stockSeries.length - 1)) * chart.plotWidth;
-                const y = chart.padding.top + chart.plotHeight - (point.value / chart.maxValue) * chart.plotHeight;
-                return <circle key={point.date} cx={x} cy={y} r={2.5} fill="rgb(245 158 11)" />;
-              })}
-              <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
-                {formatDate(history.range_start)}
-              </text>
-              <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
-                {formatDate(history.range_end)}
-              </text>
-            </svg>
+                ) : null}
+                <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                {chart.points.map((point) => {
+                  const highlighted =
+                    selectionBounds && point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
+                  return (
+                    <circle
+                      key={point.date}
+                      cx={point.x}
+                      cy={point.y}
+                      r={highlighted ? 4 : 2.5}
+                      fill={highlighted ? "rgb(217 119 6)" : "rgb(245 158 11)"}
+                    />
+                  );
+                })}
+                <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
+                  {formatDate(history.range_start)}
+                </text>
+                <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                  {formatDate(history.range_end)}
+                </text>
+              </svg>
+            </div>
           ) : (
             <div className="h-[240px] flex items-center justify-center text-sm text-zinc-500">No movement history available for this material.</div>
           )}
@@ -347,12 +596,13 @@ export function MaterialDashboardPage() {
       setSelectedDetail(null);
       return;
     }
+    const activeSku = sku;
     let cancelled = false;
     async function loadDetail() {
       setDetailLoading(true);
       setHistoryError(null);
       try {
-        const response = await api.getMaterialDashboardDetail(sku, selectedCecos);
+        const response = await api.getMaterialDashboardDetail(activeSku, selectedCecos);
         if (!cancelled) {
           setSelectedDetail(response);
         }
@@ -378,7 +628,8 @@ export function MaterialDashboardPage() {
     if (!sku) {
       return;
     }
-    const cacheKey = historyCacheKey(sku, selectedCecos);
+    const activeSku = sku;
+    const cacheKey = historyCacheKey(activeSku, selectedCecos);
     if (historyCache[cacheKey]) {
       return;
     }
@@ -387,7 +638,7 @@ export function MaterialDashboardPage() {
       setHistoryLoading(true);
       setHistoryError(null);
       try {
-        const response = await api.getMaterialDashboardHistory(sku, selectedCecos);
+        const response = await api.getMaterialDashboardHistory(activeSku, selectedCecos);
         if (!cancelled) {
           setHistoryCache((current) => ({ ...current, [cacheKey]: response }));
         }

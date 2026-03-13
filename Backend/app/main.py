@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, sessionmaker
@@ -129,6 +131,8 @@ from app.services.public_api import list_project_public_skus, list_public_projec
 from app.services.user_admin import create_user, delete_user, list_users, serialize_role_catalog, serialize_user, update_user
 from app.ui import render_catalog_page, render_home_page, render_project_detail_page, render_projects_page
 
+logger = logging.getLogger(__name__)
+
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
@@ -150,6 +154,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+        logger.error(
+            "Request validation failed for %s %s: %s",
+            request.method,
+            request.url.path,
+            exc.errors(),
+        )
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -1217,6 +1231,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
+            logger.error(
+                "Material update rejected for project=%s instance=%s rule=%s payload=%s reason=%s",
+                project_id,
+                instance_id,
+                rule_id,
+                payload.model_dump(),
+                str(exc),
+            )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not updated:
             raise HTTPException(status_code=404, detail="Project instance not found")

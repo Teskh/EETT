@@ -1592,6 +1592,12 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   ) {
     setError(null);
     try {
+      console.info("material-update-payload", {
+        projectId,
+        instanceId,
+        ruleId,
+        payload,
+      });
       await api.updateMaterialOccurrence(projectId, instanceId, ruleId, payload);
       startTransition(() => {
         setData((current) => {

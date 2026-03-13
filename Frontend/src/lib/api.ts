@@ -53,8 +53,8 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = response.statusText;
     try {
-      const payload = (await response.json()) as { detail?: string };
-      message = payload.detail || message;
+      const payload = (await response.json()) as { detail?: unknown; message?: unknown };
+      message = extractErrorMessage(payload, message);
     } catch {
       // Ignore non-JSON failures and fall back to status text.
     }
@@ -69,6 +69,45 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 export { ApiError };
+
+function stringifyErrorDetail(detail: unknown): string | null {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => stringifyErrorDetail(item))
+      .filter((item): item is string => Boolean(item))
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.msg === "string") {
+      return record.msg;
+    }
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function extractErrorMessage(payload: { detail?: unknown; message?: unknown }, fallback: string): string {
+  const detailMessage = stringifyErrorDetail(payload.detail);
+  if (detailMessage) {
+    return detailMessage;
+  }
+  const messageValue = stringifyErrorDetail(payload.message);
+  if (messageValue) {
+    return messageValue;
+  }
+  return fallback;
+}
 
 function generateMutationBatchId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
