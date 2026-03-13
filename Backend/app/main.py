@@ -137,7 +137,11 @@ from app.ui import render_catalog_page, render_home_page, render_project_detail_
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    engine = create_engine_for_url(settings.database_url)
+    engine = create_engine_for_url(
+        settings.database_url,
+        connect_timeout_seconds=settings.database_connect_timeout_seconds,
+        statement_timeout_ms=settings.database_statement_timeout_ms,
+    )
     session_factory = sessionmaker(
         bind=engine,
         autoflush=False,
@@ -1455,7 +1459,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return data
 
     @app.get("/api/v1/dashboard/materials", response_model=MaterialDashboardResponse)
-    async def material_dashboard_v1(
+    def material_dashboard_v1(
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1474,7 +1478,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/cecos", response_model=MaterialDashboardCecoResponse)
-    async def material_dashboard_cecos_v1(
+    def material_dashboard_cecos_v1(
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1491,7 +1495,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/house-types", response_model=MaterialDashboardHouseTypesResponse)
-    async def material_dashboard_house_types_v1(
+    def material_dashboard_house_types_v1(
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
@@ -1501,7 +1505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
-    async def material_dashboard_detail_v1(
+    def material_dashboard_detail_v1(
         sku: str,
         request: Request,
         session: Session = Depends(get_session),
@@ -1525,7 +1529,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return detail
 
     @app.get("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
-    async def material_dashboard_house_comparison_v1(
+    def material_dashboard_house_comparison_v1(
         sku: str,
         house_type_id: int,
         request: Request,
@@ -1555,7 +1559,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/{sku}/movements", response_model=MaterialDashboardMovementResponse)
-    async def material_dashboard_movements_v1(
+    def material_dashboard_movements_v1(
         sku: str,
         request: Request,
         session: Session = Depends(get_session),

@@ -31,7 +31,11 @@ class Settings(BaseSettings):
     app_name: str = "Spec Sheets"
     environment: str = "development"
     database_url: str = DEFAULT_DATABASE_URL
+    database_connect_timeout_seconds: int = 5
+    database_statement_timeout_ms: int = 20000
     production_database_url: str | None = None
+    production_database_connect_timeout_seconds: int = 5
+    production_database_statement_timeout_ms: int = 20000
     seed_demo_data: bool = True
     require_schema: bool = True
     session_secret: str = "spec-sheets-internal-session-secret"
@@ -42,6 +46,8 @@ class Settings(BaseSettings):
     softland_database: str | None = "PATAGUALHOME2024"
     softland_username: str | None = "phconsulta"
     softland_password: str | None = Field(default_factory=lambda: os.getenv("SOFTLAND_PASSWORD"))
+    softland_connect_timeout_seconds: int = 5
+    softland_query_timeout_seconds: int = 20
 
     @model_validator(mode="after")
     def apply_softland_password_fallback(self) -> "Settings":

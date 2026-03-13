@@ -440,7 +440,11 @@ function buildHouseComparisonChart(
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const stockValueByDay = new Map(stockSeries.map((point) => [toStartOfDay(point.date).getTime(), point.value]));
-  const maxStock = Math.max(...stockSeries.map((point) => point.value), 1);
+  const stockValues = stockSeries.map((point) => point.value);
+  const finalStock = stockValues.length ? stockValues[stockValues.length - 1] : 0;
+  const maxStock = Math.max(...stockValues, 1);
+  const minStock = Math.max(Math.min(finalStock, maxStock), 0);
+  const stockRange = Math.max(maxStock - minStock, 1);
   const totalHouseStarts = Math.max(houseComparison.total_house_starts, 0);
 
   const chartPoints: HouseTrendChartPoint[] = houseComparison.points.map((point, index) => {
@@ -464,7 +468,7 @@ function buildHouseComparisonChart(
   const positionedPoints = chartPoints.map((point) => ({
     ...point,
     stockY:
-      point.stockValue !== null ? padding.top + plotHeight - (point.stockValue / maxStock) * plotHeight : null,
+      point.stockValue !== null ? padding.top + plotHeight - ((point.stockValue - minStock) / stockRange) * plotHeight : null,
     houseY: padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight,
   }));
 
@@ -478,6 +482,7 @@ function buildHouseComparisonChart(
     plotWidth,
     plotHeight,
     maxStock,
+    minStock,
     maxRemainingHouseStarts,
     points: positionedPoints,
     stockPath,
@@ -747,19 +752,34 @@ function MovementHistoryCard({
         <div className="p-6 md:p-8 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10">
           <div className="flex items-start justify-between mb-6 gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                {isHouseMode
-                  ? isCustomSelection
-                    ? `Selected House Period${selectedHouseType ? ` · ${selectedHouseType.name}` : ""}`
-                    : `90-Day House Starts${selectedHouseType ? ` · ${selectedHouseType.name}` : ""}`
-                  : isCustomSelection
-                    ? "Selected Period"
-                    : chart
-                      ? `${chart.points.length}-Business-Day Trend`
-                      : history
-                        ? `${history.movement_days}-Day Trend`
-                        : "Trend"}
-              </h3>
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                  {isHouseMode
+                    ? isCustomSelection
+                      ? "Selected House Period"
+                      : "90-Day House Starts"
+                    : isCustomSelection
+                      ? "Selected Period"
+                      : chart
+                        ? `${chart.points.length}-Business-Day Trend`
+                        : history
+                          ? `${history.movement_days}-Day Trend`
+                          : "Trend"}
+                </h3>
+                {isHouseMode ? (
+                  <select
+                    value={selectedHouseTypeId ?? ""}
+                    onChange={(event) => onSelectHouseType(Number(event.target.value))}
+                    className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+                  >
+                    {houseTypes.map((houseType) => (
+                      <option key={houseType.id} value={houseType.id}>
+                        {houseType.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+              </div>
               <div className="text-xs text-zinc-500 mt-1">
                 {isHouseMode
                   ? houseSummary
@@ -769,32 +789,27 @@ function MovementHistoryCard({
                     ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}`
                     : "—"}
               </div>
-              <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                {isHouseMode
-                  ? "Click and drag across the curves to inspect stock variation and material consumed per house produced. Amber tracks material stock; slate tracks remaining house starts."
-                  : "Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted."}
-              </p>
+              {isHouseMode ? (
+                <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
+                  <div className="flex items-center gap-2">
+                    <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
+                    <span>Material stock</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
+                    <span>Remaining house starts</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
+                  Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted.
+                </p>
+              )}
               {isRefreshing && !isHouseMode ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
               {houseComparisonRefreshing && isHouseMode ? (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing 90-day house-start comparison...</p>
               ) : null}
               {houseComparisonError && isHouseMode ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
-              {isHouseMode ? (
-                <div className="mt-4">
-                  <label className="block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2">House Type</label>
-                  <select
-                    value={selectedHouseTypeId ?? ""}
-                    onChange={(event) => onSelectHouseType(Number(event.target.value))}
-                    className="w-full max-w-sm rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
-                  >
-                    {houseTypes.map((houseType) => (
-                      <option key={houseType.id} value={houseType.id}>
-                        {houseType.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
             </div>
             {isCustomSelection ? (
               <button
@@ -850,7 +865,7 @@ function MovementHistoryCard({
                           strokeDasharray="4 6"
                         />
                         <text x={houseChart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
-                          {formatNumber(houseChart.maxStock * stop)}
+                          {formatNumber(houseChart.minStock + (houseChart.maxStock - houseChart.minStock) * stop)}
                         </text>
                         <text x={houseChart.width - houseChart.padding.right + 10} y={y + 4} fontSize="11" fill="currentColor" opacity="0.55">
                           {formatNumber(houseChart.maxRemainingHouseStarts * stop, 0)}

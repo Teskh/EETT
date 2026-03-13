@@ -75,44 +75,45 @@ def get_material_dashboard_house_start_comparison(
             start_rows = list(
                 session.execute(
                     text(
-                    """
-                        WITH panel_events AS (
+                        """
+                        WITH relevant_work_orders AS (
+                            SELECT id
+                            FROM work_orders
+                            WHERE house_type_id = :house_type_id
+                        ),
+                        panel_events AS (
                             SELECT
                                 wo.id AS work_order_id,
-                                wo.house_type_id AS house_type_id,
                                 COALESCE(ti.started_at, ti.completed_at) AS event_at
                             FROM task_instances ti
                             JOIN panel_units pu ON pu.id = ti.panel_unit_id
                             JOIN work_units wu ON wu.id = pu.work_unit_id
-                            JOIN work_orders wo ON wo.id = wu.work_order_id
+                            JOIN relevant_work_orders wo ON wo.id = wu.work_order_id
                             WHERE UPPER(ti.scope::text) = :scope_panel
                               AND COALESCE(ti.started_at, ti.completed_at) IS NOT NULL
                             UNION ALL
                             SELECT
                                 wo.id AS work_order_id,
-                                wo.house_type_id AS house_type_id,
                                 te.created_at AS event_at
                             FROM task_exceptions te
                             JOIN panel_units pu ON pu.id = te.panel_unit_id
                             JOIN work_units wu ON wu.id = pu.work_unit_id
-                            JOIN work_orders wo ON wo.id = wu.work_order_id
+                            JOIN relevant_work_orders wo ON wo.id = wu.work_order_id
                             WHERE UPPER(te.scope::text) = :scope_panel
                               AND te.created_at IS NOT NULL
                         ),
                         first_panel_task AS (
                             SELECT
                                 work_order_id,
-                                house_type_id,
                                 MIN(event_at) AS first_started_at
                             FROM panel_events
-                            GROUP BY work_order_id, house_type_id
+                            GROUP BY work_order_id
                         )
                         SELECT
                             CAST(first_started_at AS DATE) AS start_date,
                             COUNT(*) AS house_starts
                         FROM first_panel_task
-                        WHERE house_type_id = :house_type_id
-                          AND first_started_at >= :start_ts
+                        WHERE first_started_at >= :start_ts
                           AND first_started_at < :end_ts
                         GROUP BY CAST(first_started_at AS DATE)
                         ORDER BY CAST(first_started_at AS DATE)
@@ -189,11 +190,19 @@ def get_material_dashboard_house_start_comparison(
 
 
 @lru_cache(maxsize=4)
-def _get_production_session_factory(database_url: str) -> sessionmaker[Session]:
+def _get_production_session_factory(
+    database_url: str,
+    connect_timeout_seconds: int,
+    statement_timeout_ms: int,
+) -> sessionmaker[Session]:
     normalized_url = database_url
     if normalized_url.startswith("postgresql+psycopg2://"):
         normalized_url = normalized_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
-    return create_session_factory(normalized_url)
+    return create_session_factory(
+        normalized_url,
+        connect_timeout_seconds=connect_timeout_seconds,
+        statement_timeout_ms=statement_timeout_ms,
+    )
 
 
 @contextmanager
@@ -201,7 +210,11 @@ def production_session(settings: Settings):
     database_url = (settings.production_database_url or "").strip()
     if not database_url:
         raise RuntimeError("Production II database is not configured")
-    session_factory = _get_production_session_factory(database_url)
+    session_factory = _get_production_session_factory(
+        database_url,
+        max(int(settings.production_database_connect_timeout_seconds), 1),
+        max(int(settings.production_database_statement_timeout_ms), 1),
+    )
     session = session_factory()
     try:
         yield session

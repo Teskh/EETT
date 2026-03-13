@@ -47,8 +47,10 @@ def _open_connection(settings: Settings):
                         f"PWD={settings.softland_password};"
                         "Encrypt=yes;"
                         "TrustServerCertificate=yes"
-                    )
+                    ),
+                    timeout=max(int(settings.softland_connect_timeout_seconds), 1),
                 )
+                connection.timeout = max(int(settings.softland_query_timeout_seconds), 1)
                 break
             except Exception as exc:  # pragma: no cover - driver/network differences
                 connection_errors.append((driver_name, exc))
