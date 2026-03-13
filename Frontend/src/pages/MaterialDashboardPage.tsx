@@ -100,7 +100,6 @@ function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardLis
 const CHART_PADDING = { top: 18, right: 18, bottom: 26, left: 40 };
 const CHART_WIDTH = 760;
 const CHART_HEIGHT = 240;
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 type StockSeriesPoint = {
   date: string;
@@ -119,6 +118,25 @@ type ChartSelection = {
   endIndex: number;
 };
 
+function toStartOfDay(value: string | Date) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function isWeekend(date: Date) {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function moveToPreviousBusinessDay(value: Date) {
+  const date = toStartOfDay(value);
+  while (isWeekend(date)) {
+    date.setDate(date.getDate() - 1);
+  }
+  return date;
+}
+
 function buildLinePath(
   points: StockSeriesPoint[],
   width: number,
@@ -131,16 +149,13 @@ function buildLinePath(
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
   const maxValue = Math.max(...points.map((point) => point.value), 1);
-  const minDate = points[0].time;
-  const maxDate = points[points.length - 1].time;
-  const span = Math.max(maxDate - minDate, 1);
 
   const chartPoints = points
     .map((point, index) => {
       const x =
         points.length === 1
           ? padding.left + plotWidth / 2
-          : padding.left + ((point.time - minDate) / span) * plotWidth;
+          : padding.left + (index / (points.length - 1)) * plotWidth;
       const y = padding.top + plotHeight - (point.value / maxValue) * plotHeight;
       return { ...point, index, x, y };
     });
@@ -166,7 +181,7 @@ function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | nul
   const bounds = selection ? getSelectionBounds(selection) : { startIndex: 0, endIndex: points.length - 1 };
   const start = points[bounds.startIndex];
   const end = points[bounds.endIndex];
-  const elapsedDays = Math.max((end.time - start.time) / DAY_IN_MS, 1);
+  const elapsedDays = Math.max(bounds.endIndex - bounds.startIndex, 1);
   const stockDelta = end.value - start.value;
   const consumed = start.value - end.value;
   return {
@@ -205,46 +220,45 @@ function buildHistoricalStockSeries(
   if (currentStock === null || currentStock === undefined || Number.isNaN(currentStock)) {
     return [];
   }
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const dailyMovementMap = new Map<number, { date: string; quantity: number; time: number }>();
+  const today = toStartOfDay(new Date());
+  const anchorDate = moveToPreviousBusinessDay(today);
+  const dailyMovementMap = new Map<number, number>();
   for (const point of movements) {
-    const date = new Date(point.date);
-    date.setHours(0, 0, 0, 0);
+    const date = toStartOfDay(point.date);
     const time = date.getTime();
-    const existing = dailyMovementMap.get(time);
-    if (existing) {
-      existing.quantity += Number(point.quantity) || 0;
-    } else {
-      dailyMovementMap.set(time, {
-        date: date.toISOString(),
-        quantity: Number(point.quantity) || 0,
-        time,
-      });
+    dailyMovementMap.set(time, (dailyMovementMap.get(time) || 0) + (Number(point.quantity) || 0));
+  }
+
+  let runningStock = Number(currentStock);
+  if (anchorDate.getTime() !== today.getTime()) {
+    const futureCursor = new Date(today);
+    while (futureCursor.getTime() > anchorDate.getTime()) {
+      runningStock += dailyMovementMap.get(futureCursor.getTime()) || 0;
+      futureCursor.setDate(futureCursor.getDate() - 1);
     }
   }
 
-  const normalizedMovements = Array.from(dailyMovementMap.values()).sort((left, right) => left.time - right.time);
+  const earliestMovementTime = dailyMovementMap.size ? Math.min(...dailyMovementMap.keys()) : anchorDate.getTime();
+  const startTime = Math.min(earliestMovementTime, anchorDate.getTime());
+  const history: StockSeriesPoint[] = [
+    {
+      date: anchorDate.toISOString(),
+      time: anchorDate.getTime(),
+      value: runningStock,
+    },
+  ];
 
-  const history: StockSeriesPoint[] = [];
-  let runningStock = Number(currentStock);
-  for (let index = normalizedMovements.length - 1; index >= 0; index -= 1) {
-    const point = normalizedMovements[index];
-    if (point.time !== today.getTime()) {
-      runningStock += point.quantity;
+  const cursor = new Date(anchorDate);
+  while (cursor.getTime() > startTime) {
+    cursor.setDate(cursor.getDate() - 1);
+    runningStock += dailyMovementMap.get(cursor.getTime()) || 0;
+    if (isWeekend(cursor)) {
+      continue;
     }
     history.unshift({
-      date: point.date,
-      time: point.time,
+      date: cursor.toISOString(),
+      time: cursor.getTime(),
       value: runningStock,
-    });
-  }
-
-  if (!history.length || new Date(history[history.length - 1].date).getTime() !== today.getTime()) {
-    history.push({
-      date: today.toISOString(),
-      time: today.getTime(),
-      value: Number(currentStock),
     });
   }
 
@@ -426,13 +440,13 @@ function MovementHistoryCard({
           <div className="flex items-start justify-between mb-6 gap-4">
             <div>
               <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                {isCustomSelection ? "Selected Period" : history ? `${history.movement_days}-Day Trend` : "Trend"}
+                {isCustomSelection ? "Selected Period" : chart ? `${chart.points.length}-Business-Day Trend` : history ? `${history.movement_days}-Day Trend` : "Trend"}
               </h3>
               <div className="text-xs text-zinc-500 mt-1">
                 {summary ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}` : "—"}
               </div>
               <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                Click and drag across the curve to inspect the stock variation and average consumption per day.
+                Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted.
               </p>
               {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
             </div>
@@ -570,10 +584,10 @@ function MovementHistoryCard({
                 ) : null}
 
                 <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
-                  {formatDate(history.range_start)}
+                  {formatDate(chart.points[0]?.date)}
                 </text>
                 <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
-                  {formatDate(history.range_end)}
+                  {formatDate(chart.points[chart.points.length - 1]?.date)}
                 </text>
               </svg>
             ) : (

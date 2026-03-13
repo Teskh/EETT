@@ -211,17 +211,19 @@ def _build_material_dashboard_detail(
         return None
 
     today = datetime.utcnow().date()
+    movement_window_start = today - timedelta(days=30)
+    business_days_in_window = _count_business_days(movement_window_start, today)
     movement_quantity_30d = float(material.get("movement_quantity_30d") or 0.0)
     stock_on_hand = _coerce_float(material.get("stock_on_hand"))
     lead_time_reference = _coerce_float(material.get("max_lead_time_days")) or _coerce_float(material.get("average_lead_time_days"))
-    average_daily_outgoing_30d = round(movement_quantity_30d / 30, 2) if movement_quantity_30d > 0 else 0.0
+    average_daily_outgoing_30d = round(movement_quantity_30d / business_days_in_window, 2) if movement_quantity_30d > 0 and business_days_in_window > 0 else 0.0
     days_of_stock_30d = None
     reorder_date_recent_rate = None
     if stock_on_hand is not None and average_daily_outgoing_30d > 0:
         days_of_stock_30d = round(stock_on_hand / average_daily_outgoing_30d, 1)
         if lead_time_reference and lead_time_reference > 0:
             reorder_in_days = max(int(round(days_of_stock_30d - lead_time_reference)), 0)
-            reorder_date_recent_rate = (today + timedelta(days=reorder_in_days)).isoformat()
+            reorder_date_recent_rate = _add_business_days(today, reorder_in_days).isoformat()
 
     return {
         "sku": normalized_sku,
@@ -425,6 +427,32 @@ def _is_missing_material_dashboard_cache_table(exc: Exception) -> bool:
         or "undefinedtable" in message
         or "no such table" in message
     )
+
+
+def _count_business_days(start_day: date, end_day: date) -> int:
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+
+    count = 0
+    current_day = start_day
+    while current_day <= end_day:
+        if current_day.weekday() < 5:
+            count += 1
+        current_day += timedelta(days=1)
+    return count
+
+
+def _add_business_days(start_day: date, offset: int) -> date:
+    current_day = start_day
+    while current_day.weekday() >= 5:
+        current_day += timedelta(days=1)
+
+    remaining = max(int(offset), 0)
+    while remaining > 0:
+        current_day += timedelta(days=1)
+        if current_day.weekday() < 5:
+            remaining -= 1
+    return current_day
 
 
 def _coerce_float(value: object) -> float | None:

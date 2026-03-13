@@ -230,7 +230,7 @@ def get_material_procurement_details(
                 label=f"average price for {normalized_sku}",
             )
             lead_stats = _safe_erp_lookup(
-                lambda: _get_lead_time_stats_for_products_batch(lead_cursor, [normalized_sku], limit=5).get(normalized_sku) or {},
+                lambda: _get_lead_time_stats_for_products_batch(lead_cursor, [normalized_sku], limit=20).get(normalized_sku) or {},
                 default={},
                 label=f"lead time for {normalized_sku}",
             )
@@ -603,9 +603,10 @@ def _get_lead_time_samples_for_product(cursor, product_code: str, *, limit: int)
     normalized_code = product_code.strip().upper()
     if not normalized_code:
         return []
+    sample_target = max(int(limit), 1)
     cursor.execute(
         f"""
-        SELECT TOP {max(int(limit), 1)}
+        SELECT TOP {sample_target * 5}
             c.fechaOC,
             c.FecFinalOC,
             c.numoc,
@@ -639,12 +640,14 @@ def _get_lead_time_samples_for_product(cursor, product_code: str, *, limit: int)
             continue
         lead_time_days = max((receipt_date - order_date).days, 0)
         samples.append({"lead_time_days": lead_time_days})
+        if len(samples) >= sample_target:
+            break
     return samples
 
 
 def _fetch_first_receipt_date(cursor, *, num_oc: Any, num_inter_oc: Any, num_linea: Any, product_code: str):
     oc_candidates = _normalize_identifiers(num_oc, pad_lengths=(6, 8, 10, 12))
-    inter_candidates = _normalize_identifiers(num_inter_oc)
+    inter_candidates = _normalize_identifiers(num_inter_oc, pad_lengths=(6, 8, 10, 12))
     line_candidates = _normalize_identifiers(num_linea, pad_lengths=(2, 3, 4))
 
     def run_query(where_clause: str, params: Sequence[object]):

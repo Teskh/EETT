@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime, timedelta
 import os
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -36,6 +38,8 @@ from app.services.catalog import (
     update_attribute_definition,
 )
 from app.services.dashboard import get_recent_material_dashboard
+from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
+from app.services.erp import _get_lead_time_samples_for_product
 from app.services.projects import (
     _visible_project_subtype_rows,
     create_project_instance,
@@ -1423,6 +1427,86 @@ class ServiceLayerTests(unittest.TestCase):
 
         with self.session_factory() as session:
             self.assertIsNotNone(session.query(CatalogCategory).first())
+
+
+class MaterialDashboardBusinessDayTests(unittest.TestCase):
+    @patch("app.services.dashboard.get_material_procurement_details")
+    def test_detail_builder_uses_business_days_for_recent_rate_and_reorder_date(self, procurement_mock) -> None:
+        class FixedDateTime(datetime):
+            @classmethod
+            def utcnow(cls):
+                return cls(2026, 3, 16, 15, 0, 0)
+
+        procurement_mock.return_value = {
+            "material_name": "Steel Stud 90",
+            "unit": "UN",
+            "movement_quantity_30d": 84.0,
+            "stock_on_hand": 210.0,
+            "pending_purchase_quantity": 15.0,
+            "average_price": 2500.0,
+            "average_lead_time_days": 4.0,
+            "max_lead_time_days": 6.0,
+            "lead_time_sample_count": 3,
+            "last_purchase_order_date": "2026-03-01",
+            "last_purchase_order_number": "OC-123",
+            "last_purchase_order_estimated_delivery": "2026-03-18",
+        }
+
+        with patch("app.services.dashboard.datetime", FixedDateTime):
+            detail = _build_material_dashboard_detail(Settings(), "ERP-001", cost_centers=["CC-01"])
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+
+        today = FixedDateTime.utcnow().date()
+        business_days = _count_business_days(today - timedelta(days=30), today)
+        expected_average = round(84.0 / business_days, 2)
+        expected_days_of_stock = round(210.0 / expected_average, 1)
+        expected_reorder_offset = max(int(round(expected_days_of_stock - 6.0)), 0)
+
+        self.assertEqual(detail["average_daily_outgoing_30d"], expected_average)
+        self.assertEqual(detail["days_of_stock_30d"], expected_days_of_stock)
+        self.assertEqual(detail["reorder_date_recent_rate"], _add_business_days(today, expected_reorder_offset).isoformat())
+
+    def test_add_business_days_skips_weekends(self) -> None:
+        self.assertEqual(_count_business_days(date(2026, 3, 13), date(2026, 3, 16)), 2)
+        self.assertEqual(_add_business_days(date(2026, 3, 13), 1), date(2026, 3, 16))
+        self.assertEqual(_add_business_days(date(2026, 3, 14), 0), date(2026, 3, 16))
+
+
+class ErpLeadTimeSampleTests(unittest.TestCase):
+    def test_lead_time_sampling_scans_past_unusable_recent_orders(self) -> None:
+        rows = [
+            SimpleNamespace(
+                fechaOC=f"2026-03-{day:02d}",
+                FecFinalOC=None,
+                numoc=f"OC-{day:03d}",
+                OCNumInterOc=f"INT-{day:03d}",
+                NumLinea="1",
+                CodProd="ERP-001",
+            )
+            for day in range(15, 0, -1)
+        ]
+
+        class FakeCursor:
+            def __init__(self, query_rows):
+                self.query_rows = query_rows
+
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return self.query_rows
+
+        cursor = FakeCursor(rows)
+
+        receipt_dates = [None, None, None, date(2026, 3, 12), date(2026, 3, 11), date(2026, 3, 10)]
+        with patch("app.services.erp._fetch_first_receipt_date", side_effect=receipt_dates):
+            samples = _get_lead_time_samples_for_product(cursor, "ERP-001", limit=3)
+
+        self.assertEqual(len(samples), 3)
+        self.assertTrue(all(sample["lead_time_days"] is not None for sample in samples))
 
 
 if __name__ == "__main__":
