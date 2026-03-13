@@ -85,6 +85,42 @@ export type MaterialDashboardMovementData = {
   generated_at: string;
 };
 
+export type MaterialDashboardHouseType = {
+  id: number;
+  name: string;
+  number_of_modules: number;
+};
+
+export type MaterialDashboardHouseTypesResponse = {
+  house_types: MaterialDashboardHouseType[];
+};
+
+export type MaterialDashboardHouseComparisonPoint = {
+  date: string;
+  material_quantity: number;
+  house_starts: number;
+  cumulative_material_quantity: number;
+  cumulative_house_starts: number;
+  material_per_house: number | null;
+};
+
+export type MaterialDashboardHouseComparisonData = {
+  sku: string;
+  house_type_id: number;
+  house_type_name: string;
+  number_of_modules: number;
+  movement_days: number;
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  total_material_quantity: number;
+  total_house_starts: number;
+  material_per_house: number | null;
+  latest_house_start_date: string | null;
+  points: MaterialDashboardHouseComparisonPoint[];
+  generated_at: string;
+};
+
 export type LoginRequest = {
   username: string;
   password: string;

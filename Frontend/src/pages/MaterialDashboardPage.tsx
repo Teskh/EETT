@@ -6,6 +6,9 @@ import type {
   MaterialDashboardCeco,
   MaterialDashboardData,
   MaterialDashboardDetailData,
+  MaterialDashboardHouseComparisonData,
+  MaterialDashboardHouseComparisonPoint,
+  MaterialDashboardHouseType,
   MaterialDashboardListRow,
   MaterialDashboardMovementData,
   MaterialDashboardMovementPoint,
@@ -81,6 +84,10 @@ function historyCacheKey(sku: string, cecos: string[]) {
   return `history::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
+function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[]) {
+  return `houses::${sku}::${houseTypeId}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
 function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardListRow, sort: SortState) {
   const leftValue = left[sort.key];
   const rightValue = right[sort.key];
@@ -117,6 +124,8 @@ type ChartSelection = {
   startIndex: number;
   endIndex: number;
 };
+
+type DashboardViewMode = "stock" | "houses";
 
 type LeadTimeReference = {
   days: number;
@@ -272,11 +281,25 @@ function getSelectionBounds(selection: ChartSelection) {
   };
 }
 
+function getClampedSelectionBounds(selection: ChartSelection, pointCount: number) {
+  if (pointCount <= 0) {
+    return null;
+  }
+  const bounds = getSelectionBounds(selection);
+  return {
+    startIndex: clamp(bounds.startIndex, 0, pointCount - 1),
+    endIndex: clamp(bounds.endIndex, 0, pointCount - 1),
+  };
+}
+
 function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | null) {
   if (!points.length) {
     return null;
   }
-  const bounds = selection ? getSelectionBounds(selection) : { startIndex: 0, endIndex: points.length - 1 };
+  const bounds = selection ? getClampedSelectionBounds(selection, points.length) : { startIndex: 0, endIndex: points.length - 1 };
+  if (!bounds) {
+    return null;
+  }
   const start = points[bounds.startIndex];
   const end = points[bounds.endIndex];
   const elapsedDays = Math.max(bounds.endIndex - bounds.startIndex, 1);
@@ -296,7 +319,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getClosestPointIndex(points: ChartPoint[], x: number) {
+function getClosestPointIndex(points: Array<{ x: number; index: number }>, x: number) {
   let closestIndex = 0;
   let closestDistance = Number.POSITIVE_INFINITY;
 
@@ -314,12 +337,18 @@ function getClosestPointIndex(points: ChartPoint[], x: number) {
 function buildHistoricalStockSeries(
   movements: MaterialDashboardMovementPoint[],
   currentStock: number | null | undefined,
+  options: {
+    startDate?: string | null;
+    endDate?: string | null;
+    includeWeekends?: boolean;
+  } = {},
 ): StockSeriesPoint[] {
   if (currentStock === null || currentStock === undefined || Number.isNaN(currentStock)) {
     return [];
   }
+  const includeWeekends = options.includeWeekends ?? false;
   const today = toStartOfDay(new Date());
-  const anchorDate = moveToPreviousBusinessDay(today);
+  const anchorDate = includeWeekends ? today : moveToPreviousBusinessDay(today);
   const dailyMovementMap = new Map<number, number>();
   for (const point of movements) {
     const date = toStartOfDay(point.date);
@@ -337,20 +366,30 @@ function buildHistoricalStockSeries(
   }
 
   const earliestMovementTime = dailyMovementMap.size ? Math.min(...dailyMovementMap.keys()) : anchorDate.getTime();
-  const startTime = Math.min(earliestMovementTime, anchorDate.getTime());
-  const history: StockSeriesPoint[] = [
-    {
-      date: anchorDate.toISOString(),
-      time: anchorDate.getTime(),
-      value: runningStock,
-    },
-  ];
+  const requestedEndTime = options.endDate ? toStartOfDay(options.endDate).getTime() : anchorDate.getTime();
+  const endTime = Math.min(requestedEndTime, anchorDate.getTime());
+  const requestedStartTime = options.startDate ? toStartOfDay(options.startDate).getTime() : earliestMovementTime;
+  const startTime = Math.min(requestedStartTime, endTime);
+  const history: StockSeriesPoint[] = [];
 
   const cursor = new Date(anchorDate);
+  while (cursor.getTime() > endTime) {
+    runningStock += dailyMovementMap.get(cursor.getTime()) || 0;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  if (includeWeekends || !isWeekend(cursor)) {
+    history.unshift({
+      date: cursor.toISOString(),
+      time: cursor.getTime(),
+      value: runningStock,
+    });
+  }
+
   while (cursor.getTime() > startTime) {
     cursor.setDate(cursor.getDate() - 1);
     runningStock += dailyMovementMap.get(cursor.getTime()) || 0;
-    if (isWeekend(cursor)) {
+    if (!includeWeekends && isWeekend(cursor)) {
       continue;
     }
     history.unshift({
@@ -361,6 +400,117 @@ function buildHistoricalStockSeries(
   }
 
   return history;
+}
+
+type HouseTrendChartPoint = MaterialDashboardHouseComparisonPoint & {
+  index: number;
+  x: number;
+  stockValue: number | null;
+  stockY: number | null;
+  remainingHouseStarts: number;
+  houseY: number;
+};
+
+function buildLineSegments(points: Array<{ x: number; y: number | null }>) {
+  const segments: string[] = [];
+  let drawing = false;
+
+  for (const point of points) {
+    if (point.y === null) {
+      drawing = false;
+      continue;
+    }
+    segments.push(`${drawing ? "L" : "M"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`);
+    drawing = true;
+  }
+
+  return segments.join(" ");
+}
+
+function buildHouseComparisonChart(
+  houseComparison: MaterialDashboardHouseComparisonData,
+  stockSeries: StockSeriesPoint[],
+  width: number,
+  height: number,
+) {
+  if (!houseComparison.points.length) {
+    return null;
+  }
+  const padding = { top: 18, right: 52, bottom: 26, left: 40 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const stockValueByDay = new Map(stockSeries.map((point) => [toStartOfDay(point.date).getTime(), point.value]));
+  const maxStock = Math.max(...stockSeries.map((point) => point.value), 1);
+  const totalHouseStarts = Math.max(houseComparison.total_house_starts, 0);
+
+  const chartPoints: HouseTrendChartPoint[] = houseComparison.points.map((point, index) => {
+    const x =
+      houseComparison.points.length === 1
+        ? padding.left + plotWidth / 2
+        : padding.left + (index / (houseComparison.points.length - 1)) * plotWidth;
+    const stockValue = stockValueByDay.get(toStartOfDay(point.date).getTime()) ?? null;
+    const remainingHouseStarts = Math.max(totalHouseStarts - (point.cumulative_house_starts - point.house_starts), 0);
+    return {
+      ...point,
+      index,
+      x,
+      stockValue,
+      stockY: null,
+      remainingHouseStarts,
+      houseY: 0,
+    };
+  });
+  const maxRemainingHouseStarts = Math.max(...chartPoints.map((point) => point.remainingHouseStarts), 1);
+  const positionedPoints = chartPoints.map((point) => ({
+    ...point,
+    stockY:
+      point.stockValue !== null ? padding.top + plotHeight - (point.stockValue / maxStock) * plotHeight : null,
+    houseY: padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight,
+  }));
+
+  const stockPath = buildLineSegments(positionedPoints.map((point) => ({ x: point.x, y: point.stockY })));
+  const housePath = buildLineSegments(positionedPoints.map((point) => ({ x: point.x, y: point.houseY })));
+
+  return {
+    width,
+    height,
+    padding,
+    plotWidth,
+    plotHeight,
+    maxStock,
+    maxRemainingHouseStarts,
+    points: positionedPoints,
+    stockPath,
+    housePath,
+  };
+}
+
+function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?: ChartSelection | null) {
+  if (!points.length) {
+    return null;
+  }
+  const bounds = selection ? getClampedSelectionBounds(selection, points.length) : { startIndex: 0, endIndex: points.length - 1 };
+  if (!bounds) {
+    return null;
+  }
+  const start = points[bounds.startIndex];
+  const end = points[bounds.endIndex];
+  const selectedPoints = points.slice(bounds.startIndex, bounds.endIndex + 1);
+  const elapsedDays = Math.max(bounds.endIndex - bounds.startIndex, 1);
+  const materialConsumed = selectedPoints.reduce((sum, point) => sum + (Number(point.material_quantity) || 0), 0);
+  const housesProduced = selectedPoints.reduce((sum, point) => sum + (Number(point.house_starts) || 0), 0);
+  const stockDelta =
+    start.stockValue !== null && end.stockValue !== null ? end.stockValue - start.stockValue : null;
+
+  return {
+    start,
+    end,
+    elapsedDays,
+    stockDelta,
+    materialConsumed,
+    housesProduced,
+    averageConsumptionPerHouse: housesProduced > 0 ? materialConsumed / housesProduced : null,
+  };
 }
 
 function MetricCard({ label, value }: { label: string; value: string }) {
@@ -394,18 +544,34 @@ function MovementHistoryCard({
   selected,
   detail,
   history,
+  viewMode,
+  houseTypes,
+  selectedHouseTypeId,
+  onSelectHouseType,
+  houseComparison,
   detailLoading,
   historyLoading,
+  houseComparisonLoading,
   detailRefreshing,
   historyRefreshing,
+  houseComparisonRefreshing,
+  houseComparisonError,
 }: {
   selected: MaterialDashboardListRow | null;
   detail: MaterialDashboardDetailData | null;
   history: MaterialDashboardMovementData | null;
+  viewMode: DashboardViewMode;
+  houseTypes: MaterialDashboardHouseType[];
+  selectedHouseTypeId: number | null;
+  onSelectHouseType: (houseTypeId: number) => void;
+  houseComparison: MaterialDashboardHouseComparisonData | null;
   detailLoading: boolean;
   historyLoading: boolean;
+  houseComparisonLoading: boolean;
   detailRefreshing: boolean;
   historyRefreshing: boolean;
+  houseComparisonRefreshing: boolean;
+  houseComparisonError: string | null;
 }) {
   const [selection, setSelection] = useState<ChartSelection | null>(null);
   const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
@@ -420,7 +586,7 @@ function MovementHistoryCard({
     setDragCurrentIndex(null);
     setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
-  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand]);
+  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, viewMode, selectedHouseTypeId, houseComparison?.generated_at]);
 
   if (!selected) {
     return (
@@ -443,13 +609,31 @@ function MovementHistoryCard({
 
   const stockSeries = detail ? buildHistoricalStockSeries(history?.movements || [], detail.stock_on_hand) : [];
   const chart = stockSeries.length ? buildLinePath(stockSeries, CHART_WIDTH, CHART_HEIGHT) : null;
+  const houseStockSeries =
+    detail && houseComparison
+      ? buildHistoricalStockSeries(history?.movements || [], detail.stock_on_hand, {
+          startDate: houseComparison.range_start,
+          endDate: houseComparison.range_end,
+          includeWeekends: true,
+        })
+      : [];
+  const isHouseMode = viewMode === "houses";
+  const houseChart =
+    houseComparison && houseStockSeries.length
+      ? buildHouseComparisonChart(houseComparison, houseStockSeries, CHART_WIDTH, CHART_HEIGHT)
+      : houseComparison
+        ? buildHouseComparisonChart(houseComparison, [], CHART_WIDTH, CHART_HEIGHT)
+        : null;
   const activeSelection =
     dragAnchorIndex !== null && dragCurrentIndex !== null ? { startIndex: dragAnchorIndex, endIndex: dragCurrentIndex } : selection;
   const summary = chart ? getSeriesSummary(chart.points, activeSelection) : null;
-  const selectionBounds = activeSelection ? getSelectionBounds(activeSelection) : null;
-  const selectionStart = selectionBounds && chart ? chart.points[selectionBounds.startIndex] : null;
-  const selectionEnd = selectionBounds && chart ? chart.points[selectionBounds.endIndex] : null;
+  const houseSummary = houseChart ? getHouseSeriesSummary(houseChart.points, activeSelection) : null;
+  const activeChart = isHouseMode ? houseChart : chart;
+  const selectionBounds = activeSelection && activeChart ? getClampedSelectionBounds(activeSelection, activeChart.points.length) : null;
+  const selectionStart = selectionBounds && activeChart ? activeChart.points[selectionBounds.startIndex] : null;
+  const selectionEnd = selectionBounds && activeChart ? activeChart.points[selectionBounds.endIndex] : null;
   const hoveredPoint = chart && hoveredPointIndex !== null ? chart.points[hoveredPointIndex] || null : null;
+  const houseChartHoveredPoint = houseChart && hoveredPointIndex !== null ? houseChart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
   const isBlockingLoad = (!detail && detailLoading) || (!history && historyLoading);
   const isRefreshing = detailRefreshing || historyRefreshing;
@@ -461,9 +645,10 @@ function MovementHistoryCard({
     isCustomSelection,
     bufferWeeks,
   });
+  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!chart) {
+    if (!activeChart) {
       return null;
     }
     const svg = event.currentTarget;
@@ -475,8 +660,8 @@ function MovementHistoryCard({
       return null;
     }
     const cursorPt = pt.matrixTransform(ctm.inverse());
-    const chartX = clamp(cursorPt.x, chart.padding.left, chart.padding.left + chart.plotWidth);
-    return getClosestPointIndex(chart.points, chartX);
+    const chartX = clamp(cursorPt.x, activeChart.padding.left, activeChart.padding.left + activeChart.plotWidth);
+    return getClosestPointIndex(activeChart.points, chartX);
   }
 
   function handlePointerDown(event: ReactPointerEvent<SVGSVGElement>) {
@@ -563,15 +748,53 @@ function MovementHistoryCard({
           <div className="flex items-start justify-between mb-6 gap-4">
             <div>
               <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                {isCustomSelection ? "Selected Period" : chart ? `${chart.points.length}-Business-Day Trend` : history ? `${history.movement_days}-Day Trend` : "Trend"}
+                {isHouseMode
+                  ? isCustomSelection
+                    ? `Selected House Period${selectedHouseType ? ` · ${selectedHouseType.name}` : ""}`
+                    : `90-Day House Starts${selectedHouseType ? ` · ${selectedHouseType.name}` : ""}`
+                  : isCustomSelection
+                    ? "Selected Period"
+                    : chart
+                      ? `${chart.points.length}-Business-Day Trend`
+                      : history
+                        ? `${history.movement_days}-Day Trend`
+                        : "Trend"}
               </h3>
               <div className="text-xs text-zinc-500 mt-1">
-                {summary ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}` : "—"}
+                {isHouseMode
+                  ? houseSummary
+                    ? `${formatDate(houseSummary.start.date)} - ${formatDate(houseSummary.end.date)}`
+                    : "Last 90 days"
+                  : summary
+                    ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}`
+                    : "—"}
               </div>
               <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted.
+                {isHouseMode
+                  ? "Click and drag across the curves to inspect stock variation and material consumed per house produced. Amber tracks material stock; slate tracks remaining house starts."
+                  : "Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted."}
               </p>
-              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
+              {isRefreshing && !isHouseMode ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
+              {houseComparisonRefreshing && isHouseMode ? (
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing 90-day house-start comparison...</p>
+              ) : null}
+              {houseComparisonError && isHouseMode ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
+              {isHouseMode ? (
+                <div className="mt-4">
+                  <label className="block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2">House Type</label>
+                  <select
+                    value={selectedHouseTypeId ?? ""}
+                    onChange={(event) => onSelectHouseType(Number(event.target.value))}
+                    className="w-full max-w-sm rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+                  >
+                    {houseTypes.map((houseType) => (
+                      <option key={houseType.id} value={houseType.id}>
+                        {houseType.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
             </div>
             {isCustomSelection ? (
               <button
@@ -585,7 +808,261 @@ function MovementHistoryCard({
           </div>
 
           <div className="flex-1 w-full relative min-h-[240px]">
-            {isBlockingLoad ? (
+            {isHouseMode ? (
+              !selectedHouseType ? (
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house types available.</div>
+              ) : houseComparisonLoading && !houseComparison ? (
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">Loading house-start comparison...</div>
+              ) : houseComparison && houseChart ? (
+                <svg
+                  viewBox={`0 0 ${houseChart.width} ${houseChart.height}`}
+                  className="w-full h-full max-h-[400px] overflow-visible cursor-crosshair touch-none select-none"
+                  focusable="false"
+                  style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  onPointerLeave={handlePointerLeave}
+                >
+                  <defs>
+                    {selectionStart && selectionEnd ? (
+                      <clipPath id="selection-clip">
+                        <rect
+                          x={Math.min(selectionStart.x, selectionEnd.x)}
+                          y={0}
+                          width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 0.001)}
+                          height={houseChart.height}
+                        />
+                      </clipPath>
+                    ) : null}
+                  </defs>
+                  {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
+                    const y = houseChart.padding.top + houseChart.plotHeight - stop * houseChart.plotHeight;
+                    return (
+                      <g key={stop}>
+                        <line
+                          x1={houseChart.padding.left}
+                          y1={y}
+                          x2={houseChart.width - houseChart.padding.right}
+                          y2={y}
+                          stroke="rgba(113,113,122,0.18)"
+                          strokeDasharray="4 6"
+                        />
+                        <text x={houseChart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                          {formatNumber(houseChart.maxStock * stop)}
+                        </text>
+                        <text x={houseChart.width - houseChart.padding.right + 10} y={y + 4} fontSize="11" fill="currentColor" opacity="0.55">
+                          {formatNumber(houseChart.maxRemainingHouseStarts * stop, 0)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                  {selectionStart && selectionEnd ? (
+                    <g>
+                      <rect
+                        x={Math.min(selectionStart.x, selectionEnd.x)}
+                        y={houseChart.padding.top}
+                        width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 2)}
+                        height={houseChart.plotHeight}
+                        fill="rgba(51, 65, 85, 0.08)"
+                      />
+                      <line
+                        x1={selectionStart.x}
+                        y1={houseChart.padding.top}
+                        x2={selectionStart.x}
+                        y2={houseChart.padding.top + houseChart.plotHeight}
+                        stroke="rgba(51, 65, 85, 0.45)"
+                        strokeDasharray="4 4"
+                      />
+                      <line
+                        x1={selectionEnd.x}
+                        y1={houseChart.padding.top}
+                        x2={selectionEnd.x}
+                        y2={houseChart.padding.top + houseChart.plotHeight}
+                        stroke="rgba(51, 65, 85, 0.45)"
+                        strokeDasharray="4 4"
+                      />
+                    </g>
+                  ) : null}
+                  {houseChart.stockPath ? (
+                    <path
+                      d={houseChart.stockPath}
+                      fill="none"
+                      stroke="rgb(245 158 11)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={selectionBounds ? 0.25 : 1}
+                      className="transition-opacity duration-300"
+                    />
+                  ) : null}
+                  {houseChart.housePath ? (
+                    <path
+                      d={houseChart.housePath}
+                      fill="none"
+                      stroke="rgb(51 65 85)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={selectionBounds ? 0.25 : 1}
+                      className="transition-opacity duration-300 dark:stroke-slate-300"
+                    />
+                  ) : null}
+                  {houseChart.points.map((point) => (
+                    <g key={point.date}>
+                      {point.stockY !== null ? (
+                        <circle
+                          cx={point.x}
+                          cy={point.stockY}
+                          r={houseChartHoveredPoint?.index === point.index ? 5 : 2.5}
+                          fill="rgb(245 158 11)"
+                          opacity={selectionBounds ? 0.25 : 1}
+                          className="transition-opacity duration-300"
+                          pointerEvents="none"
+                        />
+                      ) : null}
+                      <circle
+                        cx={point.x}
+                        cy={point.houseY}
+                        r={houseChartHoveredPoint?.index === point.index ? 5 : 2.5}
+                        fill="rgb(51 65 85)"
+                        opacity={selectionBounds ? 0.25 : 1}
+                        className="transition-opacity duration-300 dark:fill-slate-300"
+                        pointerEvents="none"
+                      />
+                    </g>
+                  ))}
+                  {selectionBounds ? (
+                    <g clipPath="url(#selection-clip)">
+                      {houseChart.stockPath ? (
+                        <path
+                          d={houseChart.stockPath}
+                          fill="none"
+                          stroke="rgb(245 158 11)"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      ) : null}
+                      {houseChart.housePath ? (
+                        <path
+                          d={houseChart.housePath}
+                          fill="none"
+                          stroke="rgb(51 65 85)"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="dark:stroke-slate-300"
+                        />
+                      ) : null}
+                      {houseChart.points.map((point) => {
+                        const highlighted = point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
+                        if (!highlighted) {
+                          return null;
+                        }
+                        return (
+                          <g key={`hi-${point.date}`}>
+                            {point.stockY !== null ? (
+                              <circle
+                                cx={point.x}
+                                cy={point.stockY}
+                                r={houseChartHoveredPoint?.index === point.index ? 5.5 : 4.5}
+                                fill="rgb(245 158 11)"
+                                stroke="rgb(255 255 255)"
+                                strokeWidth="1.5"
+                                className="dark:stroke-zinc-900"
+                                pointerEvents="none"
+                              />
+                            ) : null}
+                            <circle
+                              cx={point.x}
+                              cy={point.houseY}
+                              r={houseChartHoveredPoint?.index === point.index ? 5.5 : 4.5}
+                              fill="rgb(51 65 85)"
+                              stroke="rgb(255 255 255)"
+                              strokeWidth="1.5"
+                              className="dark:stroke-slate-300"
+                              pointerEvents="none"
+                            />
+                          </g>
+                        );
+                      })}
+                    </g>
+                  ) : null}
+                  {houseChartHoveredPoint ? (
+                    <g pointerEvents="none">
+                      <line
+                        x1={houseChartHoveredPoint.x}
+                        y1={houseChart.padding.top}
+                        x2={houseChartHoveredPoint.x}
+                        y2={houseChart.padding.top + houseChart.plotHeight}
+                        stroke="rgba(51, 65, 85, 0.35)"
+                        strokeDasharray="4 4"
+                      />
+                      {houseChartHoveredPoint.stockY !== null ? (
+                        <circle
+                          cx={houseChartHoveredPoint.x}
+                          cy={houseChartHoveredPoint.stockY}
+                          r={6}
+                          fill="rgb(245 158 11)"
+                          stroke="rgb(255 255 255)"
+                          strokeWidth="2"
+                          className="dark:stroke-zinc-900"
+                        />
+                      ) : null}
+                      <circle
+                        cx={houseChartHoveredPoint.x}
+                        cy={houseChartHoveredPoint.houseY}
+                        r={6}
+                        fill="rgb(51 65 85)"
+                        stroke="rgb(255 255 255)"
+                        strokeWidth="2"
+                        className="dark:fill-slate-300 dark:stroke-zinc-900"
+                      />
+                      <g
+                        transform={`translate(${clamp(houseChartHoveredPoint.x - 90, houseChart.padding.left, houseChart.width - houseChart.padding.right - 180)}, ${
+                          Math.min(
+                            houseChartHoveredPoint.stockY ?? houseChartHoveredPoint.houseY,
+                            houseChartHoveredPoint.houseY,
+                          ) < houseChart.padding.top + 74
+                            ? Math.max(
+                                houseChartHoveredPoint.stockY ?? houseChartHoveredPoint.houseY,
+                                houseChartHoveredPoint.houseY,
+                              ) + 16
+                            : Math.min(
+                                houseChartHoveredPoint.stockY ?? houseChartHoveredPoint.houseY,
+                                houseChartHoveredPoint.houseY,
+                              ) - 76
+                        })`}
+                      >
+                        <rect width="180" height="66" rx="10" fill="rgba(24, 24, 27, 0.92)" className="dark:fill-zinc-950/95" />
+                        <text x="12" y="17" fontSize="11" fill="white" opacity="0.9">
+                          {formatDate(houseChartHoveredPoint.date)}
+                        </text>
+                        <text x="12" y="31" fontSize="12" fill="white" fontWeight="700">
+                          Stock: {formatNumber(houseChartHoveredPoint.stockValue)}
+                        </text>
+                        <text x="12" y="45" fontSize="12" fill="white" fontWeight="700">
+                          Remaining starts: {formatNumber(houseChartHoveredPoint.remainingHouseStarts, 0)}
+                        </text>
+                        <text x="12" y="59" fontSize="12" fill="white" fontWeight="700">
+                          Starts today: {formatNumber(houseChartHoveredPoint.house_starts, 0)}
+                        </text>
+                      </g>
+                    </g>
+                  ) : null}
+                  <text x={houseChart.padding.left} y={houseChart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
+                    {formatDate(houseChart.points[0]?.date)}
+                  </text>
+                  <text x={houseChart.width - houseChart.padding.right} y={houseChart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+                    {formatDate(houseChart.points[houseChart.points.length - 1]?.date)}
+                  </text>
+                </svg>
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No 90-day house-start data available for this house type.</div>
+              )
+            ) : isBlockingLoad ? (
               <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
             ) : history && chart ? (
               <svg
@@ -764,7 +1241,36 @@ function MovementHistoryCard({
             )}
           </div>
 
-          {history && chart ? (
+          {isHouseMode ? (
+            houseSummary ? (
+              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
+                  <div
+                    className={`text-lg font-medium ${
+                      houseSummary.stockDelta === null
+                        ? "text-zinc-900 dark:text-white"
+                        : houseSummary.stockDelta < 0
+                          ? "text-red-600 dark:text-red-400"
+                          : "text-emerald-600 dark:text-emerald-400"
+                    }`}
+                  >
+                    {houseSummary.stockDelta === null ? "—" : formatSignedNumber(houseSummary.stockDelta)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Cons./house</div>
+                  <div className="text-lg font-medium text-zinc-900 dark:text-white">
+                    {formatNumber(houseSummary.averageConsumptionPerHouse)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Houses Prod.</div>
+                  <div className="text-lg font-medium text-zinc-900 dark:text-white">{formatNumber(houseSummary.housesProduced, 0)}</div>
+                </div>
+              </div>
+            ) : null
+          ) : history && chart ? (
             <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
@@ -789,9 +1295,25 @@ function MovementHistoryCard({
         </div>
 
         <div className="p-6 md:p-8 bg-zinc-50/50 dark:bg-white/[0.02] flex flex-col gap-6">
-           <div>
-             <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
-             <div className="space-y-3">
+          {isHouseMode ? (
+            <div>
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Production Comparison</h3>
+              <div className="space-y-3">
+                <MetricRow label="House type" value={houseComparison?.house_type_name || selectedHouseType?.name || "—"} />
+                <MetricRow label="Modules/type" value={selectedHouseType ? formatNumber(selectedHouseType.number_of_modules, 0) : "—"} />
+                <MetricRow label="Material 90d" value={houseComparison ? formatNumber(houseComparison.total_material_quantity) : houseComparisonLoading ? "..." : "—"} />
+                <MetricRow label="House starts 90d" value={houseComparison ? formatNumber(houseComparison.total_house_starts, 0) : houseComparisonLoading ? "..." : "—"} />
+                <MetricRow label="Material / house" value={houseComparison ? formatNumber(houseComparison.material_per_house) : houseComparisonLoading ? "..." : "—"} />
+                <MetricRow label="Last house start" value={houseComparison ? formatDate(houseComparison.latest_house_start_date) : houseComparisonLoading ? "..." : "—"} />
+                <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
+                <MetricRow label="Stock on hand" value={detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"} />
+                <MetricRow label="Avg price" value={detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"} />
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
+              <div className="space-y-3">
                 <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
                 <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
                 <MetricRow label="Reorden 30d" value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"} />
@@ -857,8 +1379,9 @@ function MovementHistoryCard({
                 <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
                 <MetricRow label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
                 <MetricRow label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />
-             </div>
-           </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>
@@ -870,23 +1393,30 @@ export function MaterialDashboardPage() {
   const [dashboardCache, setDashboardCache] = useState<Record<string, MaterialDashboardData>>({});
   const [detailCache, setDetailCache] = useState<Record<string, MaterialDashboardDetailData>>({});
   const [historyCache, setHistoryCache] = useState<Record<string, MaterialDashboardMovementData>>({});
+  const [houseComparisonCache, setHouseComparisonCache] = useState<Record<string, MaterialDashboardHouseComparisonData>>({});
+  const [houseTypes, setHouseTypes] = useState<MaterialDashboardHouseType[]>([]);
   const [selectedCecos, setSelectedCecos] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"materials" | "cecos">("materials");
+  const [viewMode, setViewMode] = useState<DashboardViewMode>("stock");
   const [cecoSearch, setCecoSearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
   const [selectedSku, setSelectedSku] = useState<string | null>(null);
+  const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [houseComparisonLoading, setHouseComparisonLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [houseComparisonError, setHouseComparisonError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const deferredMaterialSearch = useDeferredValue(materialSearch);
   const cecoRefreshNonceRef = useRef(0);
   const dashboardRefreshNonceRef = useRef(0);
   const detailRefreshNonceRef = useRef(0);
   const historyRefreshNonceRef = useRef(0);
+  const houseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecos = normalizeCecos(selectedCecos);
   const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos);
   const data = dashboardCache[currentDashboardKey] || null;
@@ -894,6 +1424,9 @@ export function MaterialDashboardPage() {
   const selectedDetail = currentDetailKey ? detailCache[currentDetailKey] || null : null;
   const currentHistoryKey = selectedSku ? historyCacheKey(selectedSku, normalizedSelectedCecos) : null;
   const currentHistory = currentHistoryKey ? historyCache[currentHistoryKey] || null : null;
+  const currentHouseComparisonKey =
+    selectedSku && selectedHouseTypeId ? houseComparisonCacheKey(selectedSku, selectedHouseTypeId, normalizedSelectedCecos) : null;
+  const currentHouseComparison = currentHouseComparisonKey ? houseComparisonCache[currentHouseComparisonKey] || null : null;
 
   function syncSelectedSku(response: MaterialDashboardData) {
     setSelectedSku((current) => {
@@ -939,6 +1472,29 @@ export function MaterialDashboardPage() {
       cancelled = true;
     };
   }, [refreshNonce]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHouseTypes() {
+      try {
+        const response = await api.getMaterialDashboardHouseTypes();
+        if (cancelled) {
+          return;
+        }
+        setHouseTypes(response.house_types);
+        setSelectedHouseTypeId((current) => current ?? response.house_types[0]?.id ?? null);
+      } catch {
+        if (!cancelled) {
+          setHouseTypes([]);
+          setSelectedHouseTypeId(null);
+        }
+      }
+    }
+    void loadHouseTypes();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1047,6 +1603,16 @@ export function MaterialDashboardPage() {
   }, [currentDetailKey, refreshNonce, selectedSku]);
 
   useEffect(() => {
+    if (!houseTypes.length) {
+      setSelectedHouseTypeId(null);
+      return;
+    }
+    setSelectedHouseTypeId((current) =>
+      current && houseTypes.some((houseType) => houseType.id === current) ? current : houseTypes[0].id,
+    );
+  }, [houseTypes]);
+
+  useEffect(() => {
     const sku = selectedSku;
     const cacheKey = sku ? historyCacheKey(sku, normalizedSelectedCecos) : null;
     if (!sku || !cacheKey) {
@@ -1098,6 +1664,70 @@ export function MaterialDashboardPage() {
       cancelled = true;
     };
   }, [currentHistoryKey, refreshNonce, selectedSku]);
+
+  useEffect(() => {
+    const sku = selectedSku;
+    const houseTypeId = selectedHouseTypeId;
+    const cacheKey = sku && houseTypeId ? houseComparisonCacheKey(sku, houseTypeId, normalizedSelectedCecos) : null;
+    if (!sku || !houseTypeId || !cacheKey || viewMode !== "houses") {
+      setHouseComparisonLoading(false);
+      return;
+    }
+    const activeSku = sku;
+    const activeHouseTypeId = houseTypeId;
+    const activeCacheKey = cacheKey;
+    let cancelled = false;
+    async function loadHouseComparison() {
+      const forceRefresh = refreshNonce > 0 && houseComparisonRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        houseComparisonRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      setHouseComparisonError(null);
+      if (!forceRefresh) {
+        const cached =
+          houseComparisonCache[activeCacheKey] ||
+          (await getMaterialDashboardCacheValue<MaterialDashboardHouseComparisonData>(activeCacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setHouseComparisonCache((current) =>
+            current[activeCacheKey] ? current : { ...current, [activeCacheKey]: cached },
+          );
+          setHouseComparisonLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setHouseComparisonLoading(true);
+      }
+      try {
+        const response = await api.getMaterialDashboardHouseComparison(
+          activeSku,
+          activeHouseTypeId,
+          normalizedSelectedCecos,
+          { refresh: forceRefresh },
+        );
+        if (!cancelled) {
+          setHouseComparisonCache((current) => ({ ...current, [activeCacheKey]: response }));
+          void setMaterialDashboardCacheValue(activeCacheKey, response);
+        }
+      } catch (err) {
+        if (!cancelled && !hasCached) {
+          setHouseComparisonError(err instanceof ApiError ? err.message : "Could not load house-start comparison.");
+        }
+      } finally {
+        if (!cancelled) {
+          setHouseComparisonLoading(false);
+        }
+      }
+    }
+    void loadHouseComparison();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentHouseComparisonKey, refreshNonce, selectedHouseTypeId, selectedSku, viewMode]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const rows = (data?.materials || [])
@@ -1208,8 +1838,29 @@ export function MaterialDashboardPage() {
                     Clear Filters
                   </button>
                 </div>
+                <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("stock")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      Stock View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("houses")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      House View
+                    </button>
+                  </div>
+                </div>
                 {error ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
                 {historyError ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{historyError}</div> : null}
+                {houseComparisonError && viewMode === "houses" ? (
+                  <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{houseComparisonError}</div>
+                ) : null}
               </div>
 
               <div className="flex-1 overflow-y-auto">
@@ -1312,10 +1963,18 @@ export function MaterialDashboardPage() {
           selected={selectedRow}
           detail={selectedDetail}
           history={currentHistory}
+          viewMode={viewMode}
+          houseTypes={houseTypes}
+          selectedHouseTypeId={selectedHouseTypeId}
+          onSelectHouseType={(houseTypeId) => setSelectedHouseTypeId(houseTypeId)}
+          houseComparison={currentHouseComparison}
           detailLoading={detailLoading}
           historyLoading={historyLoading}
+          houseComparisonLoading={houseComparisonLoading}
           detailRefreshing={detailLoading && Boolean(selectedDetail)}
           historyRefreshing={historyLoading && Boolean(currentHistory)}
+          houseComparisonRefreshing={houseComparisonLoading && Boolean(currentHouseComparison)}
+          houseComparisonError={houseComparisonError}
         />
       </main>
     </div>

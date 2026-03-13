@@ -623,6 +623,42 @@ class MaterialDashboardMovementResponse(BaseModel):
     generated_at: str
 
 
+class MaterialDashboardHouseTypeModel(BaseModel):
+    id: int
+    name: str
+    number_of_modules: int
+
+
+class MaterialDashboardHouseTypesResponse(BaseModel):
+    house_types: list[MaterialDashboardHouseTypeModel] = Field(default_factory=list)
+
+
+class MaterialDashboardHouseComparisonPointModel(BaseModel):
+    date: str
+    material_quantity: float
+    house_starts: int
+    cumulative_material_quantity: float
+    cumulative_house_starts: int
+    material_per_house: float | None
+
+
+class MaterialDashboardHouseComparisonResponse(BaseModel):
+    sku: str
+    house_type_id: int
+    house_type_name: str
+    number_of_modules: int
+    movement_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    total_material_quantity: float
+    total_house_starts: int
+    material_per_house: float | None
+    latest_house_start_date: str | None
+    points: list[MaterialDashboardHouseComparisonPointModel] = Field(default_factory=list)
+    generated_at: str
+
+
 class NotificationModel(BaseModel):
     id: int
     type: str

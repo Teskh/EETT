@@ -30,6 +30,8 @@ from app.api_models import (
     LoginRequest,
     MaterialDashboardCecoResponse,
     MaterialDashboardDetailResponse,
+    MaterialDashboardHouseComparisonResponse,
+    MaterialDashboardHouseTypesResponse,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
     MaterialOccurrenceUpdateRequest,
@@ -103,6 +105,10 @@ from app.services.dashboard import (
     get_recent_material_dashboard,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
+from app.services.production_dashboard import (
+    get_material_dashboard_house_start_comparison,
+    get_material_dashboard_house_types,
+)
 from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
     create_project,
@@ -1484,6 +1490,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @app.get("/api/v1/dashboard/materials/house-types", response_model=MaterialDashboardHouseTypesResponse)
+    async def material_dashboard_house_types_v1(
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            return get_material_dashboard_house_types(app.state.settings)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
     async def material_dashboard_detail_v1(
         sku: str,
@@ -1507,6 +1523,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if detail is None:
             raise HTTPException(status_code=404, detail="Material not found")
         return detail
+
+    @app.get("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
+    async def material_dashboard_house_comparison_v1(
+        sku: str,
+        house_type_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
+        try:
+            history = get_material_dashboard_history(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=ceco_filters,
+                force_refresh=force_refresh,
+            )
+            return get_material_dashboard_house_start_comparison(
+                request.app.state.settings,
+                sku=sku,
+                movements=history.get("movements", []),
+                house_type_id=house_type_id,
+                cost_centers=ceco_filters,
+                history_days=int(history.get("movement_days") or 90),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/{sku}/movements", response_model=MaterialDashboardMovementResponse)
     async def material_dashboard_movements_v1(

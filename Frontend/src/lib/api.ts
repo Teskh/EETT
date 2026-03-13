@@ -13,6 +13,8 @@ import type {
   LoginRequest,
   ManagedUser,
   MaterialDashboardCecoResponse,
+  MaterialDashboardHouseComparisonData,
+  MaterialDashboardHouseTypesResponse,
   MaterialDashboardData,
   MaterialDashboardDetailData,
   MaterialDashboardMovementData,
@@ -246,6 +248,9 @@ export const api = {
     const query = params.toString();
     return request<MaterialDashboardCecoResponse>(`/api/v1/dashboard/materials/cecos${query ? `?${query}` : ""}`);
   },
+  getMaterialDashboardHouseTypes() {
+    return request<MaterialDashboardHouseTypesResponse>("/api/v1/dashboard/materials/house-types");
+  },
   getMaterialDashboardDetail(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
@@ -263,6 +268,23 @@ export const api = {
     }
     const query = params.toString();
     return request<MaterialDashboardMovementData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/movements${query ? `?${query}` : ""}`);
+  },
+  getMaterialDashboardHouseComparison(
+    sku: string,
+    houseTypeId: number,
+    cecos: string[] = [],
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    const params = new URLSearchParams();
+    params.set("house_type_id", String(houseTypeId));
+    cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
+    const query = params.toString();
+    return request<MaterialDashboardHouseComparisonData>(
+      `/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison${query ? `?${query}` : ""}`,
+    );
   },
   getActivityHistory() {
     return request<ActivityGroup[]>("/api/v1/activity");
