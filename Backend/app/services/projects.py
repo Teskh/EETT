@@ -34,6 +34,7 @@ from app.models import (
     User,
 )
 from app.models.entities import BomCalculationMode, MaterialMode, MembershipRole, utcnow
+from app.services.audit import build_audit_context, record_project_activity
 from app.services.auth import can_view_project
 
 
@@ -67,6 +68,7 @@ def create_project(
     description: str | None,
     status: str,
     actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> Project:
     project = Project(
         name=name.strip(),
@@ -84,6 +86,29 @@ def create_project(
     )
     if actor_user is not None:
         session.add(ProjectMembership(project=project, user=actor_user, role=MembershipRole.ADMIN))
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Project created",
+                scope_type="project",
+                scope_id=project.id,
+            ),
+            entity_type="Project",
+            entity_id=project.id,
+            action="created",
+            title="Project created",
+            scope_type="project",
+            scope_id=project.id,
+            details={
+                "name": project.name,
+                "status": project.status.value,
+                "description": project.description,
+            },
+        )
     session.commit()
     session.refresh(project)
     return project
@@ -95,6 +120,8 @@ def create_project_subtype(
     project: Project,
     name: str,
     parent_id: int | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectSubtype:
     clean_name = name.strip()
     if not clean_name:
@@ -110,6 +137,26 @@ def create_project_subtype(
 
     subtype = ProjectSubtype(project=project, parent=parent, name=clean_name)
     session.add(subtype)
+    session.flush()
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Subtype created",
+                scope_type="subtype",
+                scope_id=subtype.id,
+            ),
+            entity_type="ProjectSubtype",
+            entity_id=subtype.id,
+            action="created",
+            title="Subtype created",
+            scope_type="subtype",
+            scope_id=subtype.id,
+            details={"name": subtype.name, "parent_id": subtype.parent_id},
+        )
     session.commit()
     session.refresh(subtype)
     return subtype
@@ -121,6 +168,8 @@ def update_project_subtype(
     project: Project,
     subtype_id: int,
     name: str,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectSubtype | None:
     subtype = session.scalar(
         select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
@@ -132,18 +181,65 @@ def update_project_subtype(
     if not clean_name:
         raise ValueError("Subtype name is required.")
 
+    previous_name = subtype.name
     subtype.name = clean_name
+    if actor_user is not None and previous_name != subtype.name:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Subtype updated",
+                scope_type="subtype",
+                scope_id=subtype.id,
+            ),
+            entity_type="ProjectSubtype",
+            entity_id=subtype.id,
+            action="updated",
+            title="Subtype updated",
+            scope_type="subtype",
+            scope_id=subtype.id,
+            details={"changes": [{"field": "name", "old": previous_name, "new": subtype.name}]},
+        )
     session.commit()
     session.refresh(subtype)
     return subtype
 
 
-def delete_project_subtype(session: Session, *, project: Project, subtype_id: int) -> bool:
+def delete_project_subtype(
+    session: Session,
+    *,
+    project: Project,
+    subtype_id: int,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> bool:
     subtype = session.scalar(
         select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
     )
     if subtype is None:
         return False
+    details = {"name": subtype.name, "parent_id": subtype.parent_id}
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Subtype deleted",
+                scope_type="subtype",
+                scope_id=subtype.id,
+            ),
+            entity_type="ProjectSubtype",
+            entity_id=subtype.id,
+            action="deleted",
+            title="Subtype deleted",
+            scope_type="subtype",
+            scope_id=subtype.id,
+            details=details,
+        )
     session.delete(subtype)
     session.commit()
     return True
@@ -162,6 +258,8 @@ def create_project_instance(
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectInstance:
     component = session.scalar(
         select(CatalogComponent)
@@ -199,6 +297,30 @@ def create_project_instance(
             sync_notes="Snapshot created from catalog template.",
         )
     )
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Instance created",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="created",
+            title="Instance created",
+            scope_type="instance",
+            scope_id=instance.id,
+            details={
+                "name": instance.name,
+                "category_id": instance.category_id,
+                "component_id": instance.component_id,
+                "snapshot": _instance_snapshot(instance),
+            },
+        )
     session.commit()
     session.refresh(instance)
     return instance
@@ -216,6 +338,8 @@ def update_project_instance(
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectInstance | None:
     instance = session.scalar(
         select(ProjectInstance)
@@ -229,6 +353,7 @@ def update_project_instance(
     if instance is None:
         return None
 
+    previous_snapshot = _instance_snapshot(instance)
     clean_description = (description or "").strip() or None
     clean_short_description = (short_description or "").strip() or None
     clean_installation = (installation or "").strip() or None
@@ -248,6 +373,26 @@ def update_project_instance(
     instance.sync_state.last_synced_at = utcnow()
     instance.sync_state.source_component_updated_at = instance.component.updated_at
     instance.sync_state.sync_notes = "Project instance customized after snapshot creation."
+    changes = _diff_mapping(previous_snapshot, _instance_snapshot(instance))
+    if actor_user is not None and changes:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Instance updated",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="updated",
+            title="Instance updated",
+            scope_type="instance",
+            scope_id=instance.id,
+            details={"changes": changes},
+        )
     session.commit()
     session.refresh(instance)
     return instance
@@ -262,6 +407,8 @@ def create_project_instance_occurrence(
     context_label: str | None,
     target_instance_id: int | None,
     attribute_values: dict[str, str | None] | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectInstanceOccurrence | None:
     instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
     if instance is None:
@@ -284,6 +431,25 @@ def create_project_instance_occurrence(
         target_instance_id=target_instance_id,
     )
     _replace_occurrence_attribute_values(instance, occurrence, attribute_values or {})
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Usage link created",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstanceOccurrence",
+            entity_id=occurrence.id,
+            action="created",
+            title="Usage link created",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=_occurrence_snapshot(occurrence),
+        )
     session.commit()
     session.refresh(occurrence)
     return occurrence
@@ -299,6 +465,8 @@ def update_project_instance_occurrence(
     context_label: str | None,
     target_instance_id: int | None,
     attribute_values: dict[str, str | None] | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectInstanceOccurrence | None:
     instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
     if instance is None:
@@ -308,6 +476,7 @@ def update_project_instance_occurrence(
     if occurrence is None:
         return None
 
+    previous_snapshot = _occurrence_snapshot(occurrence)
     occurrence.relationship_type = (relationship_type or "").strip() or occurrence.relationship_type or "uses"
     occurrence.context_label = (context_label or "").strip() or None
     occurrence.context_notes = None
@@ -319,6 +488,26 @@ def update_project_instance_occurrence(
         target_instance_id=target_instance_id,
     )
     _replace_occurrence_attribute_values(instance, occurrence, attribute_values or {})
+    changes = _diff_mapping(previous_snapshot, _occurrence_snapshot(occurrence))
+    if actor_user is not None and changes:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Usage link updated",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstanceOccurrence",
+            entity_id=occurrence.id,
+            action="updated",
+            title="Usage link updated",
+            scope_type="instance",
+            scope_id=instance.id,
+            details={"changes": changes},
+        )
     session.commit()
     session.refresh(occurrence)
     return occurrence
@@ -330,6 +519,8 @@ def delete_project_instance_occurrence(
     project: Project,
     instance_id: int,
     occurrence_id: int,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> bool:
     instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
     if instance is None:
@@ -339,18 +530,65 @@ def delete_project_instance_occurrence(
     if occurrence is None:
         return False
 
+    details = _occurrence_snapshot(occurrence)
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Usage link deleted",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstanceOccurrence",
+            entity_id=occurrence.id,
+            action="deleted",
+            title="Usage link deleted",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=details,
+        )
     session.delete(occurrence)
     session.commit()
     return True
 
 
-def delete_project_instance(session: Session, *, project: Project, instance_id: int) -> bool:
+def delete_project_instance(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> bool:
     instance = session.scalar(
         select(ProjectInstance)
         .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
     )
     if instance is None:
         return False
+    details = _instance_snapshot(instance)
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Instance deleted",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="deleted",
+            title="Instance deleted",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=details,
+        )
     session.delete(instance)
     session.commit()
     return True
@@ -526,14 +764,36 @@ def set_project_material_mode(
     project: Project,
     mode: str,
     actor_user: User | None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectMaterialMode:
     current = project.material_mode
+    previous_mode = current.mode.value if current is not None else None
     if current is None:
         current = ProjectMaterialMode(project=project)
         session.add(current)
     current.mode = MaterialMode(mode)
     current.changed_by = actor_user
     current.updated_at = utcnow()
+    session.flush()
+    if actor_user is not None and previous_mode != current.mode.value:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Material mode updated",
+                scope_type="project",
+                scope_id=project.id,
+            ),
+            entity_type="ProjectMaterialMode",
+            entity_id=current.id,
+            action="updated",
+            title="Material mode updated",
+            scope_type="project",
+            scope_id=project.id,
+            details={"changes": [{"field": "mode", "old": previous_mode, "new": current.mode.value}]},
+        )
     session.commit()
     session.refresh(current)
     return current
@@ -547,6 +807,8 @@ def replace_project_material_occurrence(
     rule_id: int,
     mode: str,
     entries: list[dict],
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
 ) -> bool:
     instance = session.scalar(
         select(ProjectInstance)
@@ -579,7 +841,8 @@ def replace_project_material_occurrence(
     if not evaluation["applies"]:
         raise ValueError("Material occurrence is no longer applicable for this instance.")
 
-    subtype_map = {subtype.id: subtype for subtype in project.subtypes}
+    subtype_rows = _visible_project_subtype_rows(project)
+    subtype_map = {subtype["id"]: subtype["model"] for subtype in subtype_rows}
     normalized_entries: list[dict] = []
     seen_subtype_ids: set[int | None] = set()
     for row in entries:
@@ -601,10 +864,14 @@ def replace_project_material_occurrence(
         if len(normalized_entries) != 1 or normalized_entries[0]["subtype_id"] is not None:
             raise ValueError("General material mode requires exactly one general row.")
     else:
-        required_subtype_ids = {subtype.id for subtype in project.subtypes}
+        required_subtype_ids = {subtype["id"] for subtype in subtype_rows}
         submitted_subtype_ids = {row["subtype_id"] for row in normalized_entries}
         if required_subtype_ids != submitted_subtype_ids:
             raise ValueError("Subtype material mode requires one row for each project subtype.")
+
+    previous_snapshot = _bom_entry_snapshot(
+        [entry for entry in instance.bom_entries if entry.material_rule_id == rule.id]
+    )
 
     for bom_entry in list(instance.bom_entries):
         if bom_entry.material_rule_id == rule.id:
@@ -628,6 +895,33 @@ def replace_project_material_occurrence(
             )
         )
 
+    next_snapshot = _normalized_bom_snapshot(normalized_entries, project)
+    if actor_user is not None and previous_snapshot != next_snapshot:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Material quantities updated",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectBomEntry",
+            entity_id=rule.id,
+            action="updated",
+            title="Material quantities updated",
+            scope_type="instance",
+            scope_id=instance.id,
+            details={
+                "noise_hint": "material_quantity",
+                "material_rule_id": rule.id,
+                "material_name": rule.material.name,
+                "mode": normalized_mode,
+                "before": previous_snapshot,
+                "after": next_snapshot,
+            },
+        )
     session.commit()
     return True
 
@@ -684,7 +978,13 @@ def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None
     }
 
 
-def refresh_instance_snapshot(session: Session, *, instance_id: int, actor_user: User | None) -> dict | None:
+def refresh_instance_snapshot(
+    session: Session,
+    *,
+    instance_id: int,
+    actor_user: User | None,
+    mutation_batch_id: str | None = None,
+) -> dict | None:
     instance = session.scalar(
         select(ProjectInstance)
         .where(ProjectInstance.id == instance_id)
@@ -697,6 +997,7 @@ def refresh_instance_snapshot(session: Session, *, instance_id: int, actor_user:
     if instance is None:
         return None
 
+    previous_preview = get_instance_sync_preview(session, instance_id)
     for field in SNAPSHOT_FIELDS:
         setattr(instance, field, getattr(instance.component, field))
     _sync_base_attribute_group(instance)
@@ -708,6 +1009,28 @@ def refresh_instance_snapshot(session: Session, *, instance_id: int, actor_user:
     instance.sync_state.last_synced_at = utcnow()
     instance.sync_state.source_component_updated_at = instance.component.updated_at
     instance.sync_state.sync_notes = f"Refreshed manually by {actor_user.username if actor_user else 'system'}."
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=instance.project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Instance refreshed from catalog",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="refreshed",
+            title="Instance refreshed from catalog",
+            scope_type="instance",
+            scope_id=instance.id,
+            details={
+                "changes": previous_preview["changes"] if previous_preview else [],
+                "component_id": instance.component_id,
+            },
+        )
     session.commit()
     return get_instance_sync_preview(session, instance_id)
 
@@ -1045,7 +1368,66 @@ def _replace_occurrence_attribute_values(
                 value=normalized,
                 sort_order=len(occurrence.attribute_values) + 1,
             )
-        )
+            )
+
+
+def _instance_snapshot(instance: ProjectInstance) -> dict:
+    return {
+        "name": instance.name,
+        "short_name": instance.short_name,
+        "description": instance.description,
+        "short_description": instance.short_description,
+        "installation": instance.installation,
+        "unit_amount": instance.unit_amount,
+        "attributes": _collect_attribute_values(instance),
+    }
+
+
+def _occurrence_snapshot(occurrence: ProjectInstanceOccurrence) -> dict:
+    return {
+        "relationship_type": occurrence.relationship_type,
+        "context_label": occurrence.context_label,
+        "targets": [target.target_instance_id for target in occurrence.targets],
+        "attributes": {
+            attribute.attribute_name: attribute.value
+            for attribute in sorted(occurrence.attribute_values, key=lambda item: item.sort_order)
+        },
+    }
+
+
+def _bom_entry_snapshot(entries: list[ProjectBomEntry]) -> list[dict]:
+    return [
+        {
+            "subtype_id": entry.subtype_id,
+            "subtype_name": entry.subtype.name if entry.subtype else None,
+            "quantity": entry.quantity,
+            "assembly_quantity": entry.assembly_quantity,
+        }
+        for entry in sorted(entries, key=lambda item: (item.subtype_id is None, item.subtype_id or -1))
+    ]
+
+
+def _normalized_bom_snapshot(entries: list[dict], project: Project) -> list[dict]:
+    subtype_names = {subtype["id"]: subtype["name"] for subtype in _visible_project_subtype_rows(project)}
+    return [
+        {
+            "subtype_id": entry["subtype_id"],
+            "subtype_name": subtype_names.get(entry["subtype_id"]),
+            "quantity": entry["quantity"],
+            "assembly_quantity": entry["assembly_quantity"],
+        }
+        for entry in sorted(entries, key=lambda item: (item["subtype_id"] is None, item["subtype_id"] or -1))
+    ]
+
+
+def _diff_mapping(before: dict, after: dict) -> list[dict]:
+    changes: list[dict] = []
+    for key in sorted(set(before) | set(after)):
+        previous_value = before.get(key)
+        next_value = after.get(key)
+        if previous_value != next_value:
+            changes.append({"field": key, "old": previous_value, "new": next_value})
+    return changes
 
 
 def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[dict]:
@@ -1059,6 +1441,28 @@ def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[di
             }
         )
         rows.extend(_flatten_subtypes(subtype.children, depth + 1))
+    return rows
+
+
+def _visible_project_subtype_rows(project: Project) -> list[dict]:
+    subtype_nodes = [subtype for subtype in project.subtypes if subtype.parent_id is None]
+    rows: list[dict] = []
+    for subtype in subtype_nodes:
+        rows.extend(_flatten_visible_project_subtypes(subtype))
+    return rows
+
+
+def _flatten_visible_project_subtypes(subtype: ProjectSubtype, depth: int = 0) -> list[dict]:
+    rows = [
+        {
+            "id": subtype.id,
+            "name": subtype.name,
+            "depth": depth,
+            "model": subtype,
+        }
+    ]
+    for child in subtype.children:
+        rows.extend(_flatten_visible_project_subtypes(child, depth + 1))
     return rows
 
 

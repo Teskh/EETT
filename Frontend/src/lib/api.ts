@@ -1,4 +1,5 @@
 import type {
+  ActivityGroup,
   CatalogAttribute,
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
@@ -11,6 +12,10 @@ import type {
   CreateProjectRequest,
   LoginRequest,
   ManagedUser,
+  MaterialDashboardCecoResponse,
+  MaterialDashboardData,
+  MaterialDashboardDetailData,
+  MaterialDashboardMovementData,
   MutationResult,
   ProjectDetailData,
   ProjectsBoardData,
@@ -64,6 +69,17 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 export { ApiError };
+
+function generateMutationBatchId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `batch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function mutationHeaders(mutationBatchId?: string) {
+  return { "X-Mutation-Batch-Id": mutationBatchId || generateMutationBatchId() };
+}
 
 export const api = {
   login(payload: LoginRequest) {
@@ -152,70 +168,108 @@ export const api = {
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");
   },
-  createProject(payload: CreateProjectRequest) {
+  getMaterialDashboard(cecos: string[] = []) {
+    const params = new URLSearchParams();
+    cecos.forEach((ceco) => params.append("ceco", ceco));
+    const query = params.toString();
+    return request<MaterialDashboardData>(`/api/v1/dashboard/materials${query ? `?${query}` : ""}`);
+  },
+  getMaterialDashboardCostCenters() {
+    return request<MaterialDashboardCecoResponse>("/api/v1/dashboard/materials/cecos");
+  },
+  getMaterialDashboardDetail(sku: string, cecos: string[] = []) {
+    const params = new URLSearchParams();
+    cecos.forEach((ceco) => params.append("ceco", ceco));
+    const query = params.toString();
+    return request<MaterialDashboardDetailData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}${query ? `?${query}` : ""}`);
+  },
+  getMaterialDashboardHistory(sku: string, cecos: string[] = []) {
+    const params = new URLSearchParams();
+    cecos.forEach((ceco) => params.append("ceco", ceco));
+    const query = params.toString();
+    return request<MaterialDashboardMovementData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/movements${query ? `?${query}` : ""}`);
+  },
+  getActivityHistory() {
+    return request<ActivityGroup[]>("/api/v1/activity");
+  },
+  createProject(payload: CreateProjectRequest, mutationBatchId?: string) {
     return request<MutationResult>("/api/v1/projects", {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
   getProject(projectId: number) {
     return request<ProjectDetailData>(`/api/v1/projects/${projectId}`);
   },
-  createProjectSubtype(projectId: number, payload: CreateProjectSubtypeRequest) {
+  getProjectActivity(projectId: number) {
+    return request<ActivityGroup[]>(`/api/v1/projects/${projectId}/activity`);
+  },
+  createProjectSubtype(projectId: number, payload: CreateProjectSubtypeRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes`, {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  updateProjectSubtype(projectId: number, subtypeId: number, payload: UpdateProjectSubtypeRequest) {
+  updateProjectSubtype(projectId: number, subtypeId: number, payload: UpdateProjectSubtypeRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  deleteProjectSubtype(projectId: number, subtypeId: number) {
+  deleteProjectSubtype(projectId: number, subtypeId: number, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}`, {
       method: "DELETE",
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  createProjectInstance(projectId: number, payload: CreateProjectInstanceRequest) {
+  createProjectInstance(projectId: number, payload: CreateProjectInstanceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances`, {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  updateProjectInstance(projectId: number, instanceId: number, payload: UpdateProjectInstanceRequest) {
+  updateProjectInstance(projectId: number, instanceId: number, payload: UpdateProjectInstanceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  createProjectOccurrence(projectId: number, instanceId: number, payload: UpdateProjectOccurrenceRequest) {
+  createProjectOccurrence(projectId: number, instanceId: number, payload: UpdateProjectOccurrenceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences`, {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  updateProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number, payload: UpdateProjectOccurrenceRequest) {
+  updateProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number, payload: UpdateProjectOccurrenceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences/${occurrenceId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  deleteProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number) {
+  deleteProjectOccurrence(projectId: number, instanceId: number, occurrenceId: number, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/occurrences/${occurrenceId}`, {
       method: "DELETE",
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  deleteProjectInstance(projectId: number, instanceId: number) {
+  deleteProjectInstance(projectId: number, instanceId: number, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}`, {
       method: "DELETE",
+      headers: mutationHeaders(mutationBatchId),
     });
   },
-  updateMaterialOccurrence(projectId: number, instanceId: number, ruleId: number, payload: UpdateMaterialOccurrenceRequest) {
+  updateMaterialOccurrence(projectId: number, instanceId: number, ruleId: number, payload: UpdateMaterialOccurrenceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
 };

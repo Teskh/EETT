@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api_models import (
-    ActivityLogModel,
+    ActivityGroupModel,
     ApprovalModel,
     AttributeValueInputModel,
     CatalogCategoryCreateRequest,
@@ -28,6 +28,10 @@ from app.api_models import (
     DashboardResponse,
     ExportJobModel,
     LoginRequest,
+    MaterialDashboardCecoResponse,
+    MaterialDashboardDetailResponse,
+    MaterialDashboardMovementResponse,
+    MaterialDashboardResponse,
     MaterialOccurrenceUpdateRequest,
     MaterialModeResponse,
     ManagedUserModel,
@@ -54,12 +58,14 @@ from app.api_models import (
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
 from app.seed import seed_demo_data_if_empty
+from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
     authenticate_user,
     get_current_user,
     resolve_current_user,
     require_project_create,
     require_catalog_edit,
+    require_material_dashboard_access,
     require_erp_admin,
     require_project_edit,
     require_project_view,
@@ -81,6 +87,7 @@ from app.services.catalog import (
 from app.services.collaboration import (
     add_project_comment,
     decide_project_approval,
+    get_activity_history,
     get_comment_payload,
     get_project_activity,
     get_project_approvals,
@@ -88,7 +95,13 @@ from app.services.collaboration import (
     get_user_notifications,
     request_project_approval,
 )
-from app.services.dashboard import get_project_material_dashboard
+from app.services.dashboard import (
+    get_material_dashboard_cost_centers,
+    get_material_dashboard_detail,
+    get_material_dashboard_history,
+    get_project_material_dashboard,
+    get_recent_material_dashboard,
+)
 from app.services.erp import erp_search_available, search_erp_material_candidates
 from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
@@ -218,6 +231,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 continue
             values[name] = row.value.strip() if row.value is not None else None
         return values
+
+    def get_mutation_batch_id(
+        x_mutation_batch_id: Annotated[str | None, Header(alias="X-Mutation-Batch-Id")] = None,
+    ) -> str | None:
+        return normalize_mutation_batch_id(x_mutation_batch_id)
 
     def serve_frontend_app(fallback_html: str | None = None) -> FileResponse | HTMLResponse:
         if frontend_index.exists():
@@ -473,6 +491,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/users", response_class=HTMLResponse)
     async def user_editor_page() -> str:
+        return serve_frontend_app(render_home_page())
+
+    @app.get("/history", response_class=HTMLResponse)
+    async def history_page() -> str:
+        return serve_frontend_app(render_home_page())
+
+    @app.get("/dashboard/materials", response_class=HTMLResponse)
+    async def material_dashboard_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.post("/projects/{project_id}/instances")
@@ -860,6 +886,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         require_project_create(current_user)
         project = create_project(
@@ -868,6 +895,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             description=payload.description,
             status=payload.status,
             actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
         )
         return {"ok": True, "project_id": project.id}
 
@@ -888,6 +916,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectSubtypeCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -899,6 +928,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 name=payload.name,
                 parent_id=payload.parent_id,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -911,6 +942,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectSubtypeUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -922,6 +954,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 subtype_id=subtype_id,
                 name=payload.name,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -935,12 +969,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         subtype_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
-        deleted = delete_project_subtype(session, project=project, subtype_id=subtype_id)
+        deleted = delete_project_subtype(
+            session,
+            project=project,
+            subtype_id=subtype_id,
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Project subtype not found")
         return {"ok": True, "project_id": project.id, "deleted_id": subtype_id}
@@ -951,6 +992,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectInstanceCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -969,6 +1011,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 installation=payload.installation,
                 unit_amount=payload.unit_amount,
                 attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -987,6 +1031,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectInstanceUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1003,6 +1048,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             installation=payload.installation,
             unit_amount=payload.unit_amount,
             attribute_values=parse_attribute_values_rows(payload.attribute_values),
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
         )
         if instance is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
@@ -1020,6 +1067,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectOccurrenceUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1034,6 +1082,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 context_label=payload.context_label,
                 target_instance_id=payload.target_instance_id,
                 attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1055,6 +1105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: ProjectOccurrenceUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1070,6 +1121,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 context_label=payload.context_label,
                 target_instance_id=payload.target_instance_id,
                 attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1090,6 +1143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         occurrence_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1100,6 +1154,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project=project,
             instance_id=instance_id,
             occurrence_id=occurrence_id,
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
         )
         if not deleted:
             raise HTTPException(status_code=404, detail="Project occurrence not found")
@@ -1111,12 +1167,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         instance_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
-        deleted = delete_project_instance(session, project=project, instance_id=instance_id)
+        deleted = delete_project_instance(
+            session,
+            project=project,
+            instance_id=instance_id,
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project_id, "deleted_id": instance_id}
@@ -1129,6 +1192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: MaterialOccurrenceUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1149,6 +1213,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                     for row in payload.entries
                 ],
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1176,12 +1242,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
         payload: dict[str, Any] = Body(...),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
-        material_mode = set_project_material_mode(session, project=project, mode=payload["mode"], actor_user=current_user)
+        material_mode = set_project_material_mode(
+            session,
+            project=project,
+            mode=payload["mode"],
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
+        )
         return {
             "project_id": project.id,
             "mode": material_mode.mode.value,
@@ -1213,6 +1286,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         instance_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1220,7 +1294,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_project_edit(current_user, project)
         if not any(item.id == instance_id for item in project.instances):
             raise HTTPException(status_code=404, detail="Project instance not found")
-        preview = refresh_instance_snapshot(session, instance_id=instance_id, actor_user=current_user)
+        preview = refresh_instance_snapshot(
+            session,
+            instance_id=instance_id,
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
+        )
         if preview is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return preview
@@ -1239,6 +1318,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
         payload: dict[str, Any] = Body(...),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1261,19 +1341,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             body=payload["body"],
             instance=instance,
             parent_comment=parent_comment,
+            mutation_batch_id=mutation_batch_id,
         )
         payload_out = get_comment_payload(session, comment.id)
         if payload_out is None:
             raise HTTPException(status_code=500, detail="Comment could not be loaded after creation")
         return payload_out
 
-    @app.get("/api/v1/projects/{project_id}/activity", response_model=list[ActivityLogModel])
+    @app.get("/api/v1/projects/{project_id}/activity", response_model=list[ActivityGroupModel])
     async def project_activity_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_view(current_user, project)
         return get_project_activity(session, project_id)
+
+    @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
+    async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        return get_activity_history(session, current_user)
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
     async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -1289,12 +1374,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
         payload: dict[str, Any] = Body(...),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
-        approval = request_project_approval(session, project=project, requested_by=current_user, summary=payload["summary"])
+        approval = request_project_approval(
+            session,
+            project=project,
+            requested_by=current_user,
+            summary=payload["summary"],
+            mutation_batch_id=mutation_batch_id,
+        )
         return get_project_approvals(session, project_id)[0]
 
     @app.post("/api/v1/approvals/{approval_id}/decision", response_model=ApprovalModel)
@@ -1303,9 +1395,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
         payload: dict[str, Any] = Body(...),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         require_erp_admin(current_user)
-        approval = decide_project_approval(session, approval_id=approval_id, decided_by=current_user, status=payload["status"])
+        approval = decide_project_approval(
+            session,
+            approval_id=approval_id,
+            decided_by=current_user,
+            status=payload["status"],
+            mutation_batch_id=mutation_batch_id,
+        )
         if approval is None:
             raise HTTPException(status_code=404, detail="Approval not found")
         return get_project_approvals(session, approval.project_id)[0]
@@ -1345,6 +1444,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
+
+    @app.get("/api/v1/dashboard/materials", response_model=MaterialDashboardResponse)
+    async def material_dashboard_v1(
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        try:
+            return get_recent_material_dashboard(request.app.state.settings, cost_centers=ceco_filters)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/materials/cecos", response_model=MaterialDashboardCecoResponse)
+    async def material_dashboard_cecos_v1(
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            return get_material_dashboard_cost_centers(request.app.state.settings)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
+    async def material_dashboard_detail_v1(
+        sku: str,
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        try:
+            detail = get_material_dashboard_detail(request.app.state.settings, sku, cost_centers=ceco_filters)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Material not found")
+        return detail
+
+    @app.get("/api/v1/dashboard/materials/{sku}/movements", response_model=MaterialDashboardMovementResponse)
+    async def material_dashboard_movements_v1(
+        sku: str,
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        try:
+            return get_material_dashboard_history(request.app.state.settings, sku, cost_centers=ceco_filters)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/notifications", response_model=list[NotificationModel])
     async def notifications_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

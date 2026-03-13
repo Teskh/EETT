@@ -4,8 +4,10 @@ import { AppShell } from "./components/AppShell";
 import { ApiError, api } from "./lib/api";
 import type { SessionUser } from "./lib/types";
 import { CatalogPage } from "./pages/CatalogPage";
+import { ChangeHistoryPage } from "./pages/ChangeHistoryPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
+import { MaterialDashboardPage } from "./pages/MaterialDashboardPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -14,6 +16,8 @@ type Route =
   | { name: "home" }
   | { name: "login" }
   | { name: "catalog"; categoryId: number | null }
+  | { name: "material-dashboard" }
+  | { name: "history" }
   | { name: "projects" }
   | { name: "project-detail"; projectId: number }
   | { name: "users" }
@@ -31,6 +35,12 @@ function parseCurrentRoute(): Route {
     const params = new URLSearchParams(search);
     const categoryId = params.get("category_id");
     return { name: "catalog", categoryId: categoryId ? Number(categoryId) : null };
+  }
+  if (pathname === "/dashboard/materials") {
+    return { name: "material-dashboard" };
+  }
+  if (pathname === "/history") {
+    return { name: "history" };
   }
   if (pathname === "/projects") {
     return { name: "projects" };
@@ -103,6 +113,10 @@ export function App() {
       document.title = "Login | Spec Sheets";
     } else if (route.name === "catalog") {
       document.title = "Database Editor | Spec Sheets";
+    } else if (route.name === "material-dashboard") {
+      document.title = "Material Dashboard | Spec Sheets";
+    } else if (route.name === "history") {
+      document.title = "Change History | Spec Sheets";
     } else if (route.name === "projects") {
       document.title = "Projects | Spec Sheets";
     } else if (route.name === "project-detail") {
@@ -173,6 +187,26 @@ export function App() {
     return (
       <AppShell title="Projects" activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
         <ProjectsPage onNavigate={navigate} currentUser={session} />
+      </AppShell>
+    );
+  }
+
+  if (route.name === "material-dashboard") {
+    return (
+      <AppShell title="Material Dashboard" activeNav="dashboard" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        {session.permissions.material_dashboard ? (
+          <MaterialDashboardPage />
+        ) : (
+          <AccessDenied message="This role cannot open the material dashboard." />
+        )}
+      </AppShell>
+    );
+  }
+
+  if (route.name === "history") {
+    return (
+      <AppShell title="Change History" activeNav="history" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <ChangeHistoryPage />
       </AppShell>
     );
   }

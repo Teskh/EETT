@@ -189,6 +189,10 @@ def can_create_project(user: User) -> bool:
     return can_edit_catalog(user)
 
 
+def can_access_material_dashboard(user: User) -> bool:
+    return any(code in role_codes(user) for code in {"sysadmin", "admin", "editor", "ot"})
+
+
 def can_use_erp_admin(user: User) -> bool:
     return any(code in role_codes(user) for code in {"sysadmin", "admin"})
 
@@ -242,6 +246,11 @@ def require_project_create(user: User) -> None:
         raise HTTPException(status_code=403, detail="Project create permission required")
 
 
+def require_material_dashboard_access(user: User) -> None:
+    if not can_access_material_dashboard(user):
+        raise HTTPException(status_code=403, detail="Material dashboard permission required")
+
+
 def require_erp_admin(user: User) -> None:
     if not can_use_erp_admin(user):
         raise HTTPException(status_code=403, detail="ERP/admin permission required")
@@ -265,6 +274,7 @@ def require_project_edit(user: User, project: Project) -> None:
 def build_permission_payload(user: User, project: Project | None = None) -> dict:
     payload = {
         "catalog_edit": can_edit_catalog(user),
+        "material_dashboard": can_access_material_dashboard(user),
         "erp_admin": can_use_erp_admin(user),
         "project_create": can_create_project(user),
         "project_edit": can_edit_catalog(user),

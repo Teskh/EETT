@@ -11,15 +11,25 @@ from app.models import (
     CommentNotification,
     NotificationType,
     Project,
+    ProjectActivityGroup,
     ProjectActivityLog,
     ProjectApproval,
     ProjectComment,
     ProjectInstance,
+    ProjectStatus,
     User,
 )
 from app.models.entities import utcnow
+from app.services.audit import build_audit_context, ensure_activity_group, record_project_activity
+from app.services.auth import can_view_project
 
 MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.-]+)")
+
+PROJECT_STATUS_LABELS = {
+    ProjectStatus.TEMPLATE.value: "Project Template",
+    ProjectStatus.EXECUTION.value: "Execution Projects",
+    ProjectStatus.FINISHED.value: "Finished Projects",
+}
 
 
 def get_project_comments(session: Session, project_id: int) -> list[dict]:
@@ -65,6 +75,7 @@ def add_project_comment(
     body: str,
     instance: ProjectInstance | None = None,
     parent_comment: ProjectComment | None = None,
+    mutation_batch_id: str | None = None,
 ) -> ProjectComment:
     comment = ProjectComment(
         project=project,
@@ -101,15 +112,24 @@ def add_project_comment(
             )
         )
 
-    session.add(
-        ProjectActivityLog(
-            project=project,
-            actor=author,
-            entity_type="ProjectComment",
-            entity_id=comment.id,
-            action="commented",
-            details={"instance_id": instance.id if instance else None},
-        )
+    audit_context = build_audit_context(
+        actor=author,
+        mutation_batch_id=mutation_batch_id,
+        title="Comment added",
+        scope_type="instance" if instance else "project",
+        scope_id=instance.id if instance else project.id,
+    )
+    record_project_activity(
+        session,
+        project=project,
+        context=audit_context,
+        entity_type="ProjectComment",
+        entity_id=comment.id,
+        action="commented",
+        title="Comment added",
+        scope_type="instance" if instance else "project",
+        scope_id=instance.id if instance else project.id,
+        details={"instance_id": instance.id if instance else None, "parent_comment_id": parent_comment.id if parent_comment else None},
     )
     session.commit()
     session.refresh(comment)
@@ -117,23 +137,37 @@ def add_project_comment(
 
 
 def get_project_activity(session: Session, project_id: int) -> list[dict]:
-    entries = session.scalars(
-        select(ProjectActivityLog)
-        .where(ProjectActivityLog.project_id == project_id)
-        .options(selectinload(ProjectActivityLog.actor))
-        .order_by(ProjectActivityLog.created_at.desc())
+    groups = session.scalars(
+        select(ProjectActivityGroup)
+        .where(ProjectActivityGroup.project_id == project_id)
+        .options(
+            selectinload(ProjectActivityGroup.project),
+            selectinload(ProjectActivityGroup.actor),
+            selectinload(ProjectActivityGroup.events).selectinload(ProjectActivityLog.actor),
+            selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.requested_by),
+            selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.decided_by),
+        )
+        .order_by(ProjectActivityGroup.created_at.desc())
+    ).all()
+    return [_serialize_activity_group(group) for group in groups]
+
+
+def get_activity_history(session: Session, user: User) -> list[dict]:
+    groups = session.scalars(
+        select(ProjectActivityGroup)
+        .options(
+            selectinload(ProjectActivityGroup.project),
+            selectinload(ProjectActivityGroup.actor),
+            selectinload(ProjectActivityGroup.events).selectinload(ProjectActivityLog.actor),
+            selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.requested_by),
+            selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.decided_by),
+        )
+        .order_by(ProjectActivityGroup.created_at.desc())
     ).all()
     return [
-        {
-            "id": entry.id,
-            "entity_type": entry.entity_type,
-            "entity_id": entry.entity_id,
-            "action": entry.action,
-            "details": entry.details or {},
-            "created_at": entry.created_at.isoformat(),
-            "actor": entry.actor.username if entry.actor else None,
-        }
-        for entry in entries
+        _serialize_activity_group(group)
+        for group in groups
+        if group.project is not None and can_view_project(user, group.project)
     ]
 
 
@@ -161,24 +195,42 @@ def get_project_approvals(session: Session, project_id: int) -> list[dict]:
     ]
 
 
-def request_project_approval(session: Session, *, project: Project, requested_by: User, summary: str) -> ProjectApproval:
+def request_project_approval(
+    session: Session,
+    *,
+    project: Project,
+    requested_by: User,
+    summary: str,
+    mutation_batch_id: str | None = None,
+) -> ProjectApproval:
+    audit_context = build_audit_context(
+        actor=requested_by,
+        mutation_batch_id=mutation_batch_id,
+        title="Approval requested",
+        scope_type="project",
+        scope_id=project.id,
+    )
+    activity_group = ensure_activity_group(session, project=project, context=audit_context)
     approval = ProjectApproval(
         project=project,
+        activity_group=activity_group,
         requested_by=requested_by,
         status=ApprovalStatus.PENDING,
         summary=summary.strip(),
     )
     session.add(approval)
     session.flush()
-    session.add(
-        ProjectActivityLog(
-            project=project,
-            actor=requested_by,
-            entity_type="ProjectApproval",
-            entity_id=approval.id,
-            action="approval_requested",
-            details={"summary": approval.summary},
-        )
+    record_project_activity(
+        session,
+        project=project,
+        context=audit_context,
+        entity_type="ProjectApproval",
+        entity_id=approval.id,
+        action="approval_requested",
+        title="Approval requested",
+        scope_type="project",
+        scope_id=project.id,
+        details={"summary": approval.summary},
     )
     session.commit()
     session.refresh(approval)
@@ -191,6 +243,7 @@ def decide_project_approval(
     approval_id: int,
     decided_by: User,
     status: str,
+    mutation_batch_id: str | None = None,
 ) -> ProjectApproval | None:
     approval = session.scalar(
         select(ProjectApproval)
@@ -203,15 +256,25 @@ def decide_project_approval(
     approval.status = ApprovalStatus(status)
     approval.decided_by = decided_by
     approval.decided_at = utcnow()
-    session.add(
-        ProjectActivityLog(
-            project=approval.project,
-            actor=decided_by,
-            entity_type="ProjectApproval",
-            entity_id=approval.id,
-            action=f"approval_{approval.status.value}",
-            details={"summary": approval.summary},
-        )
+    audit_context = build_audit_context(
+        actor=decided_by,
+        mutation_batch_id=mutation_batch_id,
+        title=f"Approval {approval.status.value}",
+        scope_type="project",
+        scope_id=approval.project_id,
+    )
+    approval.activity_group = ensure_activity_group(session, project=approval.project, context=audit_context)
+    record_project_activity(
+        session,
+        project=approval.project,
+        context=audit_context,
+        entity_type="ProjectApproval",
+        entity_id=approval.id,
+        action=f"approval_{approval.status.value}",
+        title=f"Approval {approval.status.value}",
+        scope_type="project",
+        scope_id=approval.project_id,
+        details={"summary": approval.summary},
     )
     session.commit()
     session.refresh(approval)
@@ -253,3 +316,54 @@ def _serialize_comment(comment: ProjectComment) -> dict:
 
 def _build_comment_route(project_id: int, comment_id: int) -> str:
     return f"/projects/{project_id}#comment-{comment_id}"
+
+
+def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
+    return {
+        "id": group.id,
+        "title": group.title or _default_group_title(group),
+        "project": {
+            "id": group.project.id,
+            "name": group.project.name,
+            "status": group.project.status.value,
+            "status_label": PROJECT_STATUS_LABELS[group.project.status.value],
+        },
+        "mutation_batch_id": group.mutation_batch_id,
+        "scope_type": group.scope_type,
+        "scope_id": group.scope_id,
+        "created_at": group.created_at.isoformat(),
+        "updated_at": group.updated_at.isoformat(),
+        "actor": group.actor.username if group.actor else None,
+        "event_count": len(group.events),
+        "events": [
+            {
+                "id": entry.id,
+                "entity_type": entry.entity_type,
+                "entity_id": entry.entity_id,
+                "action": entry.action,
+                "details": entry.details or {},
+                "created_at": entry.created_at.isoformat(),
+                "actor": entry.actor.username if entry.actor else None,
+            }
+            for entry in sorted(group.events, key=lambda item: item.created_at)
+        ],
+        "approvals": [
+            {
+                "id": approval.id,
+                "status": approval.status.value,
+                "summary": approval.summary,
+                "requested_by": approval.requested_by.username,
+                "decided_by": approval.decided_by.username if approval.decided_by else None,
+                "created_at": approval.created_at.isoformat(),
+                "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
+            }
+            for approval in sorted(group.approvals, key=lambda item: item.created_at)
+        ],
+    }
+
+
+def _default_group_title(group: ProjectActivityGroup) -> str:
+    first_event = min(group.events, key=lambda item: item.created_at, default=None)
+    if first_event is None:
+        return "Project activity"
+    return f"{first_event.entity_type} {first_event.action}".replace("_", " ").strip()

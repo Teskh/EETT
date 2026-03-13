@@ -128,6 +128,7 @@ class User(Base):
     project_memberships: Mapped[list["ProjectMembership"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     comments: Mapped[list["ProjectComment"]] = relationship(back_populates="author")
     notifications: Mapped[list["CommentNotification"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    activity_groups: Mapped[list["ProjectActivityGroup"]] = relationship(back_populates="actor")
     activity_logs: Mapped[list["ProjectActivityLog"]] = relationship(back_populates="actor")
     requested_approvals: Mapped[list["ProjectApproval"]] = relationship(
         foreign_keys="ProjectApproval.requested_by_user_id",
@@ -395,6 +396,7 @@ class Project(Base):
         cascade="all, delete-orphan",
     )
     comments: Mapped[list["ProjectComment"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    activity_groups: Mapped[list["ProjectActivityGroup"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     activity_logs: Mapped[list["ProjectActivityLog"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     approvals: Mapped[list["ProjectApproval"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     export_jobs: Mapped[list["ProjectExportJob"]] = relationship(back_populates="project", cascade="all, delete-orphan")
@@ -754,11 +756,35 @@ class CommentNotification(Base):
     comment: Mapped[ProjectComment] = relationship(back_populates="notifications")
 
 
+class ProjectActivityGroup(Base):
+    __tablename__ = "project_activity_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    mutation_batch_id: Mapped[str | None] = mapped_column(String(80), default=None)
+    title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    scope_type: Mapped[str | None] = mapped_column(String(80), default=None)
+    scope_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="activity_groups")
+    actor: Mapped[User | None] = relationship(back_populates="activity_groups")
+    events: Mapped[list["ProjectActivityLog"]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="ProjectActivityLog.created_at",
+    )
+    approvals: Mapped[list["ProjectApproval"]] = relationship(back_populates="activity_group")
+
+
 class ProjectActivityLog(Base):
     __tablename__ = "project_activity_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("project_activity_groups.id", ondelete="SET NULL"), default=None)
     actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
     entity_type: Mapped[str] = mapped_column(String(60), nullable=False)
     entity_id: Mapped[int | None] = mapped_column(Integer, default=None)
@@ -767,6 +793,7 @@ class ProjectActivityLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     project: Mapped[Project] = relationship(back_populates="activity_logs")
+    group: Mapped[ProjectActivityGroup | None] = relationship(back_populates="events")
     actor: Mapped[User | None] = relationship(back_populates="activity_logs")
 
 
@@ -775,6 +802,7 @@ class ProjectApproval(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    activity_group_id: Mapped[int | None] = mapped_column(ForeignKey("project_activity_groups.id", ondelete="SET NULL"), default=None)
     requested_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
     decided_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
     status: Mapped[ApprovalStatus] = mapped_column(
@@ -787,6 +815,7 @@ class ProjectApproval(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     project: Mapped[Project] = relationship(back_populates="approvals")
+    activity_group: Mapped[ProjectActivityGroup | None] = relationship(back_populates="approvals")
     requested_by: Mapped[User] = relationship(
         foreign_keys=[requested_by_user_id],
         back_populates="requested_approvals",

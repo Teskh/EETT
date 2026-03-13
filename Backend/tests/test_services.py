@@ -4,6 +4,7 @@ import asyncio
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -26,6 +27,7 @@ from app.services.catalog import (
     update_attribute_definition,
 )
 from app.services.projects import (
+    _visible_project_subtype_rows,
     create_project_instance,
     get_instance_sync_preview,
     get_project_view_data,
@@ -285,6 +287,23 @@ class ServiceLayerTests(unittest.TestCase):
             )
             self.assertIsNotNone(selected_component["material_rules"][0]["id"])
             self.assertEqual(selected_component["material_rules"][0]["material_id"], remaining_bom_rows[0].material_id)
+
+    def test_visible_project_subtype_rows_ignore_flat_subtypes_outside_visible_tree(self) -> None:
+        project = Project(name="Subtype Visibility Contract", status="template")
+        root = ProjectSubtype(project=project, name="Root")
+        root.id = 1
+        visible_child = ProjectSubtype(project=project, name="Visible Child", parent=root)
+        visible_child.id = 2
+        visible_child.parent_id = root.id
+        dangling = ProjectSubtype(project=project, name="Dangling", parent_id=999999)
+        dangling.id = 3
+
+        rows = _visible_project_subtype_rows(project)
+
+        self.assertEqual(
+            [(row["name"], row["depth"]) for row in rows],
+            [("Root", 0), ("Visible Child", 1)],
+        )
 
     def test_catalog_material_api_supports_search_and_bulk_rule_save(self) -> None:
         with self.session_factory() as session:
@@ -1025,6 +1044,88 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(decision.status_code, 200)
         self.assertEqual(decision.json()["status"], "approved")
 
+    def test_project_activity_groups_reuse_mutation_batch_id(self) -> None:
+        detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail.status_code, 200)
+        windows = next(section for section in detail.json()["categories"] if section["name"] == "Windows")
+        instance = windows["instances"][0]
+        material = instance["materials"][0]
+
+        batch_id = "batch-group-window-edit"
+        headers = {
+            "X-Spec-Sheets-User": "editor",
+            "X-Mutation-Batch-Id": batch_id,
+        }
+
+        update_instance = self.client.put(
+            f"/api/v1/projects/2/instances/{instance['id']}",
+            headers=headers,
+            json={
+                "name": instance["name"],
+                "short_name": instance["short_name"],
+                "description": f"{instance['description']} Batch update",
+                "short_description": instance["short_description"],
+                "installation": instance["installation"],
+                "unit_amount": instance["unit_amount"],
+                "attribute_values": [
+                    {"name": attribute["name"], "value": attribute["value"]}
+                    for attribute in instance["editable_attributes"]
+                ],
+            },
+        )
+        self.assertEqual(update_instance.status_code, 200)
+
+        updated_quantity = (material["bom_entries"][0]["quantity"] or 0) + 1
+        update_material = self.client.put(
+            f"/api/v1/projects/2/instances/{instance['id']}/materials/{material['rule_id']}",
+            headers=headers,
+            json={
+                "mode": material["mode"],
+                "entries": [
+                    {
+                        "subtype_id": entry["subtype_id"],
+                        "quantity": updated_quantity if index == 0 else entry["quantity"],
+                        "assembly_quantity": entry["assembly_quantity"],
+                    }
+                    for index, entry in enumerate(material["bom_entries"])
+                ],
+            },
+        )
+        self.assertEqual(update_material.status_code, 200)
+
+        follow_up_update = self.client.put(
+            f"/api/v1/projects/2/instances/{instance['id']}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "name": instance["name"],
+                "short_name": instance["short_name"],
+                "description": f"{instance['description']} Batch update",
+                "short_description": f"{instance['short_description']} Solo update",
+                "installation": instance["installation"],
+                "unit_amount": instance["unit_amount"],
+                "attribute_values": [
+                    {"name": attribute["name"], "value": attribute["value"]}
+                    for attribute in instance["editable_attributes"]
+                ],
+            },
+        )
+        self.assertEqual(follow_up_update.status_code, 200)
+
+        activity = self.client.get("/api/v1/projects/2/activity", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(activity.status_code, 200)
+
+        grouped = activity.json()
+        matching_group = next(group for group in grouped if group["mutation_batch_id"] == batch_id)
+        self.assertEqual(matching_group["event_count"], 2)
+        self.assertEqual(len(matching_group["events"]), 2)
+        self.assertEqual({event["entity_type"] for event in matching_group["events"]}, {"ProjectInstance", "ProjectBomEntry"})
+        self.assertTrue(any(group["mutation_batch_id"] is None and group["title"] == "Instance updated" for group in grouped))
+
+        history = self.client.get("/api/v1/activity", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(history.status_code, 200)
+        self.assertTrue(all("project" in group for group in history.json()))
+        self.assertTrue(all(group["project"]["status"] == "execution" for group in history.json()))
+
     def test_v1_catalog_and_project_instance_requests_preserve_short_description(self) -> None:
         create_component_response = self.client.post(
             "/api/v1/catalog/components",
@@ -1091,6 +1192,102 @@ class ServiceLayerTests(unittest.TestCase):
         public_skus = self.client.get("/api/v1/public/projects/2/skus")
         self.assertEqual(public_skus.status_code, 200)
         self.assertIn("MAT-006", public_skus.json()["skus"])
+
+    @patch("app.main.get_material_dashboard_history")
+    @patch("app.main.get_material_dashboard_detail")
+    @patch("app.main.get_material_dashboard_cost_centers")
+    @patch("app.main.get_recent_material_dashboard")
+    def test_material_dashboard_api_surfaces_and_permissions(
+        self,
+        recent_dashboard_mock,
+        cost_centers_mock,
+        detail_mock,
+        movement_history_mock,
+    ) -> None:
+        recent_dashboard_mock.return_value = {
+            "materials": [
+                {
+                    "sku": "ERP-001",
+                    "material_name": "Steel Stud 90",
+                    "unit": "UN",
+                    "last_movement_date": "2026-03-10",
+                    "movement_quantity_60d": 180.0,
+                    "movement_count_60d": 6,
+                }
+            ],
+            "movement_window_days": 60,
+            "ceco_filters": ["CC-01"],
+            "generated_at": "2026-03-12T12:00:00",
+        }
+        cost_centers_mock.return_value = {"cecos": [{"code": "CC-01", "name": "Produccion"}]}
+        detail_mock.return_value = {
+            "sku": "ERP-001",
+            "material_name": "Steel Stud 90",
+            "unit": "UN",
+            "movement_quantity_30d": 75.0,
+            "stock_on_hand": 32.0,
+            "pending_purchase_quantity": 48.0,
+            "average_price": 2500.0,
+            "average_lead_time_days": 9.5,
+            "max_lead_time_days": 12.0,
+            "lead_time_sample_count": 4,
+            "average_daily_outgoing_30d": 2.5,
+            "days_of_stock_30d": 12.8,
+            "reorder_date_recent_rate": "2026-03-14",
+            "last_purchase_order": {
+                "date": "2026-03-01",
+                "number": "OC-123",
+                "estimated_delivery": "2026-03-18",
+            },
+            "generated_at": "2026-03-12T12:03:00",
+        }
+        movement_history_mock.return_value = {
+            "sku": "ERP-001",
+            "movement_days": 90,
+            "ceco_filters": ["CC-01"],
+            "range_start": "2025-12-13",
+            "range_end": "2026-03-12",
+            "movements": [
+                {"date": "2026-03-10", "quantity": 10.0},
+                {"date": "2026-03-11", "quantity": 5.0},
+            ],
+            "generated_at": "2026-03-12T12:05:00",
+        }
+
+        dashboard = self.client.get(
+            "/api/v1/dashboard/materials?ceco=CC-01",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(dashboard.json()["materials"][0]["sku"], "ERP-001")
+        recent_dashboard_mock.assert_called_once()
+
+        cecos = self.client.get(
+            "/api/v1/dashboard/materials/cecos",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(cecos.status_code, 200)
+        self.assertEqual(cecos.json()["cecos"][0]["code"], "CC-01")
+
+        detail = self.client.get(
+            "/api/v1/dashboard/materials/ERP-001?ceco=CC-01",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["stock_on_hand"], 32.0)
+
+        movements = self.client.get(
+            "/api/v1/dashboard/materials/ERP-001/movements?ceco=CC-01",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(movements.status_code, 200)
+        self.assertEqual(movements.json()["movements"][0]["quantity"], 10.0)
+
+        denied = self.client.get(
+            "/api/v1/dashboard/materials",
+            headers={"X-Spec-Sheets-User": "viewer"},
+        )
+        self.assertEqual(denied.status_code, 403)
 
     def test_app_lifespan_requires_existing_schema(self) -> None:
         Base.metadata.drop_all(self.engine)

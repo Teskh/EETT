@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import type { SessionUser } from "../lib/types";
 
-type NavKey = "home" | "catalog" | "projects" | "users";
+type NavKey = "home" | "catalog" | "dashboard" | "history" | "projects" | "users";
 
 type AppShellProps = {
   title: string;
@@ -87,6 +87,10 @@ export function AppShell({ title, activeNav, currentUser, onNavigate, onLogout, 
             {currentUser.permissions.catalog_edit ? (
               <NavButton href="/catalog" icon="ph-database" label="Database Editor" active={activeNav === "catalog"} onNavigate={onNavigate} />
             ) : null}
+            {currentUser.permissions.material_dashboard ? (
+              <NavButton href="/dashboard/materials" icon="ph-chart-line-up" label="Material Dashboard" active={activeNav === "dashboard"} onNavigate={onNavigate} />
+            ) : null}
+            <NavButton href="/history" icon="ph-clock-counter-clockwise" label="Change History" active={activeNav === "history"} onNavigate={onNavigate} />
             <NavButton href="/projects" icon="ph-kanban" label="Projects" active={activeNav === "projects"} onNavigate={onNavigate} />
             {currentUser.permissions.user_admin ? (
               <NavButton href="/users" icon="ph-users-three" label="User Editor" active={activeNav === "users"} onNavigate={onNavigate} />

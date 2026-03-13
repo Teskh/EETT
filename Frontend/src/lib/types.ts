@@ -1,5 +1,6 @@
 export type PermissionSet = {
   catalog_edit: boolean;
+  material_dashboard: boolean;
   erp_admin: boolean;
   project_create: boolean;
   project_edit: boolean;
@@ -15,6 +16,73 @@ export type SessionUser = {
   display_name: string;
   roles: string[];
   permissions: PermissionSet;
+};
+
+export type MaterialDashboardPurchaseOrder = {
+  date: string | null;
+  number: string | null;
+  estimated_delivery: string | null;
+};
+
+export type MaterialDashboardListRow = {
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  last_movement_date: string | null;
+  movement_quantity_60d: number;
+  movement_count_60d: number;
+};
+
+export type MaterialDashboardDetail = {
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  movement_quantity_30d: number;
+  stock_on_hand: number | null;
+  pending_purchase_quantity: number | null;
+  average_price: number | null;
+  average_lead_time_days: number | null;
+  max_lead_time_days: number | null;
+  lead_time_sample_count: number;
+  average_daily_outgoing_30d: number;
+  days_of_stock_30d: number | null;
+  reorder_date_recent_rate: string | null;
+  last_purchase_order: MaterialDashboardPurchaseOrder;
+};
+
+export type MaterialDashboardData = {
+  materials: MaterialDashboardListRow[];
+  movement_window_days: number;
+  ceco_filters: string[];
+  generated_at: string;
+};
+
+export type MaterialDashboardDetailData = MaterialDashboardDetail & {
+  generated_at: string;
+};
+
+export type MaterialDashboardCeco = {
+  code: string;
+  name: string;
+};
+
+export type MaterialDashboardCecoResponse = {
+  cecos: MaterialDashboardCeco[];
+};
+
+export type MaterialDashboardMovementPoint = {
+  date: string;
+  quantity: number;
+};
+
+export type MaterialDashboardMovementData = {
+  sku: string;
+  movement_days: number;
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  movements: MaterialDashboardMovementPoint[];
+  generated_at: string;
 };
 
 export type LoginRequest = {
@@ -338,6 +406,46 @@ export type ProjectDetailData = {
   subtypes: ProjectSubtype[];
   categories: ProjectCategorySection[];
   auxiliary_materials: AuxiliaryMaterialSelection[];
+};
+
+export type Approval = {
+  id: number;
+  status: string;
+  summary: string;
+  requested_by: string;
+  decided_by: string | null;
+  created_at: string;
+  decided_at: string | null;
+};
+
+export type ActivityEvent = {
+  id: number;
+  entity_type: string;
+  entity_id: number | null;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+  actor: string | null;
+};
+
+export type ActivityGroup = {
+  id: number;
+  title: string;
+  project: {
+    id: number;
+    name: string;
+    status: string;
+    status_label: string;
+  };
+  mutation_batch_id: string | null;
+  scope_type: string | null;
+  scope_id: number | null;
+  created_at: string;
+  updated_at: string;
+  actor: string | null;
+  event_count: number;
+  events: ActivityEvent[];
+  approvals: Approval[];
 };
 
 export type CreateCategoryRequest = {

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class PermissionSet(BaseModel):
     catalog_edit: bool
+    material_dashboard: bool
     erp_admin: bool
     project_create: bool
     project_edit: bool
@@ -473,7 +474,7 @@ class CommentModel(BaseModel):
     replies: list["CommentModel"] = Field(default_factory=list)
 
 
-class ActivityLogModel(BaseModel):
+class ActivityEventModel(BaseModel):
     id: int
     entity_type: str
     entity_id: int | None
@@ -491,6 +492,28 @@ class ApprovalModel(BaseModel):
     decided_by: str | None
     created_at: str
     decided_at: str | None
+
+
+class ActivityGroupProjectModel(BaseModel):
+    id: int
+    name: str
+    status: str
+    status_label: str
+
+
+class ActivityGroupModel(BaseModel):
+    id: int
+    title: str
+    project: ActivityGroupProjectModel
+    mutation_batch_id: str | None
+    scope_type: str | None
+    scope_id: int | None
+    created_at: str
+    updated_at: str
+    actor: str | None
+    event_count: int
+    events: list[ActivityEventModel] = Field(default_factory=list)
+    approvals: list[ApprovalModel] = Field(default_factory=list)
 
 
 class ExportJobModel(BaseModel):
@@ -527,6 +550,73 @@ class DashboardProjectModel(BaseModel):
 class DashboardResponse(BaseModel):
     project: DashboardProjectModel
     rows: list[DashboardRowModel]
+
+
+class MaterialDashboardPurchaseOrderModel(BaseModel):
+    date: str | None
+    number: str | None
+    estimated_delivery: str | None
+
+
+class MaterialDashboardListRowModel(BaseModel):
+    sku: str
+    material_name: str
+    unit: str | None
+    last_movement_date: str | None
+    movement_quantity_60d: float
+    movement_count_60d: int
+
+
+class MaterialDashboardDetailModel(BaseModel):
+    sku: str
+    material_name: str
+    unit: str | None
+    movement_quantity_30d: float
+    stock_on_hand: float | None
+    pending_purchase_quantity: float | None
+    average_price: float | None
+    average_lead_time_days: float | None
+    max_lead_time_days: float | None
+    lead_time_sample_count: int
+    average_daily_outgoing_30d: float
+    days_of_stock_30d: float | None
+    reorder_date_recent_rate: str | None
+    last_purchase_order: MaterialDashboardPurchaseOrderModel
+
+
+class MaterialDashboardResponse(BaseModel):
+    materials: list[MaterialDashboardListRowModel]
+    movement_window_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardDetailResponse(MaterialDashboardDetailModel):
+    generated_at: str
+
+
+class MaterialDashboardCecoModel(BaseModel):
+    code: str
+    name: str
+
+
+class MaterialDashboardCecoResponse(BaseModel):
+    cecos: list[MaterialDashboardCecoModel] = Field(default_factory=list)
+
+
+class MaterialDashboardMovementPointModel(BaseModel):
+    date: str
+    quantity: float
+
+
+class MaterialDashboardMovementResponse(BaseModel):
+    sku: str
+    movement_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    movements: list[MaterialDashboardMovementPointModel] = Field(default_factory=list)
+    generated_at: str
 
 
 class NotificationModel(BaseModel):

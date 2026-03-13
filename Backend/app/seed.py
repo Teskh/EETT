@@ -29,6 +29,7 @@ from app.models import (
     MembershipRole,
     NotificationType,
     Project,
+    ProjectActivityGroup,
     ProjectActivityLog,
     ProjectApproval,
     ProjectAuxiliaryMaterialSelection,
@@ -545,10 +546,28 @@ def seed_demo_dataset(session: Session) -> None:
     )
     session.add_all([mention, notification])
 
+    seeded_setup_group = ProjectActivityGroup(
+        project=execution_project,
+        actor=editor_user,
+        mutation_batch_id="seeded-setup",
+        title="Seeded project setup",
+        scope_type="project",
+        scope_id=execution_project.id,
+    )
+    seeded_comment_group = ProjectActivityGroup(
+        project=execution_project,
+        actor=admin_user,
+        mutation_batch_id="seeded-comment",
+        title="Seeded review comment",
+        scope_type="instance",
+        scope_id=window_instance.id,
+    )
+    session.add_all([seeded_setup_group, seeded_comment_group])
     session.add_all(
         [
             ProjectActivityLog(
                 project=execution_project,
+                group=seeded_setup_group,
                 actor=editor_user,
                 entity_type="ProjectInstance",
                 entity_id=window_instance.id,
@@ -557,6 +576,7 @@ def seed_demo_dataset(session: Session) -> None:
             ),
             ProjectActivityLog(
                 project=execution_project,
+                group=seeded_setup_group,
                 actor=editor_user,
                 entity_type="BomEntry",
                 entity_id=3,
@@ -565,6 +585,7 @@ def seed_demo_dataset(session: Session) -> None:
             ),
             ProjectActivityLog(
                 project=execution_project,
+                group=seeded_comment_group,
                 actor=admin_user,
                 entity_type="ProjectComment",
                 entity_id=reply_comment.id,
@@ -574,9 +595,19 @@ def seed_demo_dataset(session: Session) -> None:
         ]
     )
 
+    seeded_approval_group = ProjectActivityGroup(
+        project=execution_project,
+        actor=editor_user,
+        mutation_batch_id="seeded-approval",
+        title="Seeded approval request",
+        scope_type="project",
+        scope_id=execution_project.id,
+    )
+    session.add(seeded_approval_group)
     session.add(
         ProjectApproval(
             project=execution_project,
+            activity_group=seeded_approval_group,
             requested_by=editor_user,
             decided_by=admin_user,
             status=ApprovalStatus.APPROVED,
@@ -752,9 +783,19 @@ def backfill_demo_supporting_records(session: Session) -> None:
 
     if project is not None and not session.scalar(select(ProjectActivityLog.id).limit(1)):
         if window_instance is not None:
+            setup_group = ProjectActivityGroup(
+                project=project,
+                actor=editor_user,
+                mutation_batch_id="seeded-backfill-window",
+                title="Seeded window activity",
+                scope_type="instance",
+                scope_id=window_instance.id,
+            )
+            session.add(setup_group)
             session.add(
                 ProjectActivityLog(
                     project=project,
+                    group=setup_group,
                     actor=editor_user,
                     entity_type="ProjectInstance",
                     entity_id=window_instance.id,
@@ -763,9 +804,19 @@ def backfill_demo_supporting_records(session: Session) -> None:
                 )
             )
         if door_instance is not None:
+            review_group = ProjectActivityGroup(
+                project=project,
+                actor=admin_user,
+                mutation_batch_id="seeded-backfill-door",
+                title="Seeded review activity",
+                scope_type="instance",
+                scope_id=door_instance.id,
+            )
+            session.add(review_group)
             session.add(
                 ProjectActivityLog(
                     project=project,
+                    group=review_group,
                     actor=admin_user,
                     entity_type="ProjectInstance",
                     entity_id=door_instance.id,
@@ -775,9 +826,19 @@ def backfill_demo_supporting_records(session: Session) -> None:
             )
 
     if project is not None and not session.scalar(select(ProjectApproval.id).limit(1)):
+        approval_group = ProjectActivityGroup(
+            project=project,
+            actor=editor_user,
+            mutation_batch_id="seeded-backfill-approval",
+            title="Seeded approval request",
+            scope_type="project",
+            scope_id=project.id,
+        )
+        session.add(approval_group)
         session.add(
             ProjectApproval(
                 project=project,
+                activity_group=approval_group,
                 requested_by=editor_user,
                 decided_by=admin_user,
                 status=ApprovalStatus.APPROVED,
