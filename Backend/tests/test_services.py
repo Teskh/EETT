@@ -1125,11 +1125,18 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(activity.status_code, 200)
 
         grouped = activity.json()
-        matching_group = next(group for group in grouped if group["mutation_batch_id"] == batch_id)
-        self.assertEqual(matching_group["event_count"], 2)
-        self.assertEqual(len(matching_group["events"]), 2)
-        self.assertEqual({event["entity_type"] for event in matching_group["events"]}, {"ProjectInstance", "ProjectBomEntry"})
-        self.assertTrue(any(group["mutation_batch_id"] is None and group["title"] == "Instance updated" for group in grouped))
+        matching_group = next(group for group in grouped if group["title"] == f"Updated {instance['name']}" and group["entry_count"] == 2)
+        self.assertEqual(len(matching_group["entries"]), 2)
+        self.assertEqual(
+            {entry["headline"] for entry in matching_group["entries"]},
+            {"Component details changed", "Material quantities changed"},
+        )
+        self.assertTrue(all("Project" not in entry["headline"] for entry in matching_group["entries"]))
+        material_entry = next(entry for entry in matching_group["entries"] if entry["headline"] == "Material quantities changed")
+        self.assertTrue(any(change["label"].startswith("Standard") for change in material_entry["changes"]))
+        detail_entry = next(entry for entry in matching_group["entries"] if entry["headline"] == "Component details changed")
+        self.assertTrue(any(change["label"] == "Description" for change in detail_entry["changes"]))
+        self.assertTrue(any(group["title"] == f"Updated {instance['name']}" and group["entry_count"] == 1 for group in grouped))
 
         history = self.client.get("/api/v1/activity", headers={"X-Spec-Sheets-User": "viewer"})
         self.assertEqual(history.status_code, 200)

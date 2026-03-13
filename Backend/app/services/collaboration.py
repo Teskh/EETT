@@ -20,15 +20,15 @@ from app.models import (
     User,
 )
 from app.models.entities import utcnow
-from app.services.audit import build_audit_context, ensure_activity_group, record_project_activity
+from app.services.audit import build_activity_details, build_audit_context, ensure_activity_group, record_project_activity
 from app.services.auth import can_view_project
 
 MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.-]+)")
 
 PROJECT_STATUS_LABELS = {
-    ProjectStatus.TEMPLATE.value: "Project Template",
-    ProjectStatus.EXECUTION.value: "Execution Projects",
-    ProjectStatus.FINISHED.value: "Finished Projects",
+    ProjectStatus.TEMPLATE.value: "Template",
+    ProjectStatus.EXECUTION.value: "Execution",
+    ProjectStatus.FINISHED.value: "Finished",
 }
 
 
@@ -126,10 +126,19 @@ def add_project_comment(
         entity_type="ProjectComment",
         entity_id=comment.id,
         action="commented",
-        title="Comment added",
+        title=f"Comment on {instance.name}" if instance else "Comment on project",
         scope_type="instance" if instance else "project",
         scope_id=instance.id if instance else project.id,
-        details={"instance_id": instance.id if instance else None, "parent_comment_id": parent_comment.id if parent_comment else None},
+        details=build_activity_details(
+            headline="Comment added",
+            subject_name=instance.name if instance else project.name,
+            notes=[
+                _comment_preview(comment.body),
+                "Reply to an earlier comment" if parent_comment else "",
+                f"Mentioned: {', '.join(f'@{username}' for username in mentioned_usernames)}" if mentioned_usernames else "",
+            ],
+            kind="comment",
+        ),
     )
     session.commit()
     session.refresh(comment)
@@ -230,7 +239,12 @@ def request_project_approval(
         title="Approval requested",
         scope_type="project",
         scope_id=project.id,
-        details={"summary": approval.summary},
+        details=build_activity_details(
+            headline="Approval requested",
+            subject_name=project.name,
+            notes=[approval.summary],
+            kind="approval",
+        ),
     )
     session.commit()
     session.refresh(approval)
@@ -271,10 +285,15 @@ def decide_project_approval(
         entity_type="ProjectApproval",
         entity_id=approval.id,
         action=f"approval_{approval.status.value}",
-        title=f"Approval {approval.status.value}",
+        title=f"{approval.status.value.capitalize()} project changes",
         scope_type="project",
         scope_id=approval.project_id,
-        details={"summary": approval.summary},
+        details=build_activity_details(
+            headline=f"Approval {approval.status.value}",
+            subject_name=approval.project.name if approval.project else None,
+            notes=[approval.summary],
+            kind="approval",
+        ),
     )
     session.commit()
     session.refresh(approval)
@@ -319,6 +338,7 @@ def _build_comment_route(project_id: int, comment_id: int) -> str:
 
 
 def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
+    entries = [_serialize_activity_event(entry) for entry in sorted(group.events, key=lambda item: item.created_at)]
     return {
         "id": group.id,
         "title": group.title or _default_group_title(group),
@@ -328,37 +348,11 @@ def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
             "status": group.project.status.value,
             "status_label": PROJECT_STATUS_LABELS[group.project.status.value],
         },
-        "mutation_batch_id": group.mutation_batch_id,
-        "scope_type": group.scope_type,
-        "scope_id": group.scope_id,
         "created_at": group.created_at.isoformat(),
         "updated_at": group.updated_at.isoformat(),
-        "actor": group.actor.username if group.actor else None,
-        "event_count": len(group.events),
-        "events": [
-            {
-                "id": entry.id,
-                "entity_type": entry.entity_type,
-                "entity_id": entry.entity_id,
-                "action": entry.action,
-                "details": entry.details or {},
-                "created_at": entry.created_at.isoformat(),
-                "actor": entry.actor.username if entry.actor else None,
-            }
-            for entry in sorted(group.events, key=lambda item: item.created_at)
-        ],
-        "approvals": [
-            {
-                "id": approval.id,
-                "status": approval.status.value,
-                "summary": approval.summary,
-                "requested_by": approval.requested_by.username,
-                "decided_by": approval.decided_by.username if approval.decided_by else None,
-                "created_at": approval.created_at.isoformat(),
-                "decided_at": approval.decided_at.isoformat() if approval.decided_at else None,
-            }
-            for approval in sorted(group.approvals, key=lambda item: item.created_at)
-        ],
+        "actor": _display_actor(group.actor),
+        "entry_count": len(entries),
+        "entries": entries,
     }
 
 
@@ -366,4 +360,46 @@ def _default_group_title(group: ProjectActivityGroup) -> str:
     first_event = min(group.events, key=lambda item: item.created_at, default=None)
     if first_event is None:
         return "Project activity"
-    return f"{first_event.entity_type} {first_event.action}".replace("_", " ").strip()
+    details = first_event.details or {}
+    headline = details.get("headline") if isinstance(details, dict) else None
+    if isinstance(headline, str) and headline.strip():
+        return headline.strip()
+    return "Project activity"
+
+
+def _serialize_activity_event(entry: ProjectActivityLog) -> dict:
+    details = entry.details or {}
+    notes = details.get("notes") if isinstance(details.get("notes"), list) else []
+    changes = details.get("changes") if isinstance(details.get("changes"), list) else []
+    return {
+        "id": f"event-{entry.id}",
+        "kind": str(details.get("kind") or entry.entity_type).lower(),
+        "headline": str(details.get("headline") or entry.action.replace("_", " ").strip()),
+        "subject_name": str(details.get("subject_name")).strip() if isinstance(details.get("subject_name"), str) else None,
+        "notes": [str(note).strip() for note in notes if str(note).strip()],
+        "changes": [
+            {
+                "label": str(change.get("label", "")).strip(),
+                "before": str(change.get("before")).strip() if change.get("before") is not None else None,
+                "after": str(change.get("after")).strip() if change.get("after") is not None else None,
+            }
+            for change in changes
+            if isinstance(change, dict) and str(change.get("label", "")).strip()
+        ],
+        "created_at": entry.created_at.isoformat(),
+        "actor": _display_actor(entry.actor),
+        "is_minor": bool(details.get("minor")),
+    }
+
+
+def _display_actor(user: User | None) -> str | None:
+    if user is None:
+        return None
+    return user.display_name or user.username
+
+
+def _comment_preview(body: str) -> str:
+    compact = " ".join(body.split())
+    if len(compact) <= 140:
+        return compact
+    return f"{compact[:137].rstrip()}..."

@@ -34,7 +34,7 @@ from app.models import (
     User,
 )
 from app.models.entities import BomCalculationMode, MaterialMode, MembershipRole, utcnow
-from app.services.audit import build_audit_context, record_project_activity
+from app.services.audit import build_activity_change, build_activity_details, build_audit_context, record_project_activity
 from app.services.auth import can_view_project
 
 
@@ -103,11 +103,13 @@ def create_project(
             title="Project created",
             scope_type="project",
             scope_id=project.id,
-            details={
-                "name": project.name,
-                "status": project.status.value,
-                "description": project.description,
-            },
+            details=build_activity_details(
+                headline="Project created",
+                subject_name=project.name,
+                notes=[f"Status: {project.status.value.replace('_', ' ')}"],
+                changes=[build_activity_change("Description", None, project.description)],
+                kind="project",
+            ),
         )
     session.commit()
     session.refresh(project)
@@ -145,17 +147,22 @@ def create_project_subtype(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Subtype created",
+                title=f"Created subtype {subtype.name}",
                 scope_type="subtype",
                 scope_id=subtype.id,
             ),
             entity_type="ProjectSubtype",
             entity_id=subtype.id,
             action="created",
-            title="Subtype created",
+            title=f"Created subtype {subtype.name}",
             scope_type="subtype",
             scope_id=subtype.id,
-            details={"name": subtype.name, "parent_id": subtype.parent_id},
+            details=build_activity_details(
+                headline="Subtype created",
+                subject_name=subtype.name,
+                notes=[f"Parent subtype: {parent.name}" if parent else "Top-level subtype"],
+                kind="subtype",
+            ),
         )
     session.commit()
     session.refresh(subtype)
@@ -190,17 +197,22 @@ def update_project_subtype(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Subtype updated",
+                title=f"Updated subtype {subtype.name}",
                 scope_type="subtype",
                 scope_id=subtype.id,
             ),
             entity_type="ProjectSubtype",
             entity_id=subtype.id,
             action="updated",
-            title="Subtype updated",
+            title=f"Updated subtype {subtype.name}",
             scope_type="subtype",
             scope_id=subtype.id,
-            details={"changes": [{"field": "name", "old": previous_name, "new": subtype.name}]},
+            details=build_activity_details(
+                headline="Subtype renamed",
+                subject_name=subtype.name,
+                changes=[build_activity_change("Subtype name", previous_name, subtype.name)],
+                kind="subtype",
+            ),
         )
     session.commit()
     session.refresh(subtype)
@@ -228,17 +240,24 @@ def delete_project_subtype(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Subtype deleted",
+                title=f"Deleted subtype {subtype.name}",
                 scope_type="subtype",
                 scope_id=subtype.id,
             ),
             entity_type="ProjectSubtype",
             entity_id=subtype.id,
             action="deleted",
-            title="Subtype deleted",
+            title=f"Deleted subtype {subtype.name}",
             scope_type="subtype",
             scope_id=subtype.id,
-            details=details,
+            details=build_activity_details(
+                headline="Subtype deleted",
+                subject_name=subtype.name,
+                notes=[
+                    f"Parent subtype: {parent.name}" if (parent := subtype.parent) else "Top-level subtype",
+                ],
+                kind="subtype",
+            ),
         )
     session.delete(subtype)
     session.commit()
@@ -304,22 +323,26 @@ def create_project_instance(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Instance created",
+                title=f"Added {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstance",
             entity_id=instance.id,
             action="created",
-            title="Instance created",
+            title=f"Added {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details={
-                "name": instance.name,
-                "category_id": instance.category_id,
-                "component_id": instance.component_id,
-                "snapshot": _instance_snapshot(instance),
-            },
+            details=build_activity_details(
+                headline="Component added",
+                subject_name=instance.name,
+                notes=[
+                    f"Category: {instance.component.category.name}" if instance.component.category else "",
+                    f"Template: {instance.component.name}",
+                ],
+                changes=_instance_creation_changes(instance),
+                kind="instance",
+            ),
         )
     session.commit()
     session.refresh(instance)
@@ -373,25 +396,31 @@ def update_project_instance(
     instance.sync_state.last_synced_at = utcnow()
     instance.sync_state.source_component_updated_at = instance.component.updated_at
     instance.sync_state.sync_notes = "Project instance customized after snapshot creation."
-    changes = _diff_mapping(previous_snapshot, _instance_snapshot(instance))
-    if actor_user is not None and changes:
+    next_snapshot = _instance_snapshot(instance)
+    activity_changes = _describe_instance_changes(previous_snapshot, next_snapshot)
+    if actor_user is not None and activity_changes:
         record_project_activity(
             session,
             project=project,
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Instance updated",
+                title=f"Updated {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstance",
             entity_id=instance.id,
             action="updated",
-            title="Instance updated",
+            title=f"Updated {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details={"changes": changes},
+            details=build_activity_details(
+                headline="Component details changed",
+                subject_name=instance.name,
+                changes=activity_changes,
+                kind="instance",
+            ),
         )
     session.commit()
     session.refresh(instance)
@@ -438,17 +467,23 @@ def create_project_instance_occurrence(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Usage link created",
+                title=f"Updated usage for {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstanceOccurrence",
             entity_id=occurrence.id,
             action="created",
-            title="Usage link created",
+            title=f"Updated usage for {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details=_occurrence_snapshot(occurrence),
+            details=build_activity_details(
+                headline="Usage added",
+                subject_name=instance.name,
+                notes=_occurrence_notes(occurrence),
+                changes=_describe_occurrence_creation(occurrence),
+                kind="usage",
+            ),
         )
     session.commit()
     session.refresh(occurrence)
@@ -488,25 +523,31 @@ def update_project_instance_occurrence(
         target_instance_id=target_instance_id,
     )
     _replace_occurrence_attribute_values(instance, occurrence, attribute_values or {})
-    changes = _diff_mapping(previous_snapshot, _occurrence_snapshot(occurrence))
-    if actor_user is not None and changes:
+    next_snapshot = _occurrence_snapshot(occurrence)
+    activity_changes = _describe_occurrence_changes(previous_snapshot, next_snapshot)
+    if actor_user is not None and activity_changes:
         record_project_activity(
             session,
             project=project,
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Usage link updated",
+                title=f"Updated usage for {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstanceOccurrence",
             entity_id=occurrence.id,
             action="updated",
-            title="Usage link updated",
+            title=f"Updated usage for {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details={"changes": changes},
+            details=build_activity_details(
+                headline="Usage changed",
+                subject_name=instance.name,
+                changes=activity_changes,
+                kind="usage",
+            ),
         )
     session.commit()
     session.refresh(occurrence)
@@ -538,17 +579,22 @@ def delete_project_instance_occurrence(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Usage link deleted",
+                title=f"Updated usage for {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstanceOccurrence",
             entity_id=occurrence.id,
             action="deleted",
-            title="Usage link deleted",
+            title=f"Updated usage for {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details=details,
+            details=build_activity_details(
+                headline="Usage removed",
+                subject_name=instance.name,
+                notes=_occurrence_notes_from_snapshot(details),
+                kind="usage",
+            ),
         )
     session.delete(occurrence)
     session.commit()
@@ -577,17 +623,22 @@ def delete_project_instance(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Instance deleted",
+                title=f"Deleted {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstance",
             entity_id=instance.id,
             action="deleted",
-            title="Instance deleted",
+            title=f"Deleted {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details=details,
+            details=build_activity_details(
+                headline="Component deleted",
+                subject_name=instance.name,
+                changes=_describe_instance_deletion(details),
+                kind="instance",
+            ),
         )
     session.delete(instance)
     session.commit()
@@ -792,7 +843,12 @@ def set_project_material_mode(
             title="Material mode updated",
             scope_type="project",
             scope_id=project.id,
-            details={"changes": [{"field": "mode", "old": previous_mode, "new": current.mode.value}]},
+            details=build_activity_details(
+                headline="Project material mode changed",
+                subject_name=project.name,
+                changes=[build_activity_change("Material mode", _material_mode_label(previous_mode), _material_mode_label(current.mode.value))],
+                kind="material",
+            ),
         )
     session.commit()
     session.refresh(current)
@@ -903,24 +959,23 @@ def replace_project_material_occurrence(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Material quantities updated",
+                title=f"Updated materials for {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectBomEntry",
             entity_id=rule.id,
             action="updated",
-            title="Material quantities updated",
+            title=f"Updated materials for {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details={
-                "noise_hint": "material_quantity",
-                "material_rule_id": rule.id,
-                "material_name": rule.material.name,
-                "mode": normalized_mode,
-                "before": previous_snapshot,
-                "after": next_snapshot,
-            },
+            details=build_activity_details(
+                headline="Material quantities changed",
+                subject_name=rule.material.name,
+                notes=[f"Component: {instance.name}"],
+                changes=_describe_material_quantity_changes(previous_snapshot, next_snapshot),
+                kind="material",
+            ),
         )
     session.commit()
     return True
@@ -1016,20 +1071,23 @@ def refresh_instance_snapshot(
             context=build_audit_context(
                 actor=actor_user,
                 mutation_batch_id=mutation_batch_id,
-                title="Instance refreshed from catalog",
+                title=f"Refreshed {instance.name}",
                 scope_type="instance",
                 scope_id=instance.id,
             ),
             entity_type="ProjectInstance",
             entity_id=instance.id,
             action="refreshed",
-            title="Instance refreshed from catalog",
+            title=f"Refreshed {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
-            details={
-                "changes": previous_preview["changes"] if previous_preview else [],
-                "component_id": instance.component_id,
-            },
+            details=build_activity_details(
+                headline="Catalog values reapplied",
+                subject_name=instance.name,
+                notes=[f"Template: {instance.component.name}"],
+                changes=_describe_sync_preview_changes(previous_preview["changes"] if previous_preview else []),
+                kind="instance",
+            ),
         )
     session.commit()
     return get_instance_sync_preview(session, instance_id)
@@ -1387,7 +1445,7 @@ def _occurrence_snapshot(occurrence: ProjectInstanceOccurrence) -> dict:
     return {
         "relationship_type": occurrence.relationship_type,
         "context_label": occurrence.context_label,
-        "targets": [target.target_instance_id for target in occurrence.targets],
+        "targets": [target.target_instance.name for target in occurrence.targets if target.target_instance is not None],
         "attributes": {
             attribute.attribute_name: attribute.value
             for attribute in sorted(occurrence.attribute_values, key=lambda item: item.sort_order)
@@ -1420,14 +1478,136 @@ def _normalized_bom_snapshot(entries: list[dict], project: Project) -> list[dict
     ]
 
 
-def _diff_mapping(before: dict, after: dict) -> list[dict]:
-    changes: list[dict] = []
-    for key in sorted(set(before) | set(after)):
-        previous_value = before.get(key)
-        next_value = after.get(key)
-        if previous_value != next_value:
-            changes.append({"field": key, "old": previous_value, "new": next_value})
+INSTANCE_FIELD_LABELS = {
+    "name": "Name",
+    "short_name": "Short name",
+    "description": "Description",
+    "short_description": "Short description",
+    "installation": "Installation",
+    "unit_amount": "Unit amount",
+}
+
+OCCURRENCE_FIELD_LABELS = {
+    "relationship_type": "Relationship",
+    "context_label": "Usage label",
+    "targets": "Targets",
+}
+
+MATERIAL_MODE_LABELS = {
+    MaterialMode.GENERAL.value: "General",
+    MaterialMode.PER_SUBTYPE.value: "Per subtype",
+}
+
+
+def _instance_creation_changes(instance: ProjectInstance) -> list[dict]:
+    snapshot = _instance_snapshot(instance)
+    changes = [
+        build_activity_change(label, None, snapshot[field])
+        for field, label in INSTANCE_FIELD_LABELS.items()
+        if snapshot.get(field) is not None
+    ]
+    changes.extend(build_activity_change(name, None, value) for name, value in sorted(snapshot["attributes"].items()) if value is not None)
     return changes
+
+
+def _describe_instance_changes(before: dict, after: dict) -> list[dict]:
+    changes = [
+        build_activity_change(label, before.get(field), after.get(field))
+        for field, label in INSTANCE_FIELD_LABELS.items()
+        if before.get(field) != after.get(field)
+    ]
+    before_attributes = before.get("attributes", {})
+    after_attributes = after.get("attributes", {})
+    for name in sorted(set(before_attributes) | set(after_attributes)):
+        if before_attributes.get(name) != after_attributes.get(name):
+            changes.append(build_activity_change(name, before_attributes.get(name), after_attributes.get(name)))
+    return changes
+
+
+def _describe_instance_deletion(snapshot: dict) -> list[dict]:
+    changes = [
+        build_activity_change(label, snapshot.get(field), None)
+        for field, label in INSTANCE_FIELD_LABELS.items()
+        if snapshot.get(field) is not None
+    ]
+    changes.extend(build_activity_change(name, value, None) for name, value in sorted(snapshot.get("attributes", {}).items()) if value is not None)
+    return changes
+
+
+def _describe_occurrence_creation(occurrence: ProjectInstanceOccurrence) -> list[dict]:
+    snapshot = _occurrence_snapshot(occurrence)
+    return _describe_occurrence_changes({}, snapshot)
+
+
+def _describe_occurrence_changes(before: dict, after: dict) -> list[dict]:
+    changes = [
+        build_activity_change(label, before.get(field), after.get(field))
+        for field, label in OCCURRENCE_FIELD_LABELS.items()
+        if before.get(field) != after.get(field)
+    ]
+    before_attributes = before.get("attributes", {})
+    after_attributes = after.get("attributes", {})
+    for name in sorted(set(before_attributes) | set(after_attributes)):
+        if before_attributes.get(name) != after_attributes.get(name):
+            changes.append(build_activity_change(name, before_attributes.get(name), after_attributes.get(name)))
+    return changes
+
+
+def _occurrence_notes(occurrence: ProjectInstanceOccurrence) -> list[str]:
+    notes = []
+    if occurrence.targets:
+        notes.append(f"Linked to: {', '.join(target.target_instance.name for target in occurrence.targets if target.target_instance is not None)}")
+    return notes
+
+
+def _occurrence_notes_from_snapshot(snapshot: dict) -> list[str]:
+    targets = snapshot.get("targets") or []
+    if targets:
+        return [f"Removed link to: {', '.join(str(target) for target in targets)}"]
+    return []
+
+
+def _describe_material_quantity_changes(before: list[dict], after: list[dict]) -> list[dict]:
+    def key_for(row: dict) -> int | None:
+        return row.get("subtype_id")
+
+    before_map = {key_for(row): row for row in before}
+    after_map = {key_for(row): row for row in after}
+    changes: list[dict] = []
+    for subtype_id in sorted(set(before_map) | set(after_map), key=lambda value: (value is None, value or -1)):
+        previous_row = before_map.get(subtype_id, {})
+        next_row = after_map.get(subtype_id, {})
+        label_prefix = next_row.get("subtype_name") or previous_row.get("subtype_name") or "General"
+        if previous_row.get("quantity") != next_row.get("quantity"):
+            changes.append(build_activity_change(f"{label_prefix} quantity", previous_row.get("quantity"), next_row.get("quantity")))
+        if previous_row.get("assembly_quantity") != next_row.get("assembly_quantity"):
+            changes.append(
+                build_activity_change(
+                    f"{label_prefix} assembly quantity",
+                    previous_row.get("assembly_quantity"),
+                    next_row.get("assembly_quantity"),
+                )
+            )
+    return changes
+
+
+def _describe_sync_preview_changes(changes: list[dict]) -> list[dict]:
+    described: list[dict] = []
+    for change in changes:
+        field = change.get("field")
+        current = change.get("current")
+        catalog = change.get("catalog")
+        if field == "attributes":
+            described.append(build_activity_change("Attributes", current, catalog))
+            continue
+        described.append(build_activity_change(INSTANCE_FIELD_LABELS.get(field, str(field).replace("_", " ").title()), current, catalog))
+    return described
+
+
+def _material_mode_label(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return MATERIAL_MODE_LABELS.get(value, value.replace("_", " ").title())
 
 
 def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[dict]:

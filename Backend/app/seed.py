@@ -54,6 +54,7 @@ from app.models import (
     UserRole,
 )
 from app.models.entities import BomCalculationMode, CategoryScope, utcnow
+from app.services.audit import build_activity_change, build_activity_details
 from app.services.auth import ROLE_DEFINITIONS, hash_password
 
 
@@ -550,7 +551,7 @@ def seed_demo_dataset(session: Session) -> None:
         project=execution_project,
         actor=editor_user,
         mutation_batch_id="seeded-setup",
-        title="Seeded project setup",
+        title=f"Updated materials for {window_instance.name}",
         scope_type="project",
         scope_id=execution_project.id,
     )
@@ -558,7 +559,7 @@ def seed_demo_dataset(session: Session) -> None:
         project=execution_project,
         actor=admin_user,
         mutation_batch_id="seeded-comment",
-        title="Seeded review comment",
+        title=f"Comment on {window_instance.name}",
         scope_type="instance",
         scope_id=window_instance.id,
     )
@@ -572,16 +573,27 @@ def seed_demo_dataset(session: Session) -> None:
                 entity_type="ProjectInstance",
                 entity_id=window_instance.id,
                 action="created",
-                details={"name": window_instance.name, "category": "Windows"},
+                details=build_activity_details(
+                    headline="Component added",
+                    subject_name=window_instance.name,
+                    notes=["Category: Windows", "Template: Sliding Window"],
+                    kind="instance",
+                ),
             ),
             ProjectActivityLog(
                 project=execution_project,
                 group=seeded_setup_group,
                 actor=editor_user,
-                entity_type="BomEntry",
+                entity_type="ProjectBomEntry",
                 entity_id=3,
-                action="quantity_changed",
-                details={"material": "MAT-003", "quantity": 3.2, "subtype": "Standard"},
+                action="updated",
+                details=build_activity_details(
+                    headline="Material quantities changed",
+                    subject_name="Laminated Glass Panel",
+                    notes=[f"Component: {window_instance.name}"],
+                    changes=[build_activity_change("Standard quantity", "2.8", "3.2")],
+                    kind="material",
+                ),
             ),
             ProjectActivityLog(
                 project=execution_project,
@@ -590,7 +602,12 @@ def seed_demo_dataset(session: Session) -> None:
                 entity_type="ProjectComment",
                 entity_id=reply_comment.id,
                 action="commented",
-                details={"instance": window_instance.name},
+                details=build_activity_details(
+                    headline="Comment added",
+                    subject_name=window_instance.name,
+                    notes=["Keep it in the full technical export only. @viewer can validate the client-facing wording."],
+                    kind="comment",
+                ),
             ),
         ]
     )
@@ -599,7 +616,7 @@ def seed_demo_dataset(session: Session) -> None:
         project=execution_project,
         actor=editor_user,
         mutation_batch_id="seeded-approval",
-        title="Seeded approval request",
+        title="Approved project changes",
         scope_type="project",
         scope_id=execution_project.id,
     )
@@ -613,6 +630,22 @@ def seed_demo_dataset(session: Session) -> None:
             status=ApprovalStatus.APPROVED,
             summary="Approve project BOM for procurement export package.",
             decided_at=utcnow(),
+        )
+    )
+    session.add(
+        ProjectActivityLog(
+            project=execution_project,
+            group=seeded_approval_group,
+            actor=admin_user,
+            entity_type="ProjectApproval",
+            entity_id=1,
+            action="approval_approved",
+            details=build_activity_details(
+                headline="Approval approved",
+                subject_name=execution_project.name,
+                notes=["Approve project BOM for procurement export package."],
+                kind="approval",
+            ),
         )
     )
 
@@ -787,7 +820,7 @@ def backfill_demo_supporting_records(session: Session) -> None:
                 project=project,
                 actor=editor_user,
                 mutation_batch_id="seeded-backfill-window",
-                title="Seeded window activity",
+                title=f"Added {window_instance.name}",
                 scope_type="instance",
                 scope_id=window_instance.id,
             )
@@ -800,7 +833,12 @@ def backfill_demo_supporting_records(session: Session) -> None:
                     entity_type="ProjectInstance",
                     entity_id=window_instance.id,
                     action="created",
-                    details={"name": window_instance.name, "category": "Windows"},
+                    details=build_activity_details(
+                        headline="Component added",
+                        subject_name=window_instance.name,
+                        notes=["Category: Windows"],
+                        kind="instance",
+                    ),
                 )
             )
         if door_instance is not None:
@@ -808,7 +846,7 @@ def backfill_demo_supporting_records(session: Session) -> None:
                 project=project,
                 actor=admin_user,
                 mutation_batch_id="seeded-backfill-door",
-                title="Seeded review activity",
+                title=f"Updated {door_instance.name}",
                 scope_type="instance",
                 scope_id=door_instance.id,
             )
@@ -821,7 +859,12 @@ def backfill_demo_supporting_records(session: Session) -> None:
                     entity_type="ProjectInstance",
                     entity_id=door_instance.id,
                     action="reviewed",
-                    details={"name": door_instance.name},
+                    details=build_activity_details(
+                        headline="Review completed",
+                        subject_name=door_instance.name,
+                        notes=["Marked ready for follow-up."],
+                        kind="instance",
+                    ),
                 )
             )
 
@@ -830,7 +873,7 @@ def backfill_demo_supporting_records(session: Session) -> None:
             project=project,
             actor=editor_user,
             mutation_batch_id="seeded-backfill-approval",
-            title="Seeded approval request",
+            title="Approved project changes",
             scope_type="project",
             scope_id=project.id,
         )
@@ -844,6 +887,22 @@ def backfill_demo_supporting_records(session: Session) -> None:
                 status=ApprovalStatus.APPROVED,
                 summary="Approve project BOM for procurement export package.",
                 decided_at=utcnow(),
+            )
+        )
+        session.add(
+            ProjectActivityLog(
+                project=project,
+                group=approval_group,
+                actor=admin_user,
+                entity_type="ProjectApproval",
+                entity_id=1,
+                action="approval_approved",
+                details=build_activity_details(
+                    headline="Approval approved",
+                    subject_name=project.name,
+                    notes=["Approve project BOM for procurement export package."],
+                    kind="approval",
+                ),
             )
         )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +16,68 @@ class AuditContext:
     title: str | None = None
     scope_type: str | None = None
     scope_id: int | None = None
+
+
+def _stringify_activity_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:g}"
+    if isinstance(value, (int, str)):
+        text = str(value).strip()
+        return text or None
+    if isinstance(value, list):
+        parts = [_stringify_activity_value(item) for item in value]
+        return ", ".join(part for part in parts if part) or None
+    if isinstance(value, dict):
+        return ", ".join(
+            f"{key}: {formatted}"
+            for key, item in value.items()
+            if (formatted := _stringify_activity_value(item)) is not None
+        ) or None
+    text = str(value).strip()
+    return text or None
+
+
+def build_activity_change(label: str, before: Any = None, after: Any = None) -> dict[str, str | None]:
+    return {
+        "label": label.strip(),
+        "before": _stringify_activity_value(before),
+        "after": _stringify_activity_value(after),
+    }
+
+
+def build_activity_details(
+    *,
+    headline: str,
+    subject_name: str | None = None,
+    notes: list[str] | None = None,
+    changes: list[dict[str, Any]] | None = None,
+    kind: str | None = None,
+    minor: bool = False,
+) -> dict[str, Any]:
+    normalized_notes = [note.strip() for note in (notes or []) if isinstance(note, str) and note.strip()]
+    normalized_changes = [
+        {
+            "label": str(change.get("label", "")).strip(),
+            "before": _stringify_activity_value(change.get("before")),
+            "after": _stringify_activity_value(change.get("after")),
+        }
+        for change in (changes or [])
+        if str(change.get("label", "")).strip()
+    ]
+    return {
+        "headline": headline.strip(),
+        "subject_name": (subject_name or "").strip() or None,
+        "notes": normalized_notes,
+        "changes": normalized_changes,
+        "kind": (kind or "").strip() or None,
+        "minor": bool(minor),
+    }
 
 
 def normalize_mutation_batch_id(value: str | None) -> str | None:

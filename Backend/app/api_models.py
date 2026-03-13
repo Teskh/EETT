@@ -474,14 +474,22 @@ class CommentModel(BaseModel):
     replies: list["CommentModel"] = Field(default_factory=list)
 
 
-class ActivityEventModel(BaseModel):
-    id: int
-    entity_type: str
-    entity_id: int | None
-    action: str
-    details: dict[str, Any]
+class ActivityChangeModel(BaseModel):
+    label: str
+    before: str | None
+    after: str | None
+
+
+class ActivityEntryModel(BaseModel):
+    id: str
+    kind: str
+    headline: str
+    subject_name: str | None
+    notes: list[str] = Field(default_factory=list)
+    changes: list[ActivityChangeModel] = Field(default_factory=list)
     created_at: str
     actor: str | None
+    is_minor: bool = False
 
 
 class ApprovalModel(BaseModel):
@@ -505,15 +513,11 @@ class ActivityGroupModel(BaseModel):
     id: int
     title: str
     project: ActivityGroupProjectModel
-    mutation_batch_id: str | None
-    scope_type: str | None
-    scope_id: int | None
     created_at: str
     updated_at: str
     actor: str | None
-    event_count: int
-    events: list[ActivityEventModel] = Field(default_factory=list)
-    approvals: list[ApprovalModel] = Field(default_factory=list)
+    entry_count: int
+    entries: list[ActivityEntryModel] = Field(default_factory=list)
 
 
 class ExportJobModel(BaseModel):

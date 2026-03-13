@@ -418,14 +418,22 @@ export type Approval = {
   decided_at: string | null;
 };
 
-export type ActivityEvent = {
-  id: number;
-  entity_type: string;
-  entity_id: number | null;
-  action: string;
-  details: Record<string, unknown>;
+export type ActivityChange = {
+  label: string;
+  before: string | null;
+  after: string | null;
+};
+
+export type ActivityEntry = {
+  id: string;
+  kind: string;
+  headline: string;
+  subject_name: string | null;
+  notes: string[];
+  changes: ActivityChange[];
   created_at: string;
   actor: string | null;
+  is_minor: boolean;
 };
 
 export type ActivityGroup = {
@@ -437,15 +445,11 @@ export type ActivityGroup = {
     status: string;
     status_label: string;
   };
-  mutation_batch_id: string | null;
-  scope_type: string | null;
-  scope_id: number | null;
   created_at: string;
   updated_at: string;
   actor: string | null;
-  event_count: number;
-  events: ActivityEvent[];
-  approvals: Approval[];
+  entry_count: number;
+  entries: ActivityEntry[];
 };
 
 export type CreateCategoryRequest = {
