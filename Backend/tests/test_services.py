@@ -13,7 +13,16 @@ from sqlalchemy.orm import sessionmaker
 from app.config import Settings
 from app.database import Base, create_engine_for_url
 from app.main import create_app
-from app.models import CatalogCategory, CatalogComponent, ComponentMaterialRule, Project, ProjectBomEntry, ProjectInstance, ProjectSubtype
+from app.models import (
+    CatalogCategory,
+    CatalogComponent,
+    ComponentMaterialRule,
+    MaterialDashboardCacheEntry,
+    Project,
+    ProjectBomEntry,
+    ProjectInstance,
+    ProjectSubtype,
+)
 from app.seed import seed_demo_data_if_empty
 from app.services.catalog import (
     create_attribute_definition,
@@ -26,6 +35,7 @@ from app.services.catalog import (
     search_material_candidates,
     update_attribute_definition,
 )
+from app.services.dashboard import get_recent_material_dashboard
 from app.services.projects import (
     _visible_project_subtype_rows,
     create_project_instance,
@@ -1288,6 +1298,29 @@ class ServiceLayerTests(unittest.TestCase):
             headers={"X-Spec-Sheets-User": "viewer"},
         )
         self.assertEqual(denied.status_code, 403)
+
+    @patch("app.services.dashboard.get_recent_movement_materials")
+    def test_material_dashboard_server_cache_reuses_recent_dashboard_payload(self, recent_movement_mock) -> None:
+        recent_movement_mock.return_value = [
+            {
+                "sku": "ERP-001",
+                "material_name": "Steel Stud 90",
+                "unit": "UN",
+                "last_movement_date": "2026-03-10",
+                "movement_quantity_60d": 180.0,
+                "movement_count_60d": 6,
+            }
+        ]
+
+        with self.session_factory() as session:
+            first = get_recent_material_dashboard(self.settings, session=session, cost_centers=["CC-01"])
+            second = get_recent_material_dashboard(self.settings, session=session, cost_centers=["CC-01"])
+            cached_entries = session.scalars(select(MaterialDashboardCacheEntry)).all()
+
+        self.assertEqual(first["materials"][0]["sku"], "ERP-001")
+        self.assertEqual(first, second)
+        self.assertEqual(recent_movement_mock.call_count, 1)
+        self.assertEqual(len(cached_entries), 1)
 
     def test_app_lifespan_requires_existing_schema(self) -> None:
         Base.metadata.drop_all(self.engine)

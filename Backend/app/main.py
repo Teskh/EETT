@@ -157,6 +157,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+        print(
+            "REQUEST_VALIDATION_ERROR",
+            request.method,
+            request.url.path,
+            exc.errors(),
+        )
         logger.error(
             "Request validation failed for %s %s: %s",
             request.method,
@@ -215,6 +221,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return float(value)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"Invalid numeric value: {raw_value}") from exc
+
+    def parse_refresh_flag(raw_value: str | None) -> bool:
+        return (raw_value or "").strip().lower() in {"1", "true", "yes", "y"}
 
     def parse_attribute_values_json(raw_value: str | None) -> dict[str, str | None]:
         if not raw_value:
@@ -1231,6 +1240,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 mutation_batch_id=mutation_batch_id,
             )
         except ValueError as exc:
+            print(
+                "MATERIAL_UPDATE_REJECTED",
+                {
+                    "project_id": project_id,
+                    "instance_id": instance_id,
+                    "rule_id": rule_id,
+                    "payload": payload.model_dump(),
+                    "reason": str(exc),
+                },
+            )
             logger.error(
                 "Material update rejected for project=%s instance=%s rule=%s payload=%s reason=%s",
                 project_id,
@@ -1470,23 +1489,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/dashboard/materials", response_model=MaterialDashboardResponse)
     async def material_dashboard_v1(
         request: Request,
+        session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
+        force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
         try:
-            return get_recent_material_dashboard(request.app.state.settings, cost_centers=ceco_filters)
+            return get_recent_material_dashboard(
+                request.app.state.settings,
+                session=session,
+                cost_centers=ceco_filters,
+                force_refresh=force_refresh,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/cecos", response_model=MaterialDashboardCecoResponse)
     async def material_dashboard_cecos_v1(
         request: Request,
+        session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
+        force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
         try:
-            return get_material_dashboard_cost_centers(request.app.state.settings)
+            return get_material_dashboard_cost_centers(
+                request.app.state.settings,
+                session=session,
+                force_refresh=force_refresh,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1494,12 +1526,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def material_dashboard_detail_v1(
         sku: str,
         request: Request,
+        session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
+        force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
         try:
-            detail = get_material_dashboard_detail(request.app.state.settings, sku, cost_centers=ceco_filters)
+            detail = get_material_dashboard_detail(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=ceco_filters,
+                force_refresh=force_refresh,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if detail is None:
@@ -1510,12 +1550,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def material_dashboard_movements_v1(
         sku: str,
         request: Request,
+        session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
+        force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
         try:
-            return get_material_dashboard_history(request.app.state.settings, sku, cost_centers=ceco_filters)
+            return get_material_dashboard_history(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=ceco_filters,
+                force_refresh=force_refresh,
+            )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

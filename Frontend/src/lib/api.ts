@@ -53,7 +53,13 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = response.statusText;
     try {
-      const payload = (await response.json()) as { detail?: unknown; message?: unknown };
+      const rawText = await response.text();
+      console.error("api-error-response", {
+        url: input,
+        status: response.status,
+        body: rawText,
+      });
+      const payload = rawText ? (JSON.parse(rawText) as { detail?: unknown; message?: unknown }) : {};
       message = extractErrorMessage(payload, message);
     } catch {
       // Ignore non-JSON failures and fall back to status text.
@@ -119,6 +125,10 @@ function generateMutationBatchId() {
 function mutationHeaders(mutationBatchId?: string) {
   return { "X-Mutation-Batch-Id": mutationBatchId || generateMutationBatchId() };
 }
+
+type MaterialDashboardRequestOptions = {
+  refresh?: boolean;
+};
 
 export const api = {
   login(payload: LoginRequest) {
@@ -207,24 +217,38 @@ export const api = {
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");
   },
-  getMaterialDashboard(cecos: string[] = []) {
+  getMaterialDashboard(cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
     const query = params.toString();
     return request<MaterialDashboardData>(`/api/v1/dashboard/materials${query ? `?${query}` : ""}`);
   },
-  getMaterialDashboardCostCenters() {
-    return request<MaterialDashboardCecoResponse>("/api/v1/dashboard/materials/cecos");
+  getMaterialDashboardCostCenters(options: MaterialDashboardRequestOptions = {}) {
+    const params = new URLSearchParams();
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
+    const query = params.toString();
+    return request<MaterialDashboardCecoResponse>(`/api/v1/dashboard/materials/cecos${query ? `?${query}` : ""}`);
   },
-  getMaterialDashboardDetail(sku: string, cecos: string[] = []) {
+  getMaterialDashboardDetail(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
     const query = params.toString();
     return request<MaterialDashboardDetailData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}${query ? `?${query}` : ""}`);
   },
-  getMaterialDashboardHistory(sku: string, cecos: string[] = []) {
+  getMaterialDashboardHistory(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.refresh) {
+      params.set("refresh", "1");
+    }
     const query = params.toString();
     return request<MaterialDashboardMovementData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/movements${query ? `?${query}` : ""}`);
   },

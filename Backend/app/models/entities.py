@@ -882,3 +882,18 @@ class ErpMaterialCache(Base):
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     material: Mapped[Material | None] = relationship(back_populates="erp_cache_entries")
+
+
+class MaterialDashboardCacheEntry(Base):
+    __tablename__ = "material_dashboard_cache_entries"
+    __table_args__ = (
+        UniqueConstraint("cache_kind", "cache_key"),
+        Index("ix_material_dashboard_cache_entries_kind_expires", "cache_kind", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cache_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

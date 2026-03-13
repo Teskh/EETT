@@ -1,6 +1,7 @@
-import { startTransition, useDeferredValue, useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { startTransition, useDeferredValue, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { ApiError, api } from "../lib/api";
+import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import type {
   MaterialDashboardCeco,
   MaterialDashboardData,
@@ -61,8 +62,23 @@ function formatDate(value: string | null | undefined) {
   return date.toLocaleDateString("es-CL", { year: "numeric", month: "short", day: "numeric" });
 }
 
+const CECO_CACHE_KEY = "material-dashboard::cecos";
+
+function normalizeCecos(cecos: string[]) {
+  return Array.from(new Set(cecos.map((ceco) => ceco.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
+}
+
+function dashboardCacheKey(cecos: string[]) {
+  const normalized = normalizeCecos(cecos);
+  return `dashboard::${normalized.join("|") || "all"}`;
+}
+
+function detailCacheKey(sku: string, cecos: string[]) {
+  return `detail::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
 function historyCacheKey(sku: string, cecos: string[]) {
-  return `${sku}::${cecos.join("|")}`;
+  return `history::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardListRow, sort: SortState) {
@@ -259,12 +275,16 @@ function MovementHistoryCard({
   history,
   detailLoading,
   historyLoading,
+  detailRefreshing,
+  historyRefreshing,
 }: {
   selected: MaterialDashboardListRow | null;
   detail: MaterialDashboardDetailData | null;
   history: MaterialDashboardMovementData | null;
   detailLoading: boolean;
   historyLoading: boolean;
+  detailRefreshing: boolean;
+  historyRefreshing: boolean;
 }) {
   const [selection, setSelection] = useState<ChartSelection | null>(null);
   const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
@@ -299,17 +319,23 @@ function MovementHistoryCard({
   const selectionStart = selectionBounds && chart ? chart.points[selectionBounds.startIndex] : null;
   const selectionEnd = selectionBounds && chart ? chart.points[selectionBounds.endIndex] : null;
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
+  const isBlockingLoad = (!detail && detailLoading) || (!history && historyLoading);
+  const isRefreshing = detailRefreshing || historyRefreshing;
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
     if (!chart) {
       return null;
     }
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (!bounds.width) {
+    const svg = event.currentTarget;
+    const pt = svg.createSVGPoint();
+    pt.x = event.clientX;
+    pt.y = event.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) {
       return null;
     }
-    const relativeX = ((event.clientX - bounds.left) / bounds.width) * chart.width;
-    const chartX = clamp(relativeX, chart.padding.left, chart.padding.left + chart.plotWidth);
+    const cursorPt = pt.matrixTransform(ctm.inverse());
+    const chartX = clamp(cursorPt.x, chart.padding.left, chart.padding.left + chart.plotWidth);
     return getClosestPointIndex(chart.points, chartX);
   }
 
@@ -371,30 +397,38 @@ function MovementHistoryCard({
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <MetricCard label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
-            <MetricCard label="Stock" value={detailLoading ? "..." : formatNumber(detail?.stock_on_hand)} />
-            <MetricCard label="Pend. OC" value={detailLoading ? "..." : formatNumber(detail?.pending_purchase_quantity)} />
-            <MetricCard label="Reorden 30d" value={detailLoading ? "..." : formatDate(detail?.reorder_date_recent_rate)} />
+            <MetricCard label="Stock" value={detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"} />
+            <MetricCard
+              label="Pend. OC"
+              value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"}
+            />
+            <MetricCard
+              label="Reorden 30d"
+              value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"}
+            />
           </div>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <MetricCard label="Mov. 30d" value={detailLoading ? "..." : formatNumber(detail?.movement_quantity_30d)} />
-          <MetricCard label="Precio prom." value={detailLoading ? "..." : formatCurrency(detail?.average_price)} />
+          <MetricCard label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
+          <MetricCard label="Precio prom." value={detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"} />
           <MetricCard
             label="Lead time"
             value={
-              detailLoading
-                ? "..."
-                : detail?.max_lead_time_days !== null && detail?.max_lead_time_days !== undefined
+              !detail
+                ? detailLoading
+                  ? "..."
+                  : "—"
+                : detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined
                   ? `${formatNumber(detail.max_lead_time_days, 0)} d`
                   : "—"
             }
           />
-          <MetricCard label="Dias stock" value={detailLoading ? "..." : formatNumber(detail?.days_of_stock_30d)} />
-          <MetricCard label="Ult. OC" value={detailLoading ? "..." : formatDate(detail?.last_purchase_order.date)} />
-          <MetricCard label="No. OC" value={detailLoading ? "..." : detail?.last_purchase_order.number || "—"} />
+          <MetricCard label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
+          <MetricCard label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
+          <MetricCard label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />
         </div>
         <div className="rounded-[24px] border border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/20 p-4">
-          {historyLoading || detailLoading ? (
+          {isBlockingLoad ? (
             <div className="h-[240px] flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
           ) : history && chart ? (
             <div className="space-y-4">
@@ -409,6 +443,7 @@ function MovementHistoryCard({
                   <p className="mt-1 text-xs text-zinc-500">
                     Click and drag across the curve to inspect the stock variation and average consumption per day.
                   </p>
+                  {isRefreshing ? <p className="mt-2 text-xs text-zinc-500">Refreshing cached ERP data...</p> : null}
                 </div>
                 <div className="flex flex-wrap gap-3">
                   <SelectionMetric label="Variation" value={summary ? formatSignedNumber(summary.stockDelta) : "—"} />
@@ -440,6 +475,18 @@ function MovementHistoryCard({
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerCancel}
               >
+                <defs>
+                  {selectionStart && selectionEnd ? (
+                    <clipPath id="selection-clip">
+                      <rect
+                        x={Math.min(selectionStart.x, selectionEnd.x)}
+                        y={0}
+                        width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 0.001)}
+                        height={chart.height}
+                      />
+                    </clipPath>
+                  ) : null}
+                </defs>
                 {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
                   const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
                   return (
@@ -485,20 +532,59 @@ function MovementHistoryCard({
                     />
                   </g>
                 ) : null}
-                <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-                {chart.points.map((point) => {
-                  const highlighted =
-                    selectionBounds && point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
-                  return (
-                    <circle
-                      key={point.date}
-                      cx={point.x}
-                      cy={point.y}
-                      r={highlighted ? 4 : 2.5}
-                      fill={highlighted ? "rgb(217 119 6)" : "rgb(245 158 11)"}
+                
+                <path 
+                  d={chart.path} 
+                  fill="none" 
+                  stroke="rgb(245 158 11)" 
+                  strokeWidth="3" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round" 
+                  opacity={selectionBounds ? 0.25 : 1}
+                  className="transition-opacity duration-300"
+                />
+                
+                {chart.points.map((point) => (
+                  <circle
+                    key={`base-${point.date}`}
+                    cx={point.x}
+                    cy={point.y}
+                    r={2.5}
+                    fill="rgb(245 158 11)"
+                    opacity={selectionBounds ? 0.25 : 1}
+                    className="transition-opacity duration-300"
+                  />
+                ))}
+
+                {selectionBounds ? (
+                  <g clipPath="url(#selection-clip)">
+                    <path 
+                      d={chart.path} 
+                      fill="none" 
+                      stroke="rgb(245 158 11)" 
+                      strokeWidth="3.5" 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round" 
                     />
-                  );
-                })}
+                    {chart.points.map((point) => {
+                      const highlighted = point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
+                      if (!highlighted) return null;
+                      return (
+                        <circle
+                          key={`hi-${point.date}`}
+                          cx={point.x}
+                          cy={point.y}
+                          r={4.5}
+                          fill="rgb(245 158 11)"
+                          stroke="rgb(255 255 255)"
+                          strokeWidth="1.5"
+                          className="dark:stroke-zinc-900"
+                        />
+                      );
+                    })}
+                  </g>
+                ) : null}
+
                 <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55">
                   {formatDate(history.range_start)}
                 </text>
@@ -517,32 +603,69 @@ function MovementHistoryCard({
 }
 
 export function MaterialDashboardPage() {
-  const [data, setData] = useState<MaterialDashboardData | null>(null);
   const [cecos, setCecos] = useState<MaterialDashboardCeco[]>([]);
+  const [dashboardCache, setDashboardCache] = useState<Record<string, MaterialDashboardData>>({});
+  const [detailCache, setDetailCache] = useState<Record<string, MaterialDashboardDetailData>>({});
+  const [historyCache, setHistoryCache] = useState<Record<string, MaterialDashboardMovementData>>({});
   const [selectedCecos, setSelectedCecos] = useState<string[]>([]);
   const [cecoSearch, setCecoSearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
   const [selectedSku, setSelectedSku] = useState<string | null>(null);
-  const [selectedDetail, setSelectedDetail] = useState<MaterialDashboardDetailData | null>(null);
-  const [historyCache, setHistoryCache] = useState<Record<string, MaterialDashboardMovementData>>({});
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const deferredMaterialSearch = useDeferredValue(materialSearch);
+  const cecoRefreshNonceRef = useRef(0);
+  const dashboardRefreshNonceRef = useRef(0);
+  const detailRefreshNonceRef = useRef(0);
+  const historyRefreshNonceRef = useRef(0);
+  const normalizedSelectedCecos = normalizeCecos(selectedCecos);
+  const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos);
+  const data = dashboardCache[currentDashboardKey] || null;
+  const currentDetailKey = selectedSku ? detailCacheKey(selectedSku, normalizedSelectedCecos) : null;
+  const selectedDetail = currentDetailKey ? detailCache[currentDetailKey] || null : null;
+  const currentHistoryKey = selectedSku ? historyCacheKey(selectedSku, normalizedSelectedCecos) : null;
+  const currentHistory = currentHistoryKey ? historyCache[currentHistoryKey] || null : null;
+
+  function syncSelectedSku(response: MaterialDashboardData) {
+    setSelectedSku((current) => {
+      if (current && response.materials.some((row) => row.sku === current)) {
+        return current;
+      }
+      return response.materials[0]?.sku ?? null;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
     async function loadCostCenters() {
+      const forceRefresh = refreshNonce > 0 && cecoRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        cecoRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      if (!forceRefresh) {
+        const cached = await getMaterialDashboardCacheValue<MaterialDashboardCeco[]>(CECO_CACHE_KEY);
+        if (cancelled) {
+          return;
+        }
+        if (cached !== null) {
+          hasCached = true;
+          setCecos(cached);
+        }
+      }
       try {
-        const response = await api.getMaterialDashboardCostCenters();
+        const response = await api.getMaterialDashboardCostCenters({ refresh: forceRefresh });
         if (!cancelled) {
           setCecos(response.cecos);
+          void setMaterialDashboardCacheValue(CECO_CACHE_KEY, response.cecos);
         }
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !hasCached) {
           setCecos([]);
         }
       }
@@ -551,33 +674,49 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshNonce]);
 
   useEffect(() => {
     let cancelled = false;
     async function loadDashboard() {
-      setLoading(true);
+      const forceRefresh = refreshNonce > 0 && dashboardRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        dashboardRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
       setError(null);
-      setSelectedDetail(null);
-      try {
-        const response = await api.getMaterialDashboard(selectedCecos);
+      if (!forceRefresh) {
+        const cached =
+          dashboardCache[currentDashboardKey] || (await getMaterialDashboardCacheValue<MaterialDashboardData>(currentDashboardKey));
         if (cancelled) {
           return;
         }
-        setData(response);
-        setSelectedSku((current) => {
-          if (current && response.materials.some((row) => row.sku === current)) {
-            return current;
-          }
-          return response.materials[0]?.sku ?? null;
-        });
+        if (cached) {
+          hasCached = true;
+          setDashboardCache((current) => (current[currentDashboardKey] ? current : { ...current, [currentDashboardKey]: cached }));
+          syncSelectedSku(cached);
+          setLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setLoading(true);
+      }
+      try {
+        const response = await api.getMaterialDashboard(normalizedSelectedCecos, { refresh: forceRefresh });
+        if (cancelled) {
+          return;
+        }
+        setDashboardCache((current) => ({ ...current, [currentDashboardKey]: response }));
+        syncSelectedSku(response);
+        void setMaterialDashboardCacheValue(currentDashboardKey, response);
       } catch (err) {
         if (cancelled) {
           return;
         }
-        setError(err instanceof ApiError ? err.message : "Could not load dashboard materials.");
-        setData(null);
-        setSelectedSku(null);
+        if (!hasCached) {
+          setError(err instanceof ApiError ? err.message : "Could not load dashboard materials.");
+          setSelectedSku(null);
+        }
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -588,27 +727,46 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCecos]);
+  }, [currentDashboardKey, refreshNonce]);
 
   useEffect(() => {
     const sku = selectedSku;
-    if (!sku) {
-      setSelectedDetail(null);
+    const cacheKey = sku ? detailCacheKey(sku, normalizedSelectedCecos) : null;
+    if (!sku || !cacheKey) {
+      setDetailLoading(false);
       return;
     }
     const activeSku = sku;
     let cancelled = false;
     async function loadDetail() {
-      setDetailLoading(true);
+      const forceRefresh = refreshNonce > 0 && detailRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        detailRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
       setHistoryError(null);
+      if (!forceRefresh) {
+        const cached = detailCache[cacheKey] || (await getMaterialDashboardCacheValue<MaterialDashboardDetailData>(cacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setDetailCache((current) => (current[cacheKey] ? current : { ...current, [cacheKey]: cached }));
+          setDetailLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setDetailLoading(true);
+      }
       try {
-        const response = await api.getMaterialDashboardDetail(activeSku, selectedCecos);
+        const response = await api.getMaterialDashboardDetail(activeSku, normalizedSelectedCecos, { refresh: forceRefresh });
         if (!cancelled) {
-          setSelectedDetail(response);
+          setDetailCache((current) => ({ ...current, [cacheKey]: response }));
+          void setMaterialDashboardCacheValue(cacheKey, response);
         }
       } catch (err) {
-        if (!cancelled) {
-          setSelectedDetail(null);
+        if (!cancelled && !hasCached) {
           setHistoryError(err instanceof ApiError ? err.message : "Could not load material detail.");
         }
       } finally {
@@ -621,29 +779,46 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCecos, selectedSku]);
+  }, [currentDetailKey, refreshNonce, selectedSku]);
 
   useEffect(() => {
     const sku = selectedSku;
-    if (!sku) {
+    const cacheKey = sku ? historyCacheKey(sku, normalizedSelectedCecos) : null;
+    if (!sku || !cacheKey) {
+      setHistoryLoading(false);
       return;
     }
     const activeSku = sku;
-    const cacheKey = historyCacheKey(activeSku, selectedCecos);
-    if (historyCache[cacheKey]) {
-      return;
-    }
     let cancelled = false;
     async function loadHistory() {
-      setHistoryLoading(true);
+      const forceRefresh = refreshNonce > 0 && historyRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        historyRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
       setHistoryError(null);
+      if (!forceRefresh) {
+        const cached = historyCache[cacheKey] || (await getMaterialDashboardCacheValue<MaterialDashboardMovementData>(cacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setHistoryCache((current) => (current[cacheKey] ? current : { ...current, [cacheKey]: cached }));
+          setHistoryLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setHistoryLoading(true);
+      }
       try {
-        const response = await api.getMaterialDashboardHistory(activeSku, selectedCecos);
+        const response = await api.getMaterialDashboardHistory(activeSku, normalizedSelectedCecos, { refresh: forceRefresh });
         if (!cancelled) {
           setHistoryCache((current) => ({ ...current, [cacheKey]: response }));
+          void setMaterialDashboardCacheValue(cacheKey, response);
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && !hasCached) {
           setHistoryError(err instanceof ApiError ? err.message : "Could not load movement history.");
         }
       } finally {
@@ -656,7 +831,7 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [historyCache, selectedCecos, selectedSku]);
+  }, [currentHistoryKey, refreshNonce, selectedSku]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const rows = (data?.materials || [])
@@ -670,7 +845,6 @@ export function MaterialDashboardPage() {
     .sort((left, right) => compareRows(left, right, sort));
 
   const selectedRow = (data?.materials || []).find((row) => row.sku === selectedSku) || null;
-  const currentHistory = selectedSku ? historyCache[historyCacheKey(selectedSku, selectedCecos)] || null : null;
   const visibleCecos = cecos.filter((ceco) => {
     const term = cecoSearch.trim().toLowerCase();
     if (!term) {
@@ -684,13 +858,11 @@ export function MaterialDashboardPage() {
   }
 
   function toggleCeco(code: string) {
-    setSelectedCecos((current) => (current.includes(code) ? current.filter((item) => item !== code) : [...current, code]));
+    setSelectedCecos((current) => normalizeCecos(current.includes(code) ? current.filter((item) => item !== code) : [...current, code]));
   }
 
   function handleReload() {
-    setHistoryCache({});
-    setSelectedDetail(null);
-    setSelectedCecos((current) => [...current]);
+    setRefreshNonce((current) => current + 1);
   }
 
   return (
@@ -701,6 +873,8 @@ export function MaterialDashboardPage() {
         history={currentHistory}
         detailLoading={detailLoading}
         historyLoading={historyLoading}
+        detailRefreshing={detailLoading && Boolean(selectedDetail)}
+        historyRefreshing={historyLoading && Boolean(currentHistory)}
       />
 
       <section className="grid grid-cols-1 xl:grid-cols-[340px,minmax(0,1fr)] gap-6">
