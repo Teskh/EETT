@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
@@ -342,10 +343,16 @@ def _load_material_dashboard_cache(
         return loader()
 
     now = _utcnow()
-    entry = session.scalar(
-        select(MaterialDashboardCacheEntry)
-        .where(MaterialDashboardCacheEntry.cache_kind == cache_kind, MaterialDashboardCacheEntry.cache_key == cache_key)
-    )
+    try:
+        entry = session.scalar(
+            select(MaterialDashboardCacheEntry)
+            .where(MaterialDashboardCacheEntry.cache_kind == cache_kind, MaterialDashboardCacheEntry.cache_key == cache_key)
+        )
+    except (ProgrammingError, OperationalError) as exc:
+        if _is_missing_material_dashboard_cache_table(exc):
+            session.rollback()
+            return loader()
+        raise
     if entry is not None and not force_refresh and _cache_entry_is_fresh(entry, now):
         return _clone_cached_payload(entry.payload)
 
@@ -371,7 +378,13 @@ def _load_material_dashboard_cache(
     entry.payload = payload
     entry.refreshed_at = now
     entry.expires_at = now + ttl
-    session.flush()
+    try:
+        session.flush()
+    except (ProgrammingError, OperationalError) as exc:
+        if _is_missing_material_dashboard_cache_table(exc):
+            session.rollback()
+            return _clone_cached_payload(payload)
+        raise
     return _clone_cached_payload(payload)
 
 
@@ -403,6 +416,15 @@ def _normalize_dashboard_cost_centers(cost_centers: list[str] | None) -> list[st
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_missing_material_dashboard_cache_table(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "material_dashboard_cache_entries" in message and (
+        "does not exist" in message
+        or "undefinedtable" in message
+        or "no such table" in message
+    )
 
 
 def _coerce_float(value: object) -> float | None:

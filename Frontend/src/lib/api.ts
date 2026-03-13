@@ -39,26 +39,38 @@ class ApiError extends Error {
   }
 }
 
+function mergeHeaders(...headerSets: Array<HeadersInit | undefined>): Headers {
+  const headers = new Headers();
+  for (const headerSet of headerSets) {
+    if (!headerSet) {
+      continue;
+    }
+    const nextHeaders = new Headers(headerSet);
+    nextHeaders.forEach((value, key) => {
+      headers.set(key, value);
+    });
+  }
+  return headers;
+}
+
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, {
-    credentials: "same-origin",
-    headers: {
+  const headers = mergeHeaders(
+    {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
     },
+    init?.headers,
+  );
+  const response = await fetch(input, {
+    credentials: "same-origin",
     ...init,
+    headers,
   });
 
   if (!response.ok) {
     let message = response.statusText;
     try {
       const rawText = await response.text();
-      console.error("api-error-response", {
-        url: input,
-        status: response.status,
-        body: rawText,
-      });
       const payload = rawText ? (JSON.parse(rawText) as { detail?: unknown; message?: unknown }) : {};
       message = extractErrorMessage(payload, message);
     } catch {

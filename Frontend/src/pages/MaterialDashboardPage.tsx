@@ -269,6 +269,15 @@ function SelectionMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function MetricRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-1 border-b border-black/5 dark:border-white/5 last:border-0">
+      <div className="text-xs font-medium text-zinc-500">{label}</div>
+      <div className="text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
+    </div>
+  );
+}
+
 function MovementHistoryCard({
   selected,
   detail,
@@ -384,89 +393,59 @@ function MovementHistoryCard({
   }
 
   return (
-    <section className="liquid-glass rounded-[28px] border border-black/10 dark:border-white/10 p-6 md:p-8">
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
-            <h2 className="text-2xl font-bold text-zinc-900 dark:text-white">{selected.material_name}</h2>
-            <p className="text-sm text-zinc-500 mt-1">
-              {selected.sku}
-              {selected.unit ? ` | ${selected.unit}` : ""}
-            </p>
+    <section className="liquid-glass rounded-[28px] border border-black/10 dark:border-white/10 overflow-hidden flex flex-col">
+      <div className="p-6 md:p-8 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-6">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
+          <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight">{selected.material_name}</h2>
+          <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
+            <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selected.sku}</span>
+            {selected.unit ? <span>&bull; {selected.unit}</span> : null}
+          </p>
+        </div>
+        <div className="flex gap-6 items-end">
+          <div className="text-right">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Stock on Hand</div>
+            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"}</div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-            <MetricCard label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
-            <MetricCard label="Stock" value={detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"} />
-            <MetricCard
-              label="Pend. OC"
-              value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"}
-            />
-            <MetricCard
-              label="Reorden 30d"
-              value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"}
-            />
+          <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
+          <div className="text-right">
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Avg Price</div>
+            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"}</div>
           </div>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <MetricCard label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
-          <MetricCard label="Precio prom." value={detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"} />
-          <MetricCard
-            label="Lead time"
-            value={
-              !detail
-                ? detailLoading
-                  ? "..."
-                  : "—"
-                : detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined
-                  ? `${formatNumber(detail.max_lead_time_days, 0)} d`
-                  : "—"
-            }
-          />
-          <MetricCard label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
-          <MetricCard label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
-          <MetricCard label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />
-        </div>
-        <div className="rounded-[24px] border border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/20 p-4">
-          {isBlockingLoad ? (
-            <div className="h-[240px] flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
-          ) : history && chart ? (
-            <div className="space-y-4">
-              <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3">
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">
-                    {isCustomSelection ? "Selected Period" : `${history.movement_days}-Day Trend`}
-                  </p>
-                  <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
-                    {summary ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}` : "—"}
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Click and drag across the curve to inspect the stock variation and average consumption per day.
-                  </p>
-                  {isRefreshing ? <p className="mt-2 text-xs text-zinc-500">Refreshing cached ERP data...</p> : null}
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  <SelectionMetric label="Variation" value={summary ? formatSignedNumber(summary.stockDelta) : "—"} />
-                  <SelectionMetric
-                    label="Cons./day"
-                    value={summary ? `${formatNumber(summary.averageConsumptionPerDay)} / day` : "—"}
-                  />
-                  <SelectionMetric
-                    label="Span"
-                    value={summary ? `${formatNumber(summary.elapsedDays, 0)} day${summary.elapsedDays === 1 ? "" : "s"}` : "—"}
-                  />
-                  {isCustomSelection ? (
-                    <button
-                      type="button"
-                      onClick={() => setSelection(null)}
-                      className="rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-zinc-100 dark:hover:bg-white/10 transition-colors"
-                    >
-                      Reset range
-                    </button>
-                  ) : null}
-                </div>
-              </div>
+      </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] flex-1">
+        <div className="p-6 md:p-8 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10">
+          <div className="flex items-start justify-between mb-6 gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                {isCustomSelection ? "Selected Period" : history ? `${history.movement_days}-Day Trend` : "Trend"}
+              </h3>
+              <div className="text-xs text-zinc-500 mt-1">
+                {summary ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}` : "—"}
+              </div>
+              <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
+                Click and drag across the curve to inspect the stock variation and average consumption per day.
+              </p>
+              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
+            </div>
+            {isCustomSelection ? (
+              <button
+                type="button"
+                onClick={() => setSelection(null)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-full bg-zinc-100 dark:bg-white/10 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-white/20 transition-colors"
+              >
+                Reset Selection
+              </button>
+            ) : null}
+          </div>
+
+          <div className="flex-1 w-full relative min-h-[240px]">
+            {isBlockingLoad ? (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
+            ) : history && chart ? (
               <svg
                 viewBox={`0 0 ${chart.width} ${chart.height}`}
                 className="w-full h-[240px] overflow-visible cursor-crosshair touch-none"
@@ -592,10 +571,56 @@ function MovementHistoryCard({
                   {formatDate(history.range_end)}
                 </text>
               </svg>
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this material.</div>
+            )}
+          </div>
+
+          {history && chart ? (
+            <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
+                <div className={`text-lg font-medium ${summary ? (summary.stockDelta < 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400') : 'text-zinc-900 dark:text-white'}`}>
+                  {summary ? formatSignedNumber(summary.stockDelta) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Cons./day</div>
+                <div className="text-lg font-medium text-zinc-900 dark:text-white">
+                  {summary ? formatNumber(summary.averageConsumptionPerDay) : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Span</div>
+                <div className="text-lg font-medium text-zinc-900 dark:text-white">
+                  {summary ? `${formatNumber(summary.elapsedDays, 0)} d` : "—"}
+                </div>
+              </div>
             </div>
-          ) : (
-            <div className="h-[240px] flex items-center justify-center text-sm text-zinc-500">No movement history available for this material.</div>
-          )}
+          ) : null}
+        </div>
+
+        <div className="p-6 md:p-8 bg-zinc-50/50 dark:bg-white/[0.02] flex flex-col gap-6">
+           <div>
+             <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
+             <div className="space-y-3">
+                <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
+                <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
+                <MetricRow label="Reorden 30d" value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"} />
+                <MetricRow label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
+                <MetricRow 
+                  label="Lead time" 
+                  value={
+                    !detail ? (detailLoading ? "..." : "—") 
+                    : detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined 
+                      ? `${formatNumber(detail.max_lead_time_days, 0)} d` : "—"
+                  } 
+                />
+                <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
+                <MetricRow label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
+                <MetricRow label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />
+             </div>
+           </div>
         </div>
       </div>
     </section>
