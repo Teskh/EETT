@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -1539,12 +1540,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
         force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        try:
+            requested_start_date = date.fromisoformat(start_date) if start_date else None
+            requested_end_date = date.fromisoformat(end_date) if end_date else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid date range; expected YYYY-MM-DD") from exc
+        if requested_start_date and requested_end_date and requested_start_date > requested_end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((requested_end_date - requested_start_date).days + 1, 1)
+            if requested_start_date and requested_end_date
+            else 90
+        )
         try:
             history = get_material_dashboard_history(
                 request.app.state.settings,
                 sku,
                 session=session,
                 cost_centers=ceco_filters,
+                history_days=history_days,
                 force_refresh=force_refresh,
             )
             return get_material_dashboard_house_start_comparison(
@@ -1553,8 +1569,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 movements=history.get("movements", []),
                 house_type_id=house_type_id,
                 cost_centers=ceco_filters,
-                history_days=int(history.get("movement_days") or 90),
+                history_days=int(history.get("movement_days") or history_days),
+                start_date=start_date,
+                end_date=end_date,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

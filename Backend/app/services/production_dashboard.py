@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 
 from sqlalchemy import text
@@ -50,11 +50,21 @@ def get_material_dashboard_house_start_comparison(
     house_type_id: int,
     cost_centers: list[str] | None = None,
     history_days: int = 90,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> dict:
     normalized_sku = sku.strip().upper()
-    window_days = max(int(history_days), 1)
-    end_day = datetime.utcnow().date()
-    start_day = end_day - timedelta(days=window_days - 1)
+    requested_start_day = _parse_house_comparison_date(start_date, field_name="start_date")
+    requested_end_day = _parse_house_comparison_date(end_date, field_name="end_date")
+    end_day = min(requested_end_day or datetime.utcnow().date(), datetime.utcnow().date())
+    if requested_start_day is None:
+        window_days = max(int(history_days), 1)
+        start_day = end_day - timedelta(days=window_days - 1)
+    else:
+        start_day = requested_start_day
+        window_days = (end_day - start_day).days + 1
+    if start_day > end_day:
+        raise ValueError("start_date must be on or before end_date")
     end_exclusive = end_day + timedelta(days=1)
 
     try:
@@ -187,6 +197,18 @@ def get_material_dashboard_house_start_comparison(
         "points": points,
         "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def _parse_house_comparison_date(value: str | None, *, field_name: str) -> date | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}; expected YYYY-MM-DD") from exc
 
 
 @lru_cache(maxsize=4)

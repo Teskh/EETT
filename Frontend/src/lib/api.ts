@@ -142,6 +142,8 @@ function mutationHeaders(mutationBatchId?: string) {
 
 type MaterialDashboardRequestOptions = {
   refresh?: boolean;
+  startDate?: string;
+  endDate?: string;
 };
 
 export const api = {
@@ -277,6 +279,12 @@ export const api = {
   ) {
     const params = new URLSearchParams();
     params.set("house_type_id", String(houseTypeId));
+    if (options.startDate) {
+      params.set("start_date", options.startDate);
+    }
+    if (options.endDate) {
+      params.set("end_date", options.endDate);
+    }
     cecos.forEach((ceco) => params.append("ceco", ceco));
     if (options.refresh) {
       params.set("refresh", "1");
