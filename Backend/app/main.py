@@ -1468,10 +1468,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
         force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
+        movement_days_param = request.query_params.get("movement_days")
+        try:
+            movement_days = max(int(movement_days_param), 1) if movement_days_param is not None else 60
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="movement_days must be a positive integer") from exc
         try:
             return get_recent_material_dashboard(
                 request.app.state.settings,
                 session=session,
+                movement_days=movement_days,
                 cost_centers=ceco_filters,
                 force_refresh=force_refresh,
             )
@@ -1588,14 +1594,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_material_dashboard_access(current_user)
         ceco_filters = request.query_params.getlist("ceco")
         force_refresh = parse_refresh_flag(request.query_params.get("refresh"))
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        try:
+            requested_start_date = date.fromisoformat(start_date) if start_date else None
+            requested_end_date = date.fromisoformat(end_date) if end_date else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid date range provided for movement history") from exc
+        if requested_start_date and requested_end_date and requested_start_date > requested_end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((requested_end_date - requested_start_date).days + 1, 1)
+            if requested_start_date and requested_end_date
+            else 90
+        )
         try:
             return get_material_dashboard_history(
                 request.app.state.settings,
                 sku,
                 session=session,
+                history_days=history_days,
+                start_date=requested_start_date,
+                end_date=requested_end_date,
                 cost_centers=ceco_filters,
                 force_refresh=force_refresh,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 

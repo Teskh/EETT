@@ -142,6 +142,7 @@ function mutationHeaders(mutationBatchId?: string) {
 
 type MaterialDashboardRequestOptions = {
   refresh?: boolean;
+  movementDays?: number;
   startDate?: string;
   endDate?: string;
 };
@@ -236,6 +237,9 @@ export const api = {
   getMaterialDashboard(cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.movementDays && Number.isFinite(options.movementDays)) {
+      params.set("movement_days", String(Math.max(Math.floor(options.movementDays), 1)));
+    }
     if (options.refresh) {
       params.set("refresh", "1");
     }
@@ -265,6 +269,12 @@ export const api = {
   getMaterialDashboardHistory(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
     cecos.forEach((ceco) => params.append("ceco", ceco));
+    if (options.startDate) {
+      params.set("start_date", options.startDate);
+    }
+    if (options.endDate) {
+      params.set("end_date", options.endDate);
+    }
     if (options.refresh) {
       params.set("refresh", "1");
     }

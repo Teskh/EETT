@@ -23,6 +23,7 @@ type SortState = {
 
 const numberFormatter = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 1 });
 const integerFormatter = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 0 });
+const percentFormatter = new Intl.NumberFormat("es-CL", { style: "percent", maximumFractionDigits: 0 });
 const currencyFormatter = new Intl.NumberFormat("es-CL", {
   style: "currency",
   currency: "CLP",
@@ -30,6 +31,7 @@ const currencyFormatter = new Intl.NumberFormat("es-CL", {
 });
 const DEFAULT_HOUSE_RANGE_DAYS = 90;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const HOUSE_VIEW_PREFERENCES_KEY = "material-dashboard::house-view-preferences";
 
 function parseDateValue(value: string | Date) {
   if (value instanceof Date) {
@@ -67,6 +69,13 @@ function formatSignedNumber(value: number | null | undefined, digits = 1) {
   return `${value > 0 ? "+" : "-"}${absolute}`;
 }
 
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "—";
+  }
+  return percentFormatter.format(value);
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) {
     return "—";
@@ -84,17 +93,19 @@ function normalizeCecos(cecos: string[]) {
   return Array.from(new Set(cecos.map((ceco) => ceco.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
 }
 
-function dashboardCacheKey(cecos: string[]) {
+function dashboardCacheKey(cecos: string[], movementDays = 60) {
   const normalized = normalizeCecos(cecos);
-  return `dashboard::${normalized.join("|") || "all"}`;
+  return `dashboard::${movementDays}::${normalized.join("|") || "all"}`;
 }
 
 function detailCacheKey(sku: string, cecos: string[]) {
   return `detail::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-function historyCacheKey(sku: string, cecos: string[]) {
-  return `history::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
+function historyCacheKey(sku: string, cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null) {
+  const startDate = range?.startDate || "default";
+  const endDate = range?.endDate || "default";
+  return `history::${sku}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[], range: HouseRange) {
@@ -201,6 +212,58 @@ function getDefaultHouseRange(referenceDate = new Date()): HouseRange {
   startDate.setDate(startDate.getDate() - (DEFAULT_HOUSE_RANGE_DAYS - 1));
   return {
     startDate: toDateInputValue(moveToNextBusinessDay(startDate)),
+    endDate: toDateInputValue(endDate),
+  };
+}
+
+function getStoredHouseViewPreferences() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(HOUSE_VIEW_PREFERENCES_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as {
+      selectedHouseTypeId?: number | null;
+      houseRange?: Partial<HouseRange> | null;
+    };
+    return {
+      selectedHouseTypeId:
+        typeof parsed.selectedHouseTypeId === "number" && Number.isFinite(parsed.selectedHouseTypeId)
+          ? parsed.selectedHouseTypeId
+          : null,
+      houseRange:
+        parsed.houseRange?.startDate && parsed.houseRange?.endDate
+          ? {
+              startDate: parsed.houseRange.startDate,
+              endDate: parsed.houseRange.endDate,
+            }
+          : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clampHouseRange(range: HouseRange, referenceDate = new Date()): HouseRange {
+  const latestDate = moveToPreviousBusinessDay(referenceDate);
+  let startDate = moveToNextBusinessDay(toStartOfDay(range.startDate));
+  let endDate = moveToPreviousBusinessDay(toStartOfDay(range.endDate));
+
+  if (startDate.getTime() > latestDate.getTime()) {
+    startDate = latestDate;
+  }
+  if (endDate.getTime() > latestDate.getTime()) {
+    endDate = latestDate;
+  }
+  if (startDate.getTime() > endDate.getTime()) {
+    startDate = new Date(endDate);
+  }
+
+  return {
+    startDate: toDateInputValue(startDate),
     endDate: toDateInputValue(endDate),
   };
 }
@@ -462,11 +525,28 @@ function buildLineSegments(points: Array<{ x: number; y: number | null }>) {
   return segments.join(" ");
 }
 
+function getShiftedStockValueForDate(stockSeries: StockSeriesPoint[], date: string, offsetDays: number) {
+  if (!stockSeries.length) {
+    return null;
+  }
+  const stockIndexByDay = new Map<number, number>();
+  stockSeries.forEach((point, index) => {
+    stockIndexByDay.set(toStartOfDay(point.date).getTime(), index);
+  });
+  const stockIndex = stockIndexByDay.get(toStartOfDay(date).getTime());
+  if (stockIndex === undefined) {
+    return null;
+  }
+  return stockSeries[stockIndex + offsetDays]?.value ?? null;
+}
+
 function buildHouseComparisonChart(
   houseComparison: MaterialDashboardHouseComparisonData,
   stockSeries: StockSeriesPoint[],
   width: number,
   height: number,
+  stockOffsetDays = 0,
+  stockAxisBaseline: number | null = null,
 ) {
   if (!houseComparison.points.length) {
     return null;
@@ -474,9 +554,12 @@ function buildHouseComparisonChart(
   const padding = { top: 18, right: 52, bottom: 26, left: 40 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const stockValueByDay = new Map(stockSeries.map((point) => [toStartOfDay(point.date).getTime(), point.value]));
+  const stockIndexByDay = new Map<number, number>();
+  stockSeries.forEach((point, index) => {
+    stockIndexByDay.set(toStartOfDay(point.date).getTime(), index);
+  });
   const stockValues = stockSeries.map((point) => point.value);
-  const finalStock = stockValues.length ? stockValues[stockValues.length - 1] : 0;
+  const finalStock = stockAxisBaseline ?? (stockValues.length ? stockValues[stockValues.length - 1] : 0);
   const maxStock = Math.max(...stockValues, 1);
   const minStock = Math.max(Math.min(finalStock, maxStock), 0);
   const stockRange = Math.max(maxStock - minStock, 1);
@@ -487,7 +570,8 @@ function buildHouseComparisonChart(
       houseComparison.points.length === 1
         ? padding.left + plotWidth / 2
         : padding.left + (index / (houseComparison.points.length - 1)) * plotWidth;
-    const stockValue = stockValueByDay.get(toStartOfDay(point.date).getTime()) ?? null;
+    const stockIndex = stockIndexByDay.get(toStartOfDay(point.date).getTime());
+    const stockValue = stockIndex !== undefined ? stockSeries[stockIndex + stockOffsetDays]?.value ?? null : null;
     const remainingHouseStarts = Math.max(totalHouseStarts - (point.cumulative_house_starts - point.house_starts), 0);
     return {
       ...point,
@@ -603,6 +687,322 @@ function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?: Chart
   };
 }
 
+type HouseFitWindow = {
+  startIndex: number;
+  endIndex: number;
+  startDate: string;
+  endDate: string;
+  offsetDays: number;
+  pointCount: number;
+  totalHouseStarts: number;
+  totalMaterialQuantity: number;
+  materialPerHouse: number;
+  alignmentScore: number;
+  curveRmse: number;
+  score: number;
+};
+
+type HouseFitAnalysis = {
+  fullRange: HouseFitWindow | null;
+  bestWindow: HouseFitWindow | null;
+  bestTrailingWindow: HouseFitWindow | null;
+  recommendedWindow: HouseFitWindow | null;
+  recommendationKind: "range" | "segment" | "recent";
+  totalPoints: number;
+  minimumWindowPoints: number;
+};
+
+type HouseFitSearchResult = {
+  analysesByOffset: Partial<Record<number, HouseFitAnalysis>>;
+  recommendedAnalysis: HouseFitAnalysis | null;
+  recommendedWindow: HouseFitWindow | null;
+  autoOffsetDays: number;
+};
+
+function clamp01(value: number) {
+  return clamp(value, 0, 1);
+}
+
+function getHouseFitQuality(rSquared: number | null | undefined) {
+  if (rSquared === null || rSquared === undefined || Number.isNaN(rSquared)) {
+    return { label: "Unavailable", tone: "text-zinc-500 border-black/10 bg-black/[0.03] dark:border-white/10 dark:bg-white/[0.04]" };
+  }
+  if (rSquared >= 0.85) {
+    return { label: "Strong", tone: "text-emerald-700 border-emerald-200 bg-emerald-50 dark:text-emerald-300 dark:border-emerald-500/20 dark:bg-emerald-500/10" };
+  }
+  if (rSquared >= 0.6) {
+    return { label: "Moderate", tone: "text-amber-700 border-amber-200 bg-amber-50 dark:text-amber-300 dark:border-amber-500/20 dark:bg-amber-500/10" };
+  }
+  return { label: "Weak", tone: "text-rose-700 border-rose-200 bg-rose-50 dark:text-rose-300 dark:border-rose-500/20 dark:bg-rose-500/10" };
+}
+
+function buildHouseFitWindow(
+  points: MaterialDashboardHouseComparisonPoint[],
+  startIndex: number,
+  endIndex: number,
+  totalPoints: number,
+  offsetDays: number,
+) {
+  if (!points.length || startIndex < 0 || endIndex < startIndex || endIndex >= points.length) {
+    return null;
+  }
+
+  const windowPoints = points.slice(startIndex, endIndex + 1);
+  const pointCount = windowPoints.length;
+  if (pointCount < 3) {
+    return null;
+  }
+
+  const previousPoint = startIndex > 0 ? points[startIndex - 1] : null;
+  const baselineMaterial = previousPoint ? Number(previousPoint.cumulative_material_quantity) || 0 : 0;
+  const baselineHouses = previousPoint ? Number(previousPoint.cumulative_house_starts) || 0 : 0;
+  const endPoint = points[endIndex];
+  const totalMaterialQuantity = (Number(endPoint.cumulative_material_quantity) || 0) - baselineMaterial;
+  const totalHouseStarts = (Number(endPoint.cumulative_house_starts) || 0) - baselineHouses;
+
+  if (totalMaterialQuantity <= 0 || totalHouseStarts <= 0) {
+    return null;
+  }
+
+  let sumSquaredError = 0;
+  for (const point of windowPoints) {
+    const cumulativeMaterial = (Number(point.cumulative_material_quantity) || 0) - baselineMaterial;
+    const cumulativeHouses = (Number(point.cumulative_house_starts) || 0) - baselineHouses;
+    const materialProgress = clamp01(cumulativeMaterial / totalMaterialQuantity);
+    const houseProgress = clamp01(cumulativeHouses / totalHouseStarts);
+    const error = materialProgress - houseProgress;
+    sumSquaredError += error * error;
+  }
+
+  const curveRmse = Math.sqrt(sumSquaredError / pointCount);
+  const alignmentScore = clamp01(1 - curveRmse);
+  const coverageWeight = Math.sqrt(pointCount / Math.max(totalPoints, 1));
+  const score = alignmentScore * coverageWeight;
+
+  return {
+    startIndex,
+    endIndex,
+    startDate: windowPoints[0].date,
+    endDate: windowPoints[windowPoints.length - 1].date,
+    offsetDays,
+    pointCount,
+    totalHouseStarts,
+    totalMaterialQuantity,
+    materialPerHouse: totalMaterialQuantity / totalHouseStarts,
+    alignmentScore,
+    curveRmse,
+    score,
+  };
+}
+
+function analyzeHouseFit(points: MaterialDashboardHouseComparisonPoint[], offsetDays: number): HouseFitAnalysis | null {
+  if (points.length < 3) {
+    return null;
+  }
+
+  const totalPoints = points.length;
+  const minimumWindowPoints = Math.min(totalPoints, Math.max(5, Math.ceil(totalPoints * 0.15)));
+  const fullRange = buildHouseFitWindow(points, 0, totalPoints - 1, totalPoints, offsetDays);
+  const minimumHouseStarts = Math.max(5, Math.ceil((fullRange?.totalHouseStarts ?? 0) * 0.1));
+
+  let bestWindow: HouseFitWindow | null = null;
+  let bestWindowAdjustedScore = Number.NEGATIVE_INFINITY;
+  let bestTrailingWindow: HouseFitWindow | null = null;
+  let bestTrailingAdjustedScore = Number.NEGATIVE_INFINITY;
+
+  for (let startIndex = 0; startIndex <= totalPoints - minimumWindowPoints; startIndex += 1) {
+    for (let endIndex = startIndex + minimumWindowPoints - 1; endIndex < totalPoints; endIndex += 1) {
+      const candidate = buildHouseFitWindow(points, startIndex, endIndex, totalPoints, offsetDays);
+      if (!candidate || candidate.pointCount < minimumWindowPoints || candidate.totalHouseStarts < minimumHouseStarts) {
+        continue;
+      }
+
+      const coverageRatio = candidate.pointCount / Math.max(totalPoints, 1);
+      const recencyRatio = (candidate.endIndex + 1) / Math.max(totalPoints, 1);
+      const adjustedScore = candidate.alignmentScore - 0.12 * (1 - coverageRatio) + 0.04 * recencyRatio;
+
+      if (
+        adjustedScore > bestWindowAdjustedScore + 0.0001 ||
+        (Math.abs(adjustedScore - bestWindowAdjustedScore) <= 0.0001 &&
+          candidate.pointCount > (bestWindow?.pointCount ?? 0))
+      ) {
+        bestWindow = candidate;
+        bestWindowAdjustedScore = adjustedScore;
+      }
+
+      if (candidate.endIndex !== totalPoints - 1) {
+        continue;
+      }
+
+      if (
+        adjustedScore > bestTrailingAdjustedScore + 0.0001 ||
+        (Math.abs(adjustedScore - bestTrailingAdjustedScore) <= 0.0001 &&
+          candidate.pointCount > (bestTrailingWindow?.pointCount ?? 0))
+      ) {
+        bestTrailingWindow = candidate;
+        bestTrailingAdjustedScore = adjustedScore;
+      }
+    }
+  }
+
+  const fullAdjustedScore =
+    fullRange ? fullRange.alignmentScore - 0.12 * (1 - 1) + 0.04 * 1 : Number.NEGATIVE_INFINITY;
+  const bestScore = bestWindowAdjustedScore;
+  const fullAlignment = fullRange?.alignmentScore ?? 0;
+  const bestAlignment = bestWindow?.alignmentScore ?? 0;
+  const preferBestWindow =
+    Boolean(bestWindow) &&
+    (!fullRange || (bestWindow!.pointCount < totalPoints && (bestScore >= fullAdjustedScore + 0.015 || bestAlignment >= fullAlignment + 0.035)));
+
+  const trailingIsCloseToBest =
+    Boolean(bestWindow && bestTrailingWindow) && bestTrailingAdjustedScore >= bestWindowAdjustedScore - 0.015;
+  const shouldPreferTrailing =
+    Boolean(bestTrailingWindow) &&
+    (!fullRange ||
+      (bestTrailingWindow!.pointCount < totalPoints &&
+        trailingIsCloseToBest &&
+        (bestTrailingAdjustedScore >= fullAdjustedScore + 0.01 ||
+          (bestTrailingWindow!.alignmentScore ?? 0) >= fullAlignment + 0.03)));
+
+  const recommendationKind: "range" | "segment" | "recent" = shouldPreferTrailing
+    ? "recent"
+    : preferBestWindow
+      ? "segment"
+      : "range";
+  const recommendedWindow =
+    recommendationKind === "recent"
+      ? bestTrailingWindow
+      : recommendationKind === "segment"
+        ? bestWindow
+        : fullRange;
+
+  return {
+    fullRange,
+    bestWindow,
+    bestTrailingWindow,
+    recommendedWindow,
+    recommendationKind,
+    totalPoints,
+    minimumWindowPoints,
+  };
+}
+
+function buildShiftedWeekdayHouseComparison(
+  houseComparison: MaterialDashboardHouseComparisonData | null,
+  history: MaterialDashboardMovementData | null,
+  offsetDays: number,
+): MaterialDashboardHouseComparisonData | null {
+  if (!houseComparison || !history) {
+    return null;
+  }
+
+  const weekdayHousePoints = houseComparison.points.filter((point) => !isWeekend(toStartOfDay(point.date)));
+  const weekdayMovements = history.movements
+    .filter((point) => !isWeekend(toStartOfDay(point.date)))
+    .map((point) => ({
+      date: point.date,
+      quantity: Number(point.quantity) || 0,
+    }));
+
+  if (!weekdayHousePoints.length || !weekdayMovements.length) {
+    return null;
+  }
+
+  const weekdayMovementIndexByDay = new Map<number, number>();
+  weekdayMovements.forEach((point, index) => {
+    weekdayMovementIndexByDay.set(toStartOfDay(point.date).getTime(), index);
+  });
+
+  let cumulativeMaterialQuantity = 0;
+  let cumulativeHouseStarts = 0;
+  let latestHouseStartDate: string | null = null;
+  const points: MaterialDashboardHouseComparisonPoint[] = [];
+
+  for (const point of weekdayHousePoints) {
+    const movementIndex = weekdayMovementIndexByDay.get(toStartOfDay(point.date).getTime());
+    if (movementIndex === undefined) {
+      continue;
+    }
+    const shiftedMovement = weekdayMovements[movementIndex + offsetDays];
+    if (!shiftedMovement) {
+      break;
+    }
+    const materialQuantity = shiftedMovement.quantity;
+    const houseStarts = Number(point.house_starts) || 0;
+    cumulativeMaterialQuantity += materialQuantity;
+    cumulativeHouseStarts += houseStarts;
+    if (houseStarts > 0) {
+      latestHouseStartDate = point.date;
+    }
+    points.push({
+      ...point,
+      material_quantity: Math.round(materialQuantity * 10000) / 10000,
+      house_starts: houseStarts,
+      cumulative_material_quantity: Math.round(cumulativeMaterialQuantity * 10000) / 10000,
+      cumulative_house_starts: cumulativeHouseStarts,
+      material_per_house:
+        cumulativeHouseStarts > 0 ? Math.round((cumulativeMaterialQuantity / cumulativeHouseStarts) * 10000) / 10000 : null,
+    });
+  }
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    ...houseComparison,
+    movement_days: points.length,
+    total_material_quantity: Math.round(cumulativeMaterialQuantity * 10000) / 10000,
+    total_house_starts: cumulativeHouseStarts,
+    material_per_house:
+      cumulativeHouseStarts > 0 ? Math.round((cumulativeMaterialQuantity / cumulativeHouseStarts) * 10000) / 10000 : null,
+    latest_house_start_date: latestHouseStartDate,
+    points,
+  };
+}
+
+function analyzeHouseFitAcrossOffsets(
+  houseComparison: MaterialDashboardHouseComparisonData | null,
+  history: MaterialDashboardMovementData | null,
+  maxOffsetDays = 7,
+): HouseFitSearchResult | null {
+  const analysesByOffset: Partial<Record<number, HouseFitAnalysis>> = {};
+  let recommendedAnalysis: HouseFitAnalysis | null = null;
+  let recommendedWindow: HouseFitWindow | null = null;
+
+  for (let offsetDays = 0; offsetDays <= maxOffsetDays; offsetDays += 1) {
+    const shiftedComparison = buildShiftedWeekdayHouseComparison(houseComparison, history, offsetDays);
+    const analysis = shiftedComparison ? analyzeHouseFit(shiftedComparison.points, offsetDays) : null;
+    if (!analysis || !analysis.recommendedWindow) {
+      continue;
+    }
+    analysesByOffset[offsetDays] = analysis;
+    if (
+      !recommendedWindow ||
+      analysis.recommendedWindow.score > recommendedWindow.score + 0.0001 ||
+      (Math.abs(analysis.recommendedWindow.score - recommendedWindow.score) <= 0.0001 &&
+        analysis.recommendedWindow.alignmentScore > recommendedWindow.alignmentScore + 0.0001) ||
+      (Math.abs(analysis.recommendedWindow.score - recommendedWindow.score) <= 0.0001 &&
+        Math.abs(analysis.recommendedWindow.alignmentScore - recommendedWindow.alignmentScore) <= 0.0001 &&
+        offsetDays < recommendedWindow.offsetDays)
+    ) {
+      recommendedAnalysis = analysis;
+      recommendedWindow = analysis.recommendedWindow;
+    }
+  }
+
+  if (!recommendedWindow) {
+    return null;
+  }
+
+  return {
+    analysesByOffset,
+    recommendedAnalysis,
+    recommendedWindow,
+    autoOffsetDays: recommendedWindow.offsetDays,
+  };
+}
+
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 px-4 py-3">
@@ -626,6 +1026,76 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
     <div className="flex items-center justify-between py-1 border-b border-black/5 dark:border-white/5 last:border-0">
       <div className="text-xs font-medium text-zinc-500">{label}</div>
       <div className="text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
+    </div>
+  );
+}
+
+function HouseFitIndicator({
+  selectedAnalysis,
+  recommendedWindow,
+  effectiveOffsetDays,
+}: {
+  selectedAnalysis: HouseFitAnalysis | null;
+  recommendedWindow: HouseFitWindow | null;
+  effectiveOffsetDays: number;
+}) {
+  const selectedWindow = selectedAnalysis?.recommendedWindow || null;
+  const overall = selectedAnalysis?.fullRange || null;
+  const quality = getHouseFitQuality(selectedWindow?.alignmentScore);
+
+  if (!selectedWindow) {
+    return (
+      <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.03] px-2.5 py-1 text-[11px] font-medium text-zinc-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500" />
+        Fit unavailable
+      </div>
+    );
+  }
+
+  const detailTitle =
+    selectedAnalysis?.recommendationKind === "recent"
+      ? "Recent regime fit"
+      : selectedAnalysis?.recommendationKind === "segment"
+        ? "Segment fit"
+        : "Range fit";
+
+  return (
+    <div className="group/fit relative inline-flex">
+      <button
+        type="button"
+        className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${quality.tone}`}
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+        {detailTitle}: {quality.label}
+      </button>
+      <div className="pointer-events-none absolute left-0 top-full z-20 mt-2 w-72 rounded-2xl border border-black/10 bg-white/95 p-3 text-left opacity-0 shadow-xl transition-opacity duration-150 group-hover/fit:opacity-100 group-focus-within/fit:opacity-100 dark:border-white/10 dark:bg-zinc-950/95">
+        <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Trend Analysis</div>
+        <div className="mt-2 space-y-2 text-xs text-zinc-600 dark:text-zinc-300">
+          {overall ? (
+            <div>
+              <div className="font-semibold text-zinc-900 dark:text-white">Selected range</div>
+              <div>{formatDate(overall.startDate)} - {formatDate(overall.endDate)}</div>
+              <div>{formatPercent(overall.alignmentScore)} aligned · {formatNumber(overall.materialPerHouse)} / house · lag {formatNumber(effectiveOffsetDays, 0)} d</div>
+            </div>
+          ) : (
+            <div>
+              <div className="font-semibold text-zinc-900 dark:text-white">Selected range</div>
+              <div>Not enough variation to fit the full selected range.</div>
+            </div>
+          )}
+          {recommendedWindow ? (
+            <div>
+              <div className="font-semibold text-zinc-900 dark:text-white">Recommended sample</div>
+              <div>{formatDate(recommendedWindow.startDate)} - {formatDate(recommendedWindow.endDate)}</div>
+              <div>{formatPercent(recommendedWindow.alignmentScore)} aligned · {formatNumber(recommendedWindow.materialPerHouse)} / house · lag {formatNumber(recommendedWindow.offsetDays, 0)} d</div>
+              <div>{formatNumber(recommendedWindow.totalHouseStarts, 0)} starts · {formatNumber(recommendedWindow.totalMaterialQuantity)} material</div>
+            </div>
+          ) : null}
+          <div className="pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+            Lag is measured in business days. Positive lag compares house starts with material activity that happens a few weekdays later.
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -675,6 +1145,7 @@ function MovementHistoryCard({
   const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
   const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
+  const [houseOffsetOverrideDays, setHouseOffsetOverrideDays] = useState<number | null>(null);
 
   useEffect(() => {
     setSelection(null);
@@ -682,6 +1153,7 @@ function MovementHistoryCard({
     setDragCurrentIndex(null);
     setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
+    setHouseOffsetOverrideDays(null);
   }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, viewMode, selectedHouseTypeId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
 
   if (!selected) {
@@ -708,8 +1180,6 @@ function MovementHistoryCard({
   const latestHouseRangeDate = moveToPreviousBusinessDay(new Date());
   const latestHouseRangeValue = toDateInputValue(latestHouseRangeDate);
   const houseComparisonInRange = getHouseComparisonForRange(houseComparison, houseRange);
-  const houseMovementSeries: MaterialDashboardMovementPoint[] =
-    houseComparisonInRange?.points.map((point) => ({ date: point.date, quantity: point.material_quantity })) || [];
   const weekdayHouseComparison =
     houseComparisonInRange
       ? {
@@ -717,19 +1187,39 @@ function MovementHistoryCard({
           points: houseComparisonInRange.points.filter((point) => !isWeekend(toStartOfDay(point.date))),
         }
       : null;
+  const houseFitSearch = analyzeHouseFitAcrossOffsets(houseComparisonInRange, history, 7);
+  const autoHouseOffsetDays = houseFitSearch?.autoOffsetDays ?? 0;
+  const effectiveHouseOffsetDays = clamp(houseOffsetOverrideDays ?? autoHouseOffsetDays, 0, 7);
+  const shiftedWeekdayHouseComparison = buildShiftedWeekdayHouseComparison(houseComparisonInRange, history, effectiveHouseOffsetDays);
+  const houseFitAnalysis = shiftedWeekdayHouseComparison ? analyzeHouseFit(shiftedWeekdayHouseComparison.points, effectiveHouseOffsetDays) : null;
   const houseStockSeries =
-    detail && houseComparisonInRange
-      ? buildHistoricalStockSeries(houseMovementSeries, detail.stock_on_hand, {
-          startDate: houseComparisonInRange.range_start,
-          endDate: houseComparisonInRange.range_end,
+    detail && history
+      ? buildHistoricalStockSeries(history.movements, detail.stock_on_hand, {
+          startDate: houseRange.startDate,
+          endDate: latestHouseRangeValue,
         })
       : [];
+  const houseRangeEndStockValue = getShiftedStockValueForDate(houseStockSeries, houseRange.endDate, effectiveHouseOffsetDays);
   const isHouseMode = viewMode === "houses";
   const houseChart =
-    weekdayHouseComparison && houseStockSeries.length
-      ? buildHouseComparisonChart(weekdayHouseComparison, houseStockSeries, CHART_WIDTH, CHART_HEIGHT)
-      : weekdayHouseComparison
-        ? buildHouseComparisonChart(weekdayHouseComparison, [], CHART_WIDTH, CHART_HEIGHT)
+    shiftedWeekdayHouseComparison && houseStockSeries.length
+      ? buildHouseComparisonChart(
+          shiftedWeekdayHouseComparison,
+          houseStockSeries,
+          CHART_WIDTH,
+          CHART_HEIGHT,
+          effectiveHouseOffsetDays,
+          houseRangeEndStockValue,
+        )
+      : shiftedWeekdayHouseComparison
+        ? buildHouseComparisonChart(
+            shiftedWeekdayHouseComparison,
+            [],
+            CHART_WIDTH,
+            CHART_HEIGHT,
+            effectiveHouseOffsetDays,
+            houseRangeEndStockValue,
+          )
         : null;
   const activeSelection =
     dragAnchorIndex !== null && dragCurrentIndex !== null ? { startIndex: dragAnchorIndex, endIndex: dragCurrentIndex } : selection;
@@ -975,6 +1465,50 @@ function MovementHistoryCard({
                   <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
                     Compare stock against remaining starts across the selected business-day range. Weekend dates are hidden from the view.
                   </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <HouseFitIndicator
+                      selectedAnalysis={houseFitAnalysis}
+                      recommendedWindow={houseFitSearch?.recommendedWindow || null}
+                      effectiveOffsetDays={effectiveHouseOffsetDays}
+                    />
+                    <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1 py-1 dark:border-white/10 dark:bg-white/[0.03]">
+                      <button
+                        type="button"
+                        onClick={() => setHouseOffsetOverrideDays((current) => clamp((current ?? autoHouseOffsetDays) - 1, 0, 7))}
+                        disabled={effectiveHouseOffsetDays <= 0}
+                        className="rounded-full px-2 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.05] disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-white/[0.06]"
+                        title="Shift lag one business day lower"
+                      >
+                        -
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHouseOffsetOverrideDays(null)}
+                        className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.05] dark:text-zinc-300 dark:hover:bg-white/[0.06]"
+                        title="Reset lag to the auto-selected best fit"
+                      >
+                        Lag {formatNumber(effectiveHouseOffsetDays, 0)} d
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHouseOffsetOverrideDays((current) => clamp((current ?? autoHouseOffsetDays) + 1, 0, 7))}
+                        disabled={effectiveHouseOffsetDays >= 7}
+                        className="rounded-full px-2 py-0.5 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.05] disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-white/[0.06]"
+                        title="Shift lag one business day higher"
+                      >
+                        +
+                      </button>
+                    </div>
+                    {houseOffsetOverrideDays !== null && houseOffsetOverrideDays !== autoHouseOffsetDays ? (
+                      <button
+                        type="button"
+                        onClick={() => setHouseOffsetOverrideDays(null)}
+                        className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.04] hover:text-zinc-900 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
+                      >
+                        Auto {formatNumber(autoHouseOffsetDays, 0)} d
+                      </button>
+                    ) : null}
+                  </div>
                 </>
               ) : (
                 <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
@@ -1604,8 +2138,13 @@ export function MaterialDashboardPage() {
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
   const [selectedSku, setSelectedSku] = useState<string | null>(null);
-  const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(null);
-  const [houseRange, setHouseRange] = useState<HouseRange>(() => getDefaultHouseRange());
+  const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
+    () => getStoredHouseViewPreferences()?.selectedHouseTypeId ?? null,
+  );
+  const [houseRange, setHouseRange] = useState<HouseRange>(() => {
+    const stored = getStoredHouseViewPreferences();
+    return clampHouseRange(stored?.houseRange || getDefaultHouseRange());
+  });
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1621,11 +2160,28 @@ export function MaterialDashboardPage() {
   const historyRefreshNonceRef = useRef(0);
   const houseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecos = normalizeCecos(selectedCecos);
-  const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos);
+  const currentDashboardMovementDays =
+    viewMode === "houses"
+      ? Math.max(
+          Math.round(
+            (toStartOfDay(houseRange.endDate).getTime() - toStartOfDay(houseRange.startDate).getTime()) / (1000 * 60 * 60 * 24),
+          ) + 1,
+          1,
+        )
+      : 60;
+  const latestHistoryDate = toDateInputValue(moveToPreviousBusinessDay(new Date()));
+  const historyRequestRange =
+    viewMode === "houses"
+      ? {
+          startDate: houseRange.startDate,
+          endDate: latestHistoryDate,
+        }
+      : null;
+  const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos, currentDashboardMovementDays);
   const data = dashboardCache[currentDashboardKey] || null;
   const currentDetailKey = selectedSku ? detailCacheKey(selectedSku, normalizedSelectedCecos) : null;
   const selectedDetail = currentDetailKey ? detailCache[currentDetailKey] || null : null;
-  const currentHistoryKey = selectedSku ? historyCacheKey(selectedSku, normalizedSelectedCecos) : null;
+  const currentHistoryKey = selectedSku ? historyCacheKey(selectedSku, normalizedSelectedCecos, historyRequestRange) : null;
   const currentHistory = currentHistoryKey ? historyCache[currentHistoryKey] || null : null;
   const currentHouseComparisonKey =
     selectedSku && selectedHouseTypeId
@@ -1727,7 +2283,10 @@ export function MaterialDashboardPage() {
         setLoading(true);
       }
       try {
-        const response = await api.getMaterialDashboard(normalizedSelectedCecos, { refresh: forceRefresh });
+        const response = await api.getMaterialDashboard(normalizedSelectedCecos, {
+          refresh: forceRefresh,
+          movementDays: currentDashboardMovementDays,
+        });
         if (cancelled) {
           return;
         }
@@ -1752,7 +2311,7 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentDashboardKey, refreshNonce]);
+  }, [currentDashboardKey, currentDashboardMovementDays, refreshNonce]);
 
   useEffect(() => {
     const sku = selectedSku;
@@ -1818,8 +2377,21 @@ export function MaterialDashboardPage() {
   }, [houseTypes]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(
+      HOUSE_VIEW_PREFERENCES_KEY,
+      JSON.stringify({
+        selectedHouseTypeId,
+        houseRange,
+      }),
+    );
+  }, [houseRange, selectedHouseTypeId]);
+
+  useEffect(() => {
     const sku = selectedSku;
-    const cacheKey = sku ? historyCacheKey(sku, normalizedSelectedCecos) : null;
+    const cacheKey = sku ? historyCacheKey(sku, normalizedSelectedCecos, historyRequestRange) : null;
     if (!sku || !cacheKey) {
       setHistoryLoading(false);
       return;
@@ -1849,7 +2421,11 @@ export function MaterialDashboardPage() {
         setHistoryLoading(true);
       }
       try {
-        const response = await api.getMaterialDashboardHistory(activeSku, normalizedSelectedCecos, { refresh: forceRefresh });
+        const response = await api.getMaterialDashboardHistory(activeSku, normalizedSelectedCecos, {
+          refresh: forceRefresh,
+          startDate: historyRequestRange?.startDate,
+          endDate: historyRequestRange?.endDate,
+        });
         if (!cancelled) {
           setHistoryCache((current) => ({ ...current, [activeCacheKey]: response }));
           void setMaterialDashboardCacheValue(activeCacheKey, response);
@@ -1868,7 +2444,7 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentHistoryKey, refreshNonce, selectedSku]);
+  }, [currentHistoryKey, historyRequestRange?.endDate, historyRequestRange?.startDate, refreshNonce, selectedSku]);
 
   useEffect(() => {
     const sku = selectedSku;

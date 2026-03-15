@@ -270,13 +270,21 @@ def get_material_dashboard_history(
     *,
     session: Session | None = None,
     history_days: int = 90,
+    start_date: date | None = None,
+    end_date: date | None = None,
     cost_centers: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict:
     normalized_sku = sku.strip().upper()
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
     cache_key = _dashboard_cache_key(
-        {"cecos": normalized_cost_centers, "history_days": max(int(history_days), 1), "sku": normalized_sku}
+        {
+            "cecos": normalized_cost_centers,
+            "history_days": max(int(history_days), 1),
+            "sku": normalized_sku,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+        }
     )
 
     def loader() -> dict:
@@ -284,6 +292,8 @@ def get_material_dashboard_history(
             settings,
             normalized_sku,
             history_days=max(int(history_days), 1),
+            start_date=start_date,
+            end_date=end_date,
             cost_centers=normalized_cost_centers,
         )
 
@@ -302,6 +312,8 @@ def _build_material_dashboard_history(
     sku: str,
     *,
     history_days: int,
+    start_date: date | None,
+    end_date: date | None,
     cost_centers: list[str],
 ) -> dict:
     normalized_sku = sku.strip().upper()
@@ -309,21 +321,24 @@ def _build_material_dashboard_history(
         settings,
         normalized_sku,
         days=history_days,
+        start_day=start_date,
+        end_day=end_date,
         cost_centers=cost_centers,
     )
     if not series:
-        end_day = datetime.utcnow().date()
-        start_day = end_day - timedelta(days=max(int(history_days), 1) - 1)
+        fallback_end_day = end_date or datetime.utcnow().date()
+        fallback_start_day = start_date or (fallback_end_day - timedelta(days=max(int(history_days), 1) - 1))
+        window_days = max((fallback_end_day - fallback_start_day).days + 1, 1)
         series = [
             {
-                "date": (start_day + timedelta(days=index)).isoformat(),
+                "date": (fallback_start_day + timedelta(days=index)).isoformat(),
                 "quantity": 0.0,
             }
-            for index in range(max(int(history_days), 1))
+            for index in range(window_days)
         ]
     return {
         "sku": normalized_sku,
-        "movement_days": max(int(history_days), 1),
+        "movement_days": len(series),
         "ceco_filters": list(cost_centers),
         "range_start": series[0]["date"] if series else None,
         "range_end": series[-1]["date"] if series else None,

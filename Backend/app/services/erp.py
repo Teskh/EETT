@@ -280,14 +280,23 @@ def get_material_movement_history(
     sku: str,
     *,
     days: int = 90,
+    start_day: date | None = None,
+    end_day: date | None = None,
     cost_centers: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_sku = sku.strip().upper()
     if not normalized_sku:
         return []
 
-    window_days = max(int(days), 1)
-    start_day = datetime.utcnow().date() - timedelta(days=window_days - 1)
+    requested_end_day = end_day or datetime.utcnow().date()
+    requested_start_day = start_day
+    if requested_start_day is None:
+        window_days = max(int(days), 1)
+        requested_start_day = requested_end_day - timedelta(days=window_days - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_day must be on or before end_day")
+
+    window_days = max((requested_end_day - requested_start_day).days + 1, 1)
     ceco_filters = _normalize_cost_centers(cost_centers)
 
     try:
@@ -296,13 +305,14 @@ def get_material_movement_history(
             raw_rows = _get_outgoing_movements_for_product(
                 cursor,
                 product_code=normalized_sku,
-                start_day=start_day,
+                start_day=requested_start_day,
+                end_day=requested_end_day,
                 cost_centers=ceco_filters,
             )
             quantity_by_day = {row_date.isoformat(): quantity for row_date, quantity in raw_rows}
             history: list[dict[str, Any]] = []
             for offset in range(window_days):
-                current_day = start_day + timedelta(days=offset)
+                current_day = requested_start_day + timedelta(days=offset)
                 history.append(
                     {
                         "date": current_day.isoformat(),
@@ -528,10 +538,11 @@ def _get_outgoing_movements_for_product(
     *,
     product_code: str,
     start_day: date,
+    end_day: date,
     cost_centers: Sequence[str],
 ) -> list[tuple[date, float]]:
     ceco_clause = ""
-    params: list[object] = [start_day.strftime("%Y%m%d"), product_code]
+    params: list[object] = [start_day.strftime("%Y%m%d"), end_day.strftime("%Y%m%d"), product_code]
     if cost_centers:
         placeholders = ",".join(["?"] * len(cost_centers))
         ceco_clause = f"\n          AND RTRIM(LTRIM(h.CodiCC)) IN ({placeholders})"
@@ -546,6 +557,7 @@ def _get_outgoing_movements_for_product(
         INNER JOIN softland.iw_gmovi d ON h.Tipo = d.Tipo AND h.NroInt = d.NroInt
         WHERE
             h.Fecha >= ?
+            AND h.Fecha <= ?
             AND h.Tipo = 'S'
             AND RTRIM(LTRIM(h.Concepto)) = '07'
             AND RTRIM(LTRIM(h.Estado)) = 'V'
