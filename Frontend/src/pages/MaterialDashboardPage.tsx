@@ -694,6 +694,7 @@ type HouseFitWindow = {
   endDate: string;
   offsetDays: number;
   pointCount: number;
+  materialActiveDays: number;
   totalHouseStarts: number;
   totalMaterialQuantity: number;
   materialPerHouse: number;
@@ -702,12 +703,31 @@ type HouseFitWindow = {
   score: number;
 };
 
+type HouseFitRecommendationKind = "range" | "segment" | "segments" | "recent";
+
+type HouseFitRecommendation = {
+  kind: HouseFitRecommendationKind;
+  offsetDays: number;
+  segments: HouseFitWindow[];
+  startDate: string;
+  endDate: string;
+  pointCount: number;
+  materialActiveDays: number;
+  totalHouseStarts: number;
+  totalMaterialQuantity: number;
+  materialPerHouse: number;
+  alignmentScore: number;
+  coverageRatio: number;
+  score: number;
+};
+
 type HouseFitAnalysis = {
   fullRange: HouseFitWindow | null;
   bestWindow: HouseFitWindow | null;
   bestTrailingWindow: HouseFitWindow | null;
-  recommendedWindow: HouseFitWindow | null;
-  recommendationKind: "range" | "segment" | "recent";
+  stableSample: HouseFitRecommendation | null;
+  recommendedSample: HouseFitRecommendation | null;
+  recommendationKind: HouseFitRecommendationKind;
   totalPoints: number;
   minimumWindowPoints: number;
 };
@@ -715,7 +735,7 @@ type HouseFitAnalysis = {
 type HouseFitSearchResult = {
   analysesByOffset: Partial<Record<number, HouseFitAnalysis>>;
   recommendedAnalysis: HouseFitAnalysis | null;
-  recommendedWindow: HouseFitWindow | null;
+  recommendedSample: HouseFitRecommendation | null;
   autoOffsetDays: number;
 };
 
@@ -736,6 +756,66 @@ function getHouseFitQuality(rSquared: number | null | undefined) {
   return { label: "Weak", tone: "text-rose-700 border-rose-200 bg-rose-50 dark:text-rose-300 dark:border-rose-500/20 dark:bg-rose-500/10" };
 }
 
+function getWeightedMedian(entries: Array<{ value: number; weight: number }>) {
+  const validEntries = entries
+    .filter((entry) => Number.isFinite(entry.value) && Number.isFinite(entry.weight) && entry.weight > 0)
+    .sort((left, right) => left.value - right.value);
+  if (!validEntries.length) {
+    return null;
+  }
+  const totalWeight = validEntries.reduce((sum, entry) => sum + entry.weight, 0);
+  let runningWeight = 0;
+  for (const entry of validEntries) {
+    runningWeight += entry.weight;
+    if (runningWeight >= totalWeight / 2) {
+      return entry.value;
+    }
+  }
+  return validEntries[validEntries.length - 1]?.value ?? null;
+}
+
+function buildHouseFitRecommendation(
+  kind: HouseFitRecommendationKind,
+  segments: HouseFitWindow[],
+  totalRangeHouseStarts: number,
+  totalPoints: number,
+) {
+  if (!segments.length) {
+    return null;
+  }
+
+  const pointCount = segments.reduce((sum, segment) => sum + segment.pointCount, 0);
+  const materialActiveDays = segments.reduce((sum, segment) => sum + segment.materialActiveDays, 0);
+  const totalHouseStarts = segments.reduce((sum, segment) => sum + segment.totalHouseStarts, 0);
+  const totalMaterialQuantity = segments.reduce((sum, segment) => sum + segment.totalMaterialQuantity, 0);
+  if (totalHouseStarts <= 0 || totalMaterialQuantity <= 0) {
+    return null;
+  }
+
+  const alignmentScore =
+    segments.reduce((sum, segment) => sum + segment.alignmentScore * Math.max(segment.totalHouseStarts, 1), 0) /
+    segments.reduce((sum, segment) => sum + Math.max(segment.totalHouseStarts, 1), 0);
+  const coverageRatio =
+    totalRangeHouseStarts > 0 ? clamp01(totalHouseStarts / totalRangeHouseStarts) : clamp01(pointCount / Math.max(totalPoints, 1));
+  const score = alignmentScore * (0.35 + 0.65 * coverageRatio) - Math.max(segments.length - 1, 0) * 0.01;
+
+  return {
+    kind,
+    offsetDays: segments[0].offsetDays,
+    segments,
+    startDate: segments[0].startDate,
+    endDate: segments[segments.length - 1].endDate,
+    pointCount,
+    materialActiveDays,
+    totalHouseStarts,
+    totalMaterialQuantity,
+    materialPerHouse: totalMaterialQuantity / totalHouseStarts,
+    alignmentScore,
+    coverageRatio,
+    score,
+  };
+}
+
 function buildHouseFitWindow(
   points: MaterialDashboardHouseComparisonPoint[],
   startIndex: number,
@@ -752,6 +832,7 @@ function buildHouseFitWindow(
   if (pointCount < 3) {
     return null;
   }
+  const materialActiveDays = windowPoints.filter((point) => Math.abs(Number(point.material_quantity) || 0) > 0.0001).length;
 
   const previousPoint = startIndex > 0 ? points[startIndex - 1] : null;
   const baselineMaterial = previousPoint ? Number(previousPoint.cumulative_material_quantity) || 0 : 0;
@@ -786,6 +867,7 @@ function buildHouseFitWindow(
     endDate: windowPoints[windowPoints.length - 1].date,
     offsetDays,
     pointCount,
+    materialActiveDays,
     totalHouseStarts,
     totalMaterialQuantity,
     materialPerHouse: totalMaterialQuantity / totalHouseStarts,
@@ -793,6 +875,99 @@ function buildHouseFitWindow(
     curveRmse,
     score,
   };
+}
+
+function buildStableHouseFitRecommendation(
+  points: MaterialDashboardHouseComparisonPoint[],
+  offsetDays: number,
+  fullRange: HouseFitWindow | null,
+  totalPoints: number,
+) {
+  const rollingWindowPoints = Math.min(totalPoints, 10);
+  if (!fullRange || rollingWindowPoints < 10 || fullRange.totalHouseStarts < 20) {
+    return null;
+  }
+
+  const rollingWindows: HouseFitWindow[] = [];
+  for (let startIndex = 0; startIndex <= totalPoints - rollingWindowPoints; startIndex += 1) {
+    const candidate = buildHouseFitWindow(points, startIndex, startIndex + rollingWindowPoints - 1, totalPoints, offsetDays);
+    if (!candidate || candidate.totalHouseStarts < 10) {
+      continue;
+    }
+    rollingWindows.push(candidate);
+  }
+
+  const alignedWindows = rollingWindows.filter((window) => window.alignmentScore >= 0.9);
+  if (alignedWindows.length < 2) {
+    return null;
+  }
+
+  const baselineMaterialPerHouse = getWeightedMedian(
+    alignedWindows.map((window) => ({
+      value: window.materialPerHouse,
+      weight: window.alignmentScore * Math.max(window.totalHouseStarts, 1),
+    })),
+  );
+  if (baselineMaterialPerHouse === null) {
+    return null;
+  }
+
+  const tolerance = Math.max(5, baselineMaterialPerHouse * 0.15);
+  const consistentWindows = alignedWindows.filter(
+    (window) => Math.abs(window.materialPerHouse - baselineMaterialPerHouse) <= tolerance,
+  );
+  if (consistentWindows.length < 2) {
+    return null;
+  }
+
+  const totalWindowWeightByPoint = Array.from({ length: totalPoints }, () => 0);
+  const consistentWindowWeightByPoint = Array.from({ length: totalPoints }, () => 0);
+
+  function addWindowWeight(target: number[], window: HouseFitWindow) {
+    const weight = window.alignmentScore * Math.max(window.totalHouseStarts, 1);
+    for (let index = window.startIndex; index <= window.endIndex; index += 1) {
+      target[index] += weight;
+    }
+  }
+
+  alignedWindows.forEach((window) => addWindowWeight(totalWindowWeightByPoint, window));
+  consistentWindows.forEach((window) => addWindowWeight(consistentWindowWeightByPoint, window));
+
+  const activePointFlags = totalWindowWeightByPoint.map((totalWeight, index) => {
+    if (totalWeight <= 0) {
+      return false;
+    }
+    return consistentWindowWeightByPoint[index] / totalWeight >= 0.55;
+  });
+
+  const stableSegments: HouseFitWindow[] = [];
+  let segmentStartIndex: number | null = null;
+  for (let index = 0; index <= totalPoints; index += 1) {
+    const active = index < totalPoints ? activePointFlags[index] : false;
+    if (active && segmentStartIndex === null) {
+      segmentStartIndex = index;
+      continue;
+    }
+    if (active || segmentStartIndex === null) {
+      continue;
+    }
+    const candidate = buildHouseFitWindow(points, segmentStartIndex, index - 1, totalPoints, offsetDays);
+    if (
+      candidate &&
+      candidate.pointCount >= rollingWindowPoints &&
+      candidate.totalHouseStarts >= 10 &&
+      candidate.totalMaterialQuantity > 0
+    ) {
+      stableSegments.push(candidate);
+    }
+    segmentStartIndex = null;
+  }
+
+  if (!stableSegments.length) {
+    return null;
+  }
+
+  return buildHouseFitRecommendation("segments", stableSegments, fullRange.totalHouseStarts, totalPoints);
 }
 
 function analyzeHouseFit(points: MaterialDashboardHouseComparisonPoint[], offsetDays: number): HouseFitAnalysis | null {
@@ -804,6 +979,7 @@ function analyzeHouseFit(points: MaterialDashboardHouseComparisonPoint[], offset
   const minimumWindowPoints = Math.min(totalPoints, Math.max(5, Math.ceil(totalPoints * 0.15)));
   const fullRange = buildHouseFitWindow(points, 0, totalPoints - 1, totalPoints, offsetDays);
   const minimumHouseStarts = Math.max(5, Math.ceil((fullRange?.totalHouseStarts ?? 0) * 0.1));
+  const stableSample = buildStableHouseFitRecommendation(points, offsetDays, fullRange, totalPoints);
 
   let bestWindow: HouseFitWindow | null = null;
   let bestWindowAdjustedScore = Number.NEGATIVE_INFINITY;
@@ -864,23 +1040,57 @@ function analyzeHouseFit(points: MaterialDashboardHouseComparisonPoint[], offset
         (bestTrailingAdjustedScore >= fullAdjustedScore + 0.01 ||
           (bestTrailingWindow!.alignmentScore ?? 0) >= fullAlignment + 0.03)));
 
-  const recommendationKind: "range" | "segment" | "recent" = shouldPreferTrailing
+  const fallbackRecommendationKind: HouseFitRecommendationKind = shouldPreferTrailing
     ? "recent"
     : preferBestWindow
       ? "segment"
       : "range";
-  const recommendedWindow =
-    recommendationKind === "recent"
+  const fallbackRecommendation = buildHouseFitRecommendation(
+    fallbackRecommendationKind,
+    fallbackRecommendationKind === "recent"
       ? bestTrailingWindow
-      : recommendationKind === "segment"
+        ? [bestTrailingWindow]
+        : []
+      : fallbackRecommendationKind === "segment"
         ? bestWindow
-        : fullRange;
+          ? [bestWindow]
+          : []
+        : fullRange
+          ? [fullRange]
+          : [],
+    fullRange?.totalHouseStarts ?? 0,
+    totalPoints,
+  );
+  const stableSampleGap =
+    stableSample && fullRange ? Math.abs(stableSample.materialPerHouse - fullRange.materialPerHouse) : Number.POSITIVE_INFINITY;
+  const omittedPointCount = stableSample && fullRange ? Math.max(fullRange.pointCount - stableSample.pointCount, 0) : 0;
+  const omittedMaterialActiveDays =
+    stableSample && fullRange ? Math.max(fullRange.materialActiveDays - stableSample.materialActiveDays, 0) : 0;
+  const omittedMaterialActivityRatio = omittedPointCount > 0 ? omittedMaterialActiveDays / omittedPointCount : 1;
+  const hasClearDormantSpan =
+    Boolean(stableSample && fullRange) &&
+    omittedPointCount >= 10 &&
+    omittedMaterialActivityRatio <= 0.2 &&
+    stableSample!.coverageRatio >= 0.2 &&
+    stableSample!.materialPerHouse >= fullRange.materialPerHouse * 1.5;
+  const shouldPreferStableSample =
+    Boolean(stableSample) &&
+    (stableSample!.segments.length >= 2 || hasClearDormantSpan) &&
+    (!fallbackRecommendation ||
+      stableSample!.coverageRatio >= 0.5 ||
+      hasClearDormantSpan ||
+      (fullRange !== null &&
+        stableSampleGap >= Math.max(4, fullRange.materialPerHouse * 0.18) &&
+        stableSample!.alignmentScore >= fallbackRecommendation.alignmentScore - 0.08));
+  const recommendationKind = shouldPreferStableSample ? "segments" : fallbackRecommendationKind;
+  const recommendedSample = shouldPreferStableSample ? stableSample : fallbackRecommendation;
 
   return {
     fullRange,
     bestWindow,
     bestTrailingWindow,
-    recommendedWindow,
+    stableSample,
+    recommendedSample,
     recommendationKind,
     totalPoints,
     minimumWindowPoints,
@@ -968,38 +1178,47 @@ function analyzeHouseFitAcrossOffsets(
 ): HouseFitSearchResult | null {
   const analysesByOffset: Partial<Record<number, HouseFitAnalysis>> = {};
   let recommendedAnalysis: HouseFitAnalysis | null = null;
-  let recommendedWindow: HouseFitWindow | null = null;
+  let recommendedSample: HouseFitRecommendation | null = null;
 
   for (let offsetDays = 0; offsetDays <= maxOffsetDays; offsetDays += 1) {
     const shiftedComparison = buildShiftedWeekdayHouseComparison(houseComparison, history, offsetDays);
     const analysis = shiftedComparison ? analyzeHouseFit(shiftedComparison.points, offsetDays) : null;
-    if (!analysis || !analysis.recommendedWindow) {
+    if (!analysis || !analysis.recommendedSample) {
       continue;
     }
     analysesByOffset[offsetDays] = analysis;
+    const candidateSample = analysis.recommendedSample;
+    const candidateIsStableSample = analysis.recommendationKind === "segments";
+    const currentIsStableSample = recommendedAnalysis?.recommendationKind === "segments";
     if (
-      !recommendedWindow ||
-      analysis.recommendedWindow.score > recommendedWindow.score + 0.0001 ||
-      (Math.abs(analysis.recommendedWindow.score - recommendedWindow.score) <= 0.0001 &&
-        analysis.recommendedWindow.alignmentScore > recommendedWindow.alignmentScore + 0.0001) ||
-      (Math.abs(analysis.recommendedWindow.score - recommendedWindow.score) <= 0.0001 &&
-        Math.abs(analysis.recommendedWindow.alignmentScore - recommendedWindow.alignmentScore) <= 0.0001 &&
-        offsetDays < recommendedWindow.offsetDays)
+      !recommendedSample ||
+      (candidateIsStableSample && !currentIsStableSample) ||
+      (candidateIsStableSample === currentIsStableSample &&
+        (candidateSample.score > recommendedSample.score + 0.0001 ||
+          (Math.abs(candidateSample.score - recommendedSample.score) <= 0.0001 &&
+            candidateSample.coverageRatio > recommendedSample.coverageRatio + 0.0001) ||
+          (Math.abs(candidateSample.score - recommendedSample.score) <= 0.0001 &&
+            Math.abs(candidateSample.coverageRatio - recommendedSample.coverageRatio) <= 0.0001 &&
+            candidateSample.alignmentScore > recommendedSample.alignmentScore + 0.0001) ||
+          (Math.abs(candidateSample.score - recommendedSample.score) <= 0.0001 &&
+            Math.abs(candidateSample.coverageRatio - recommendedSample.coverageRatio) <= 0.0001 &&
+            Math.abs(candidateSample.alignmentScore - recommendedSample.alignmentScore) <= 0.0001 &&
+            offsetDays < recommendedSample.offsetDays)))
     ) {
       recommendedAnalysis = analysis;
-      recommendedWindow = analysis.recommendedWindow;
+      recommendedSample = candidateSample;
     }
   }
 
-  if (!recommendedWindow) {
+  if (!recommendedSample) {
     return null;
   }
 
   return {
     analysesByOffset,
     recommendedAnalysis,
-    recommendedWindow,
-    autoOffsetDays: recommendedWindow.offsetDays,
+    recommendedSample,
+    autoOffsetDays: recommendedSample.offsetDays,
   };
 }
 
@@ -1032,18 +1251,18 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
 
 function HouseFitIndicator({
   selectedAnalysis,
-  recommendedWindow,
+  recommendedSample,
   effectiveOffsetDays,
 }: {
   selectedAnalysis: HouseFitAnalysis | null;
-  recommendedWindow: HouseFitWindow | null;
+  recommendedSample: HouseFitRecommendation | null;
   effectiveOffsetDays: number;
 }) {
-  const selectedWindow = selectedAnalysis?.recommendedWindow || null;
+  const selectedSample = selectedAnalysis?.recommendedSample || null;
   const overall = selectedAnalysis?.fullRange || null;
-  const quality = getHouseFitQuality(selectedWindow?.alignmentScore);
+  const quality = getHouseFitQuality(selectedSample?.alignmentScore);
 
-  if (!selectedWindow) {
+  if (!selectedSample) {
     return (
       <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.03] px-2.5 py-1 text-[11px] font-medium text-zinc-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
         <span className="h-1.5 w-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500" />
@@ -1055,6 +1274,8 @@ function HouseFitIndicator({
   const detailTitle =
     selectedAnalysis?.recommendationKind === "recent"
       ? "Recent regime fit"
+      : selectedAnalysis?.recommendationKind === "segments"
+        ? "Stable sample fit"
       : selectedAnalysis?.recommendationKind === "segment"
         ? "Segment fit"
         : "Range fit";
@@ -1083,12 +1304,29 @@ function HouseFitIndicator({
               <div>Not enough variation to fit the full selected range.</div>
             </div>
           )}
-          {recommendedWindow ? (
+          {recommendedSample ? (
             <div>
               <div className="font-semibold text-zinc-900 dark:text-white">Recommended sample</div>
-              <div>{formatDate(recommendedWindow.startDate)} - {formatDate(recommendedWindow.endDate)}</div>
-              <div>{formatPercent(recommendedWindow.alignmentScore)} aligned · {formatNumber(recommendedWindow.materialPerHouse)} / house · lag {formatNumber(recommendedWindow.offsetDays, 0)} d</div>
-              <div>{formatNumber(recommendedWindow.totalHouseStarts, 0)} starts · {formatNumber(recommendedWindow.totalMaterialQuantity)} material</div>
+              {recommendedSample.segments.length > 1 ? (
+                <>
+                  <div>{recommendedSample.segments.length} stable ranges · {formatPercent(recommendedSample.coverageRatio)} coverage</div>
+                  <div>{formatPercent(recommendedSample.alignmentScore)} aligned · {formatNumber(recommendedSample.materialPerHouse)} / house · lag {formatNumber(recommendedSample.offsetDays, 0)} d</div>
+                  <div>{formatNumber(recommendedSample.totalHouseStarts, 0)} starts · {formatNumber(recommendedSample.totalMaterialQuantity)} material</div>
+                  <div className="pt-1 space-y-0.5 text-[11px]">
+                    {recommendedSample.segments.slice(0, 3).map((segment) => (
+                      <div key={`${segment.startDate}-${segment.endDate}`}>
+                        {formatDate(segment.startDate)} - {formatDate(segment.endDate)}
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>{formatDate(recommendedSample.startDate)} - {formatDate(recommendedSample.endDate)}</div>
+                  <div>{formatPercent(recommendedSample.alignmentScore)} aligned · {formatNumber(recommendedSample.materialPerHouse)} / house · lag {formatNumber(recommendedSample.offsetDays, 0)} d</div>
+                  <div>{formatNumber(recommendedSample.totalHouseStarts, 0)} starts · {formatNumber(recommendedSample.totalMaterialQuantity)} material</div>
+                </>
+              )}
             </div>
           ) : null}
           <div className="pt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
@@ -1243,6 +1481,20 @@ function MovementHistoryCard({
     bufferWeeks,
   });
   const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
+  const stableHouseSample =
+    !isCustomSelection && houseFitAnalysis?.recommendationKind === "segments" ? houseFitAnalysis.recommendedSample : null;
+  const stableHouseSampleLabel = stableHouseSample
+    ? stableHouseSample.segments
+        .slice(0, 2)
+        .map((segment) => `${formatDate(segment.startDate)} - ${formatDate(segment.endDate)}`)
+        .join(" · ")
+    : null;
+  const stableHouseSampleSummaryLabel =
+    stableHouseSample && stableHouseSampleLabel
+      ? stableHouseSample.segments.length > 2
+        ? `${stableHouseSampleLabel} + ${stableHouseSample.segments.length - 2} more`
+        : stableHouseSampleLabel
+      : null;
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
     if (!activeChart) {
@@ -1441,9 +1693,11 @@ function MovementHistoryCard({
               </div>
               <div className="text-xs text-zinc-500 mt-1">
                 {isHouseMode
-                  ? houseSummary
-                    ? `${formatDate(houseSummary.start.date)} - ${formatDate(houseSummary.end.date)}`
-                    : houseComparison
+                  ? stableHouseSampleSummaryLabel
+                    ? stableHouseSampleSummaryLabel
+                    : houseSummary
+                      ? `${formatDate(houseSummary.start.date)} - ${formatDate(houseSummary.end.date)}`
+                      : houseComparison
                       ? `${formatDate(houseComparison.range_start)} - ${formatDate(houseComparison.range_end)}`
                       : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`
                   : summary
@@ -1465,10 +1719,15 @@ function MovementHistoryCard({
                   <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
                     Compare stock against remaining starts across the selected business-day range. Weekend dates are hidden from the view.
                   </p>
+                  {stableHouseSample ? (
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400 max-w-md">
+                      Stable sample excludes low-confidence spans and uses {stableHouseSample.segments.length} aligned ranges.
+                    </p>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <HouseFitIndicator
                       selectedAnalysis={houseFitAnalysis}
-                      recommendedWindow={houseFitSearch?.recommendedWindow || null}
+                      recommendedSample={houseFitSearch?.recommendedSample || null}
                       effectiveOffsetDays={effectiveHouseOffsetDays}
                     />
                     <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1 py-1 dark:border-white/10 dark:bg-white/[0.03]">
@@ -1969,7 +2228,24 @@ function MovementHistoryCard({
           </div>
 
           {isHouseMode ? (
-            houseSummary ? (
+            stableHouseSample ? (
+              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Coverage</div>
+                  <div className="text-lg font-medium text-zinc-900 dark:text-white">{formatPercent(stableHouseSample.coverageRatio)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Cons./house</div>
+                  <div className="text-lg font-medium text-zinc-900 dark:text-white">
+                    {formatNumber(stableHouseSample.materialPerHouse)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Houses Used</div>
+                  <div className="text-lg font-medium text-zinc-900 dark:text-white">{formatNumber(stableHouseSample.totalHouseStarts, 0)}</div>
+                </div>
+              </div>
+            ) : houseSummary ? (
               <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
                 <div>
                   <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
