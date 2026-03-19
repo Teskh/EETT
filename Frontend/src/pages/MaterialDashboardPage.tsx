@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, startTransition, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor";
 import { ApiError, api } from "../lib/api";
@@ -37,6 +37,7 @@ const currencyFormatter = new Intl.NumberFormat("es-CL", {
   maximumFractionDigits: 0,
 });
 const DEFAULT_HOUSE_RANGE_DAYS = 90;
+const LIST_PAGE_SIZE = 50;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const HOUSE_VIEW_PREFERENCES_KEY = "material-dashboard::house-view-preferences";
 const CECO_FILTER_PREFERENCES_KEY = "material-dashboard::ceco-filter-preferences";
@@ -782,6 +783,306 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
+function SkeletonBlock({ className }: { className: string }) {
+  return <div className={`animate-pulse rounded-full bg-zinc-200/85 dark:bg-white/10 ${className}`} />;
+}
+
+function TrendChartSkeleton({ dualSeries = false }: { dualSeries?: boolean }) {
+  return (
+    <div className="absolute inset-0 overflow-hidden rounded-3xl border border-black/5 bg-zinc-50/60 p-4 dark:border-white/5 dark:bg-white/[0.02]">
+      <div className="flex h-full flex-col">
+        <div className="flex items-center justify-between gap-3">
+          <SkeletonBlock className="h-4 w-32" />
+          <div className="flex items-center gap-2">
+            <SkeletonBlock className="h-6 w-16" />
+            {dualSeries ? <SkeletonBlock className="h-6 w-24" /> : null}
+          </div>
+        </div>
+        <div className="relative mt-4 flex-1 overflow-hidden rounded-2xl border border-black/5 bg-white/70 px-4 py-3 dark:border-white/5 dark:bg-black/20">
+          {[14, 34, 54, 74].map((top) => (
+            <div
+              key={top}
+              className="absolute left-12 right-4 h-px bg-zinc-200/80 dark:bg-white/10"
+              style={{ top: `${top}%` }}
+            />
+          ))}
+          <svg
+            viewBox="0 0 100 60"
+            preserveAspectRatio="none"
+            className="absolute inset-x-12 bottom-8 top-10 h-auto w-auto overflow-visible"
+            aria-hidden="true"
+          >
+            <path
+              d="M2 16 C18 18, 28 23, 42 30 S70 43, 98 52"
+              fill="none"
+              stroke="rgb(253 186 116 / 0.9)"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+              className="dark:stroke-[rgba(251,191,36,0.28)]"
+            />
+            {dualSeries ? (
+              <path
+                d="M2 10 C18 14, 32 18, 47 27 S75 38, 98 46"
+                fill="none"
+                stroke="rgb(203 213 225 / 0.95)"
+                strokeWidth="2.8"
+                strokeLinecap="round"
+                className="dark:stroke-[rgba(226,232,240,0.24)]"
+              />
+            ) : null}
+          </svg>
+          <div className="absolute bottom-3 left-12 right-4 flex items-center justify-between">
+            <SkeletonBlock className="h-3 w-20" />
+            <SkeletonBlock className="h-3 w-20" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MovementBreakdownSkeleton() {
+  return (
+    <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <SkeletonBlock className="h-3 w-36" />
+          <SkeletonBlock className="mt-2 h-3 w-28" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <SkeletonBlock className="h-7 w-20" />
+          <SkeletonBlock className="h-7 w-20" />
+          <SkeletonBlock className="h-7 w-20" />
+        </div>
+      </div>
+
+      <div className="mt-3 h-[300px] overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+        <div className="h-full divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div
+              key={index}
+              className="grid min-h-[74px] gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <SkeletonBlock className="h-4 w-24" />
+                  <SkeletonBlock className="h-5 w-16" />
+                  <SkeletonBlock className="h-5 w-16" />
+                  <SkeletonBlock className="h-5 w-20" />
+                </div>
+                <SkeletonBlock className="mt-2 h-3 w-3/4 max-w-[320px]" />
+              </div>
+              <div className="flex flex-col items-start gap-2 md:items-end">
+                <SkeletonBlock className="h-5 w-16" />
+                <SkeletonBlock className="h-3 w-12" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SidebarSearchInput = memo(function SidebarSearchInput({
+  value,
+  pending,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  pending: boolean;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="relative">
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-10 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+        placeholder={placeholder}
+      />
+      <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+      {pending ? <span className="pointer-events-none absolute right-4 top-1/2 h-2.5 w-2.5 -translate-y-1/2 animate-pulse rounded-full bg-accent-500/90" /> : null}
+    </div>
+  );
+});
+
+const MaterialResultsList = memo(function MaterialResultsList({
+  loading,
+  rows,
+  hasMore,
+  selectedMaterialSku,
+  onSelect,
+}: {
+  loading: boolean;
+  rows: MaterialDashboardListRow[];
+  hasMore: boolean;
+  selectedMaterialSku: string | null;
+  onSelect: (key: string) => void;
+}) {
+  if (loading) {
+    return <div className="p-10 text-center text-sm text-zinc-500">Loading materials...</div>;
+  }
+
+  if (!rows.length) {
+    return <div className="p-10 text-center text-sm text-zinc-500">No materials match the current filters.</div>;
+  }
+
+  return (
+    <div className="divide-y divide-black/5 dark:divide-white/5">
+      {rows.map((row) => {
+        const active = row.sku === selectedMaterialSku;
+        return (
+          <div
+            key={row.sku}
+            onClick={() => onSelect(`material:${row.sku}`)}
+            className={`cursor-pointer p-4 transition-colors ${
+              active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
+            }`}
+          >
+            {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
+            <div className="flex justify-between items-start gap-4 mb-2">
+              <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
+                {row.material_name}
+              </h4>
+              <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                {row.sku}
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs text-zinc-500">
+              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "units"} (60d)</div>
+              <div>Last mov: {formatDate(row.last_movement_date)}</div>
+            </div>
+          </div>
+        );
+      })}
+      {hasMore ? <div className="px-4 py-3 text-[11px] font-medium text-zinc-400">Scroll to load more materials...</div> : null}
+    </div>
+  );
+});
+
+const CecoResultsList = memo(function CecoResultsList({
+  rows,
+  hasMore,
+  selectedCecoSet,
+  cecoFilterMode,
+  onToggle,
+}: {
+  rows: MaterialDashboardCeco[];
+  hasMore: boolean;
+  selectedCecoSet: Set<string>;
+  cecoFilterMode: CecoFilterMode;
+  onToggle: (code: string) => void;
+}) {
+  if (!rows.length) {
+    return <div className="py-6 text-sm text-zinc-500 text-center">No cost centers match.</div>;
+  }
+
+  return (
+    <div className="space-y-1">
+      {rows.map((ceco) => {
+        const isSelected = selectedCecoSet.has(ceco.code);
+        return (
+          <label
+            key={ceco.code}
+            className={`flex items-start gap-3 p-2.5 rounded-xl cursor-pointer transition-colors ${
+              isSelected
+                ? cecoFilterMode === "exclude"
+                  ? "bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20"
+                  : "bg-accent-50 dark:bg-accent-500/10 hover:bg-accent-100 dark:hover:bg-accent-500/20"
+                : "hover:bg-zinc-100 dark:hover:bg-white/5"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggle(ceco.code)}
+              className="mt-1 flex-shrink-0"
+            />
+            <span className="min-w-0 flex-1">
+              <span
+                className={`block text-sm font-medium truncate ${
+                  isSelected
+                    ? cecoFilterMode === "exclude"
+                      ? "text-rose-900 dark:text-rose-100"
+                      : "text-accent-900 dark:text-accent-100"
+                    : "text-zinc-900 dark:text-white"
+                }`}
+              >
+                {ceco.name || ceco.code}
+              </span>
+              <span
+                className={`block text-[10px] uppercase tracking-wider ${
+                  isSelected
+                    ? cecoFilterMode === "exclude"
+                      ? "text-rose-700 dark:text-rose-300"
+                      : "text-accent-700 dark:text-accent-300"
+                    : "text-zinc-500"
+                }`}
+              >
+                {ceco.code}
+              </span>
+            </span>
+          </label>
+        );
+      })}
+      {hasMore ? <div className="px-2 py-3 text-[11px] font-medium text-zinc-400">Scroll to load more CECOs...</div> : null}
+    </div>
+  );
+});
+
+const GroupResultsList = memo(function GroupResultsList({
+  rows,
+  selectedGroupId,
+  onSelect,
+}: {
+  rows: MaterialStudyGroupRow[];
+  selectedGroupId: number | null;
+  onSelect: (key: string) => void;
+}) {
+  if (!rows.length) {
+    return <div className="p-10 text-center text-sm text-zinc-500">No groups match the current filters.</div>;
+  }
+
+  return (
+    <div className="divide-y divide-black/5 dark:divide-white/5">
+      {rows.map((row) => {
+        const active = row.group_id === selectedGroupId;
+        return (
+          <div
+            key={row.group_id}
+            onClick={() => onSelect(`group:${row.group_id}`)}
+            className={`cursor-pointer p-4 transition-colors ${
+              active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
+            }`}
+          >
+            {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
+            <div className="flex justify-between items-start gap-4 mb-2">
+              <div>
+                <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
+                  {row.name}
+                </h4>
+                <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} members</div>
+              </div>
+              <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                {row.study_unit}
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-xs text-zinc-500">
+              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} (60d)</div>
+              <div>Last mov: {formatDate(row.last_movement_date)}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 function MovementBreakdownList({
   movements,
   loading,
@@ -793,6 +1094,10 @@ function MovementBreakdownList({
   rangeStart: string | null;
   rangeEnd: string | null;
 }) {
+  if (loading) {
+    return <MovementBreakdownSkeleton />;
+  }
+
   const totalQuantity = movements.reduce((sum, movement) => sum + (Number(movement.quantity) || 0), 0);
   const uniqueCecos = new Set(movements.map((movement) => movement.ceco).filter(Boolean)).size;
 
@@ -812,9 +1117,9 @@ function MovementBreakdownList({
         </div>
       </div>
 
-      <div className="mt-3 overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 h-[300px] overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
-          <div className="max-h-[300px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+          <div className="h-full divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
             {movements.map((movement, index) => {
               const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
               const titleParts = [
@@ -864,17 +1169,17 @@ function MovementBreakdownList({
               );
             })}
           </div>
-        ) : loading ? (
-          <div className="px-4 py-8 text-sm text-zinc-500">Loading movement details...</div>
         ) : (
-          <div className="px-4 py-8 text-sm text-zinc-500">No outgoing movements fell within this plotted period.</div>
+          <div className="flex h-full items-center justify-center px-4 py-8 text-sm text-zinc-500">
+            No outgoing movements fell within this plotted period.
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function MovementHistoryCard({
+const MovementHistoryCard = memo(function MovementHistoryCard({
   selected,
   detail,
   history,
@@ -884,7 +1189,6 @@ function MovementHistoryCard({
   onSelectHouseType,
   houseRange,
   onHouseRangeChange,
-  onResetHouseRange,
   houseComparison,
   detailLoading,
   historyLoading,
@@ -892,6 +1196,7 @@ function MovementHistoryCard({
   detailRefreshing,
   historyRefreshing,
   houseComparisonRefreshing,
+  historyError,
   houseComparisonError,
 }: {
   selected: DashboardSelectionRow | null;
@@ -903,7 +1208,6 @@ function MovementHistoryCard({
   onSelectHouseType: (houseTypeId: number) => void;
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
-  onResetHouseRange: () => void;
   houseComparison: DashboardHouseComparisonLike | null;
   detailLoading: boolean;
   historyLoading: boolean;
@@ -911,6 +1215,7 @@ function MovementHistoryCard({
   detailRefreshing: boolean;
   historyRefreshing: boolean;
   houseComparisonRefreshing: boolean;
+  historyError: string | null;
   houseComparisonError: string | null;
 }) {
   const [selection, setSelection] = useState<ChartSelection | null>(null);
@@ -999,7 +1304,9 @@ function MovementHistoryCard({
   const hoveredPoint = chart && hoveredPointIndex !== null ? chart.points[hoveredPointIndex] || null : null;
   const houseChartHoveredPoint = houseChart && hoveredPointIndex !== null ? houseChart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
-  const isBlockingLoad = (!detail && detailLoading) || (!history && historyLoading);
+  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
+  const isBlockingLoad = !historyError && (!detail || !history);
+  const isHouseBlockingLoad = !historyError && !houseComparisonError && Boolean(selectedHouseType) && (!detail || !history || !houseComparison);
   const isRefreshing = detailRefreshing || historyRefreshing;
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
   const leadTimeReference = getLeadTimeReference(detail);
@@ -1009,7 +1316,6 @@ function MovementHistoryCard({
     isCustomSelection,
     bufferWeeks,
   });
-  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
   const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
   const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
@@ -1236,7 +1542,7 @@ function MovementHistoryCard({
                       />
                       <button
                         type="button"
-                        onClick={onResetHouseRange}
+                        onClick={() => onHouseRangeChange(getDefaultHouseRange())}
                         className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
                       >
                         90d
@@ -1297,8 +1603,8 @@ function MovementHistoryCard({
             {isHouseMode ? (
               !selectedHouseType ? (
                 <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house types available.</div>
-              ) : houseComparisonLoading && !houseComparison ? (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">Loading house-start comparison...</div>
+              ) : isHouseBlockingLoad ? (
+                <TrendChartSkeleton dualSeries />
               ) : houseComparison && houseChart ? (
                 <svg
                   viewBox={`0 0 ${houseChart.width} ${houseChart.height}`}
@@ -1549,7 +1855,7 @@ function MovementHistoryCard({
                 <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house-start data available for this range and house type.</div>
               )
             ) : isBlockingLoad ? (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">Loading movement history...</div>
+              <TrendChartSkeleton />
             ) : history && chart ? (
               <svg
                 viewBox={`0 0 ${chart.width} ${chart.height}`}
@@ -1730,7 +2036,7 @@ function MovementHistoryCard({
           {isHouseMode ? (
             <MovementBreakdownList
               movements={filteredHouseMovementDetails}
-              loading={historyLoading && !history}
+              loading={!history && !historyError}
               rangeStart={activeHouseMovementRangeStart}
               rangeEnd={activeHouseMovementRangeEnd}
             />
@@ -1859,7 +2165,7 @@ function MovementHistoryCard({
       </div>
     </section>
   );
-}
+});
 
 export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups?: boolean }) {
   const storedCecoPreferences = getStoredCecoFilterPreferences();
@@ -1878,6 +2184,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [activeTab, setActiveTab] = useState<"materials" | "groups" | "cecos">("materials");
   const [viewMode, setViewMode] = useState<DashboardViewMode>("stock");
   const [cecoSearch, setCecoSearch] = useState("");
+  const [materialSearchInput, setMaterialSearchInput] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -1897,6 +2204,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [houseComparisonError, setHouseComparisonError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [visibleMaterialCount, setVisibleMaterialCount] = useState(LIST_PAGE_SIZE);
+  const [visibleCecoCount, setVisibleCecoCount] = useState(LIST_PAGE_SIZE);
   const deferredMaterialSearch = useDeferredValue(materialSearch);
   const cecoRefreshNonceRef = useRef(0);
   const dashboardRefreshNonceRef = useRef(0);
@@ -1908,7 +2217,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const groupHistoryRefreshNonceRef = useRef(0);
   const groupHouseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
-  const selectedCecoSet = new Set(normalizedSelectedCecoCodes);
+  const selectedCecoSet = useMemo(() => new Set(normalizedSelectedCecoCodes), [normalizedSelectedCecoCodes]);
   const normalizedSelectedCecos =
     cecoFilterMode === "exclude"
       ? normalizeCecos(cecos.map((ceco) => ceco.code).filter((code) => !selectedCecoSet.has(code)))
@@ -2585,32 +2894,49 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, viewMode]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
-  const rows = (data?.materials || [])
-    .filter((row) => {
-      if (!normalizedMaterialSearch) {
-        return true;
-      }
-      return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.sku.toLowerCase().includes(normalizedMaterialSearch);
-    })
-    .slice()
-    .sort((left, right) => compareRows(left, right, sort));
-  const groupRows = (groupData?.groups || [])
-    .filter((row) => {
-      if (!normalizedMaterialSearch) {
-        return true;
-      }
-      return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.name.toLowerCase().includes(normalizedMaterialSearch);
-    })
-    .slice()
-    .sort((left, right) => compareRows(left, right, sort));
+  const isMaterialSearchPending = materialSearchInput !== deferredMaterialSearch;
+  const rows = useMemo(
+    () =>
+      (data?.materials || [])
+        .filter((row) => {
+          if (!normalizedMaterialSearch) {
+            return true;
+          }
+          return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.sku.toLowerCase().includes(normalizedMaterialSearch);
+        })
+        .slice()
+        .sort((left, right) => compareRows(left, right, sort)),
+    [data?.materials, normalizedMaterialSearch, sort],
+  );
+  const groupRows = useMemo(
+    () =>
+      (groupData?.groups || [])
+        .filter((row) => {
+          if (!normalizedMaterialSearch) {
+            return true;
+          }
+          return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.name.toLowerCase().includes(normalizedMaterialSearch);
+        })
+        .slice()
+        .sort((left, right) => compareRows(left, right, sort)),
+    [groupData?.groups, normalizedMaterialSearch, sort],
+  );
 
-  const filteredCecos = cecos.filter((ceco) => {
+  const filteredCecos = useMemo(() => {
     const term = cecoSearch.trim().toLowerCase();
-    if (!term) {
-      return true;
-    }
-    return ceco.code.toLowerCase().includes(term) || ceco.name.toLowerCase().includes(term);
-  });
+    return cecos.filter((ceco) => {
+      if (!term) {
+        return true;
+      }
+      return ceco.code.toLowerCase().includes(term) || ceco.name.toLowerCase().includes(term);
+    });
+  }, [cecoSearch, cecos]);
+  const shouldLimitMaterialRows = !normalizedMaterialSearch;
+  const shouldLimitCecos = !cecoSearch.trim();
+  const visibleMaterialRows = shouldLimitMaterialRows ? rows.slice(0, visibleMaterialCount) : rows;
+  const visibleCecos = shouldLimitCecos ? filteredCecos.slice(0, visibleCecoCount) : filteredCecos;
+  const hasMoreMaterialRows = shouldLimitMaterialRows && visibleMaterialRows.length < rows.length;
+  const hasMoreCecos = shouldLimitCecos && visibleCecos.length < filteredCecos.length;
 
   function toggleSort(key: SortKey) {
     setSort((current) => (current.key === key ? { key, direction: current.direction === 1 ? -1 : 1 } : { key, direction: -1 }));
@@ -2624,6 +2950,28 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   function handleReload() {
     setRefreshNonce((current) => current + 1);
+  }
+
+  function handleMaterialSearchChange(value: string) {
+    setMaterialSearchInput(value);
+    startTransition(() => {
+      setMaterialSearch(value);
+    });
+  }
+
+  function maybeLoadMoreRows(
+    element: HTMLDivElement,
+    visibleCount: number,
+    totalCount: number,
+    setVisibleCount: (updater: (current: number) => number) => void,
+  ) {
+    if (visibleCount >= totalCount) {
+      return;
+    }
+    if (element.scrollTop + element.clientHeight < element.scrollHeight - 120) {
+      return;
+    }
+    setVisibleCount((current) => Math.min(current + LIST_PAGE_SIZE, totalCount));
   }
 
   function handleResetCecoFilter() {
@@ -2647,6 +2995,14 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       setSelectedKey(`group:${groupRows[0].group_id}`);
     }
   }, [activeTab, groupRows, rows, selectedGroupRow, selectedMaterialRow]);
+
+  useEffect(() => {
+    setVisibleMaterialCount(LIST_PAGE_SIZE);
+  }, [currentDashboardKey, normalizedMaterialSearch, sort.direction, sort.key]);
+
+  useEffect(() => {
+    setVisibleCecoCount(LIST_PAGE_SIZE);
+  }, [cecoFilterMode, cecoSearch, cecos.length]);
 
   return (
     <div className="absolute inset-0 top-16 flex flex-col xl:flex-row overflow-hidden bg-zinc-50 dark:bg-zinc-950/40 z-30">
@@ -2708,17 +3064,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           {activeTab === "materials" ? (
             <div className="flex-1 flex flex-col min-h-0">
               <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
-                <div className="relative">
-                  <input
-                    value={materialSearch}
-                    onChange={(event) => setMaterialSearch(event.target.value)}
-                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
-                    placeholder="SKU or material name"
-                  />
-                  <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
+                <SidebarSearchInput
+                  value={materialSearchInput}
+                  pending={isMaterialSearchPending}
+                  placeholder="SKU or material name"
+                  onChange={handleMaterialSearchChange}
+                />
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -2760,57 +3111,30 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 ) : null}
               </div>
 
-              <div className="flex-1 overflow-y-auto">
-                {loading ? (
-                  <div className="p-10 text-center text-sm text-zinc-500">Loading materials...</div>
-                ) : rows.length ? (
-                  <div className="divide-y divide-black/5 dark:divide-white/5">
-                    {rows.map((row) => {
-                      const active = row.sku === selectedMaterialSku;
-                      return (
-                        <div
-                          key={row.sku}
-                          onClick={() => setSelectedKey(`material:${row.sku}`)}
-                          className={`cursor-pointer p-4 transition-colors ${
-                            active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
-                          }`}
-                        >
-                          {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
-                          <div className="flex justify-between items-start gap-4 mb-2">
-                            <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
-                              {row.material_name}
-                            </h4>
-                            <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
-                              {row.sku}
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between text-xs text-zinc-500">
-                            <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || 'units'} (60d)</div>
-                            <div>Last mov: {formatDate(row.last_movement_date)}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="p-10 text-center text-sm text-zinc-500">No materials match the current filters.</div>
-                )}
+              <div
+                className="flex-1 overflow-y-auto"
+                onScroll={(event) =>
+                  maybeLoadMoreRows(event.currentTarget, visibleMaterialRows.length, rows.length, setVisibleMaterialCount)
+                }
+              >
+                <MaterialResultsList
+                  loading={loading}
+                  rows={visibleMaterialRows}
+                  hasMore={hasMoreMaterialRows}
+                  selectedMaterialSku={selectedMaterialSku}
+                  onSelect={setSelectedKey}
+                />
               </div>
             </div>
           ) : activeTab === "groups" ? (
             <div className="flex-1 flex flex-col min-h-0">
               <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
-                <div className="relative">
-                  <input
-                    value={materialSearch}
-                    onChange={(event) => setMaterialSearch(event.target.value)}
-                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
-                    placeholder="Group name"
-                  />
-                  <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                </div>
+                <SidebarSearchInput
+                  value={materialSearchInput}
+                  pending={isMaterialSearchPending}
+                  placeholder="Group name"
+                  onChange={handleMaterialSearchChange}
+                />
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -2855,41 +3179,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
               </div>
 
               <div className="flex-1 overflow-y-auto">
-                {groupRows.length ? (
-                  <div className="divide-y divide-black/5 dark:divide-white/5">
-                    {groupRows.map((row) => {
-                      const active = row.group_id === selectedGroupId;
-                      return (
-                        <div
-                          key={row.group_id}
-                          onClick={() => setSelectedKey(`group:${row.group_id}`)}
-                          className={`cursor-pointer p-4 transition-colors ${
-                            active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
-                          }`}
-                        >
-                          {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
-                          <div className="flex justify-between items-start gap-4 mb-2">
-                            <div>
-                              <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
-                                {row.name}
-                              </h4>
-                              <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} members</div>
-                            </div>
-                            <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
-                              {row.study_unit}
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between text-xs text-zinc-500">
-                            <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} (60d)</div>
-                            <div>Last mov: {formatDate(row.last_movement_date)}</div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="p-10 text-center text-sm text-zinc-500">No groups match the current filters.</div>
-                )}
+                <GroupResultsList rows={groupRows} selectedGroupId={selectedGroupId} onSelect={setSelectedKey} />
               </div>
             </div>
           ) : (
@@ -2963,59 +3253,19 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 ) : null}
               </div>
 
-              <div className="flex-1 overflow-y-auto px-2 lg:px-4 py-2">
-                {filteredCecos.length ? (
-                  <div className="space-y-1">
-                    {filteredCecos.map((ceco) => {
-                      const isSelected = selectedCecoSet.has(ceco.code);
-                      return (
-                        <label
-                          key={ceco.code}
-                          className={`flex items-start gap-3 p-2.5 rounded-xl cursor-pointer transition-colors ${
-                            isSelected
-                              ? cecoFilterMode === "exclude"
-                                ? "bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20"
-                                : "bg-accent-50 dark:bg-accent-500/10 hover:bg-accent-100 dark:hover:bg-accent-500/20"
-                              : "hover:bg-zinc-100 dark:hover:bg-white/5"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleCecoSelection(ceco.code)}
-                            className="mt-1 flex-shrink-0"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span
-                              className={`block text-sm font-medium truncate ${
-                                isSelected
-                                  ? cecoFilterMode === "exclude"
-                                    ? "text-rose-900 dark:text-rose-100"
-                                    : "text-accent-900 dark:text-accent-100"
-                                  : "text-zinc-900 dark:text-white"
-                              }`}
-                            >
-                              {ceco.name || ceco.code}
-                            </span>
-                            <span
-                              className={`block text-[10px] uppercase tracking-wider ${
-                                isSelected
-                                  ? cecoFilterMode === "exclude"
-                                    ? "text-rose-700 dark:text-rose-300"
-                                    : "text-accent-700 dark:text-accent-300"
-                                  : "text-zinc-500"
-                              }`}
-                            >
-                              {ceco.code}
-                            </span>
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="py-6 text-sm text-zinc-500 text-center">No cost centers match.</div>
-                )}
+              <div
+                className="flex-1 overflow-y-auto px-2 lg:px-4 py-2"
+                onScroll={(event) =>
+                  maybeLoadMoreRows(event.currentTarget, visibleCecos.length, filteredCecos.length, setVisibleCecoCount)
+                }
+              >
+                <CecoResultsList
+                  rows={visibleCecos}
+                  hasMore={hasMoreCecos}
+                  selectedCecoSet={selectedCecoSet}
+                  cecoFilterMode={cecoFilterMode}
+                  onToggle={toggleCecoSelection}
+                />
               </div>
             </div>
           )}
@@ -3031,10 +3281,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           viewMode={viewMode}
           houseTypes={houseTypes}
           selectedHouseTypeId={selectedHouseTypeId}
-          onSelectHouseType={(houseTypeId) => setSelectedHouseTypeId(houseTypeId)}
+          onSelectHouseType={setSelectedHouseTypeId}
           houseRange={houseRange}
           onHouseRangeChange={setHouseRange}
-          onResetHouseRange={() => setHouseRange(getDefaultHouseRange())}
           houseComparison={selectedHouseComparisonLike}
           detailLoading={detailLoading}
           historyLoading={historyLoading}
@@ -3042,6 +3291,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           detailRefreshing={detailLoading && Boolean(selectedDetailLike)}
           historyRefreshing={historyLoading && Boolean(selectedHistoryLike)}
           houseComparisonRefreshing={houseComparisonLoading && Boolean(selectedHouseComparisonLike)}
+          historyError={historyError}
           houseComparisonError={houseComparisonError}
         />
       </main>
