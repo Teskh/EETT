@@ -75,6 +75,15 @@ export type MaterialDashboardMovementPoint = {
   quantity: number;
 };
 
+export type MaterialDashboardMovementDetail = {
+  date: string;
+  quantity: number;
+  ceco: string | null;
+  ceco_name: string | null;
+  movement_internal_number: string | null;
+  line_count: number;
+};
+
 export type MaterialDashboardMovementData = {
   sku: string;
   movement_days: number;
@@ -82,6 +91,7 @@ export type MaterialDashboardMovementData = {
   range_start: string | null;
   range_end: string | null;
   movements: MaterialDashboardMovementPoint[];
+  movement_details?: MaterialDashboardMovementDetail[];
   generated_at: string;
 };
 

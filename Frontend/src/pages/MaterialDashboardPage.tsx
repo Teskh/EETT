@@ -10,6 +10,7 @@ import type {
   MaterialDashboardHouseComparisonPoint,
   MaterialDashboardHouseType,
   MaterialDashboardListRow,
+  MaterialDashboardMovementDetail,
   MaterialDashboardMovementData,
   MaterialDashboardMovementPoint,
 } from "../lib/types";
@@ -78,6 +79,17 @@ function formatDate(value: string | null | undefined) {
     return value;
   }
   return date.toLocaleDateString("es-CL", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function isDateWithinRange(value: string, startDate: string | null | undefined, endDate: string | null | undefined) {
+  const time = toStartOfDay(value).getTime();
+  if (startDate && time < toStartOfDay(startDate).getTime()) {
+    return false;
+  }
+  if (endDate && time > toStartOfDay(endDate).getTime()) {
+    return false;
+  }
+  return true;
 }
 
 const CECO_CACHE_KEY = "material-dashboard::cecos";
@@ -726,6 +738,89 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
+function MovementBreakdownList({
+  movements,
+  loading,
+  rangeStart,
+  rangeEnd,
+}: {
+  movements: MaterialDashboardMovementDetail[];
+  loading: boolean;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+}) {
+  const totalQuantity = movements.reduce((sum, movement) => sum + (Number(movement.quantity) || 0), 0);
+  const uniqueCecos = new Set(movements.map((movement) => movement.ceco).filter(Boolean)).size;
+
+  return (
+    <div className="mt-6 pt-6 border-t border-black/5 dark:border-white/5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Movement Breakdown</h4>
+          <p className="mt-1 text-xs text-zinc-500">
+            {formatDate(rangeStart)} - {formatDate(rangeEnd)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(movements.length, 0)} movs.</span>
+          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(uniqueCecos, 0)} CECOs</span>
+          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(totalQuantity)} qty</span>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+        {movements.length ? (
+          <div className="max-h-[220px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+            {movements.map((movement, index) => {
+              const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
+              const titleParts = [
+                `Fecha: ${formatDate(movement.date)}`,
+                `Cantidad: ${formatNumber(movement.quantity)}`,
+                `CECO: ${cecoLabel}`,
+                movement.movement_internal_number ? `Mov. ERP: ${movement.movement_internal_number}` : null,
+                movement.line_count > 0 ? `Lineas SKU: ${formatNumber(movement.line_count, 0)}` : null,
+              ].filter(Boolean);
+              return (
+                <div
+                  key={`${movement.date}-${movement.movement_internal_number ?? "movement"}-${index}`}
+                  title={titleParts.join("\n")}
+                  className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-white">{formatDate(movement.date)}</span>
+                      <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
+                        {movement.ceco ?? "No CECO"}
+                      </span>
+                      {movement.movement_internal_number ? (
+                        <span className="rounded-full border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
+                          ERP {movement.movement_internal_number}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-zinc-500">
+                      {movement.ceco_name || "No CECO description"}
+                      {movement.line_count > 0 ? ` • ${formatNumber(movement.line_count, 0)} lineas SKU` : ""}
+                    </p>
+                  </div>
+                  <div className="text-left md:text-right">
+                    <div className="text-base font-semibold text-zinc-900 dark:text-white">{formatNumber(movement.quantity)}</div>
+                    <div className="text-[11px] text-zinc-500">Salida</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : loading ? (
+          <div className="px-4 py-8 text-sm text-zinc-500">Loading movement details...</div>
+        ) : (
+          <div className="px-4 py-8 text-sm text-zinc-500">No outgoing movements fell within this plotted period.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MovementHistoryCard({
   selected,
   detail,
@@ -860,6 +955,11 @@ function MovementHistoryCard({
     bufferWeeks,
   });
   const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
+  const activeHouseMovementRangeStart = houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate;
+  const activeHouseMovementRangeEnd = houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate;
+  const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
+    isDateWithinRange(movement.date, activeHouseMovementRangeStart, activeHouseMovementRangeEnd),
+  );
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
     if (!activeChart) {
@@ -982,8 +1082,24 @@ function MovementHistoryCard({
         </div>
         <div className="flex gap-6 items-end">
           <div className="text-right">
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Stock on Hand</div>
-            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"}</div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
+              {isHouseMode ? "Cons./House" : "Stock on Hand"}
+            </div>
+            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+              {isHouseMode
+                ? houseSummary
+                  ? formatNumber(houseSummary.averageConsumptionPerHouse)
+                  : houseComparisonInRange
+                    ? formatNumber(houseComparisonInRange.material_per_house)
+                    : houseComparisonLoading
+                      ? "..."
+                      : "—"
+                : detail
+                  ? formatNumber(detail.stock_on_hand)
+                  : detailLoading
+                    ? "..."
+                    : "—"}
+            </div>
           </div>
           <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           <div className="text-right">
@@ -1080,7 +1196,7 @@ function MovementHistoryCard({
                     </div>
                   </div>
                   <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                    Compare stock against remaining starts across the selected business-day range. Weekend dates are hidden from the view.
+                    Compare stock against remaining starts across the selected business-day range. Drag across the chart to focus a period; the movement list below follows the same dates.
                   </p>
                 </>
               ) : (
@@ -1542,34 +1658,12 @@ function MovementHistoryCard({
           </div>
 
           {isHouseMode ? (
-            houseSummary ? (
-              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
-                  <div
-                    className={`text-lg font-medium ${
-                      houseSummary.stockDelta === null
-                        ? "text-zinc-900 dark:text-white"
-                        : houseSummary.stockDelta < 0
-                          ? "text-red-600 dark:text-red-400"
-                          : "text-emerald-600 dark:text-emerald-400"
-                    }`}
-                  >
-                    {houseSummary.stockDelta === null ? "—" : formatSignedNumber(houseSummary.stockDelta)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Cons./house</div>
-                  <div className="text-lg font-medium text-zinc-900 dark:text-white">
-                    {formatNumber(houseSummary.averageConsumptionPerHouse)}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Houses Prod.</div>
-                  <div className="text-lg font-medium text-zinc-900 dark:text-white">{formatNumber(houseSummary.housesProduced, 0)}</div>
-                </div>
-              </div>
-            ) : null
+            <MovementBreakdownList
+              movements={filteredHouseMovementDetails}
+              loading={historyLoading && !history}
+              rangeStart={activeHouseMovementRangeStart}
+              rangeEnd={activeHouseMovementRangeEnd}
+            />
           ) : history && chart ? (
             <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
               <div>

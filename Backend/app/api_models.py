@@ -633,6 +633,15 @@ class MaterialDashboardMovementPointModel(BaseModel):
     quantity: float
 
 
+class MaterialDashboardMovementDetailModel(BaseModel):
+    date: str
+    quantity: float
+    ceco: str | None
+    ceco_name: str | None
+    movement_internal_number: str | None
+    line_count: int
+
+
 class MaterialDashboardMovementResponse(BaseModel):
     sku: str
     movement_days: int
@@ -640,6 +649,7 @@ class MaterialDashboardMovementResponse(BaseModel):
     range_start: str | None
     range_end: str | None
     movements: list[MaterialDashboardMovementPointModel] = Field(default_factory=list)
+    movement_details: list[MaterialDashboardMovementDetailModel] = Field(default_factory=list)
     generated_at: str
 
 

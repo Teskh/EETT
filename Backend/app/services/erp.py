@@ -334,6 +334,47 @@ def get_material_movement_history(
         raise RuntimeError(f"Could not load ERP movement history for {normalized_sku}") from exc
 
 
+def get_material_movement_details(
+    settings: Settings,
+    sku: str,
+    *,
+    days: int = 90,
+    start_day: date | None = None,
+    end_day: date | None = None,
+    cost_centers: Sequence[str] | None = None,
+    excluded_cost_centers: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    normalized_sku = sku.strip().upper()
+    if not normalized_sku:
+        return []
+
+    requested_end_day = end_day or datetime.utcnow().date()
+    requested_start_day = start_day
+    if requested_start_day is None:
+        window_days = max(int(days), 1)
+        requested_start_day = requested_end_day - timedelta(days=window_days - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_day must be on or before end_day")
+
+    ceco_filters = _normalize_cost_centers(cost_centers)
+    excluded_ceco_filters = _normalize_cost_centers(excluded_cost_centers)
+
+    try:
+        with _open_connection(settings) as connection:
+            cursor = connection.cursor()
+            return _get_outgoing_movement_details_for_product(
+                cursor,
+                product_code=normalized_sku,
+                start_day=requested_start_day,
+                end_day=requested_end_day,
+                cost_centers=ceco_filters,
+                excluded_cost_centers=excluded_ceco_filters,
+            )
+    except Exception as exc:
+        logger.warning("ERP movement detail lookup failed for %s: %s", normalized_sku, exc)
+        raise RuntimeError(f"Could not load ERP movement details for {normalized_sku}") from exc
+
+
 def _fetch_recent_movement_materials(
     cursor,
     *,
@@ -596,6 +637,76 @@ def _get_outgoing_movements_for_product(
         if isinstance(movement_date, datetime):
             movement_date = movement_date.date()
         rows.append((movement_date, round(float(getattr(row, "Quantity", 0.0) or 0.0), 4)))
+    return rows
+
+
+def _get_outgoing_movement_details_for_product(
+    cursor,
+    *,
+    product_code: str,
+    start_day: date,
+    end_day: date,
+    cost_centers: Sequence[str],
+    excluded_cost_centers: Sequence[str],
+) -> list[dict[str, Any]]:
+    params: list[object] = [start_day.strftime("%Y%m%d"), end_day.strftime("%Y%m%d"), product_code]
+    ceco_clause, ceco_params = _build_cost_center_clause(
+        "RTRIM(LTRIM(h.CodiCC))",
+        cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
+    )
+    params.extend(ceco_params)
+
+    cursor.execute(
+        f"""
+        SELECT
+            CONVERT(date, h.Fecha) AS MovementDate,
+            RTRIM(LTRIM(h.CodiCC)) AS CecoCode,
+            RTRIM(LTRIM(cc.DescCC)) AS CecoName,
+            CAST(h.NroInt AS NVARCHAR(50)) AS MovementInternalNumber,
+            SUM(COALESCE(d.CantDespachada, 0)) AS Quantity,
+            COUNT(*) AS LineCount
+        FROM softland.iw_gsaen h
+        INNER JOIN softland.iw_gmovi d ON h.Tipo = d.Tipo AND h.NroInt = d.NroInt
+        LEFT JOIN softland.cwtccos cc ON RTRIM(LTRIM(cc.CodiCC)) = RTRIM(LTRIM(h.CodiCC))
+        WHERE
+            h.Fecha >= ?
+            AND h.Fecha <= ?
+            AND h.Tipo = 'S'
+            AND RTRIM(LTRIM(h.Concepto)) = '07'
+            AND RTRIM(LTRIM(h.Estado)) = 'V'
+            AND RTRIM(LTRIM(h.Proceso)) = 'Guía de Salida'
+            AND RTRIM(LTRIM(d.CodProd)) = RTRIM(LTRIM(?)){ceco_clause}
+        GROUP BY
+            CONVERT(date, h.Fecha),
+            RTRIM(LTRIM(h.CodiCC)),
+            RTRIM(LTRIM(cc.DescCC)),
+            CAST(h.NroInt AS NVARCHAR(50))
+        ORDER BY
+            MovementDate DESC,
+            Quantity DESC,
+            MovementInternalNumber DESC
+        """,
+        params,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for row in cursor.fetchall():
+        movement_date = getattr(row, "MovementDate", None)
+        if movement_date is None:
+            continue
+        if isinstance(movement_date, datetime):
+            movement_date = movement_date.date()
+        rows.append(
+            {
+                "date": movement_date.isoformat(),
+                "quantity": round(float(getattr(row, "Quantity", 0.0) or 0.0), 4),
+                "ceco": (getattr(row, "CecoCode", None) or "").strip() or None,
+                "ceco_name": (getattr(row, "CecoName", None) or "").strip() or None,
+                "movement_internal_number": str(getattr(row, "MovementInternalNumber", "")).strip() or None,
+                "line_count": int(getattr(row, "LineCount", 0) or 0),
+            }
+        )
     return rows
 
 

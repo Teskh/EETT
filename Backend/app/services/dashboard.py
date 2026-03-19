@@ -12,13 +12,14 @@ from app.config import Settings
 from app.models import ErpMaterialCache, MaterialDashboardCacheEntry, Project, ProjectBomEntry, ProjectInstance
 from app.services.erp import (
     get_cost_centers,
+    get_material_movement_details,
     get_material_movement_history,
     get_material_procurement_details,
     get_recent_movement_materials,
 )
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 1
+MATERIAL_DASHBOARD_CACHE_VERSION = 2
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -349,6 +350,15 @@ def _build_material_dashboard_history(
         cost_centers=cost_centers,
         excluded_cost_centers=excluded_cost_centers,
     )
+    movement_details = get_material_movement_details(
+        settings,
+        normalized_sku,
+        days=history_days,
+        start_day=start_date,
+        end_day=end_date,
+        cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
+    )
     if not series:
         fallback_end_day = end_date or datetime.utcnow().date()
         fallback_start_day = start_date or (fallback_end_day - timedelta(days=max(int(history_days), 1) - 1))
@@ -367,6 +377,7 @@ def _build_material_dashboard_history(
         "range_start": series[0]["date"] if series else None,
         "range_end": series[-1]["date"] if series else None,
         "movements": series,
+        "movement_details": movement_details,
         "generated_at": datetime.utcnow().isoformat(),
     }
 
