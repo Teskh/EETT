@@ -90,7 +90,7 @@ function EntryCard({ entry }: { entry: ActivityEntry }) {
       )}
 
       {entry.changes.length > 0 && (
-        <div className="mt-2 border-l-2 border-zinc-200 dark:border-zinc-800 pl-3 space-y-0.5">
+        <div className="mt-2 space-y-0.5">
            {entry.changes.map((change, idx) => (
              <ChangeRow key={`${entry.id}-change-${idx}`} change={change} />
            ))}
@@ -189,8 +189,8 @@ export function ChangeHistoryPage() {
   }, [deferredSearch, groups, projectFilter, statusFilter]);
 
   return (
-    <div className="min-h-[100dvh] w-full bg-zinc-50/50 dark:bg-[#040405] text-zinc-900 dark:text-zinc-100 font-sans sm:py-4 md:py-8 lg:py-12">
-      <div className="max-w-5xl mx-auto bg-white dark:bg-[#09090b] sm:border border-zinc-200 dark:border-white/10 sm:rounded-lg sm:shadow-sm overflow-hidden flex flex-col min-h-[calc(100dvh-2rem)]">
+    <div className="w-full text-zinc-900 dark:text-zinc-100 font-sans">
+      <div className="max-w-5xl mx-auto bg-white dark:bg-[#09090b] sm:border border-zinc-200 dark:border-white/10 sm:rounded-lg sm:shadow-sm overflow-hidden flex flex-col">
         
         {/* Extremely Dense Header / Filter Bar */}
         <div className="sticky top-0 z-40 bg-zinc-50 dark:bg-[#09090b] border-b border-zinc-200 dark:border-white/10 px-4 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3">
