@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -593,6 +594,25 @@ class MaterialDashboardResponse(BaseModel):
     movement_window_days: int
     ceco_filters: list[str] = Field(default_factory=list)
     generated_at: str
+
+
+class MaterialDashboardFilterRequest(BaseModel):
+    cecos: list[str] = Field(default_factory=list)
+    excluded_cecos: list[str] = Field(default_factory=list)
+    refresh: bool = False
+
+
+class MaterialDashboardListRequest(MaterialDashboardFilterRequest):
+    movement_days: int = Field(default=60, ge=1)
+
+
+class MaterialDashboardDateRangeRequest(MaterialDashboardFilterRequest):
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+class MaterialDashboardHouseComparisonRequest(MaterialDashboardDateRangeRequest):
+    house_type_id: int = Field(ge=1)
 
 
 class MaterialDashboardDetailResponse(MaterialDashboardDetailModel):

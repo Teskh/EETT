@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 
 from sqlalchemy import select
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
@@ -107,16 +107,25 @@ def get_recent_material_dashboard(
     session: Session | None = None,
     movement_days: int = 60,
     cost_centers: list[str] | None = None,
+    excluded_cost_centers: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict:
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
-    cache_key = _dashboard_cache_key({"cecos": normalized_cost_centers, "movement_days": max(int(movement_days), 1)})
+    normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
+    cache_key = _dashboard_cache_key(
+        {
+            "cecos": normalized_cost_centers,
+            "excluded_cecos": normalized_excluded_cost_centers,
+            "movement_days": max(int(movement_days), 1),
+        }
+    )
 
     def loader() -> dict:
         return _build_recent_material_dashboard(
             settings,
             movement_days=max(int(movement_days), 1),
             cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
         )
 
     return _load_material_dashboard_cache(
@@ -134,11 +143,13 @@ def _build_recent_material_dashboard(
     *,
     movement_days: int,
     cost_centers: list[str],
+    excluded_cost_centers: list[str],
 ) -> dict:
     rows = get_recent_movement_materials(
         settings,
         days=movement_days,
         cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
     )
     serialized_rows = []
     for row in rows:
@@ -166,6 +177,7 @@ def get_material_dashboard_detail(
     *,
     session: Session | None = None,
     cost_centers: list[str] | None = None,
+    excluded_cost_centers: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict | None:
     normalized_sku = sku.strip().upper()
@@ -173,13 +185,17 @@ def get_material_dashboard_detail(
         return None
 
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
-    cache_key = _dashboard_cache_key({"cecos": normalized_cost_centers, "sku": normalized_sku})
+    normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
+    cache_key = _dashboard_cache_key(
+        {"cecos": normalized_cost_centers, "excluded_cecos": normalized_excluded_cost_centers, "sku": normalized_sku}
+    )
 
     def loader() -> dict | None:
         return _build_material_dashboard_detail(
             settings,
             normalized_sku,
             cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
         )
 
     return _load_material_dashboard_cache(
@@ -197,6 +213,7 @@ def _build_material_dashboard_detail(
     sku: str,
     *,
     cost_centers: list[str],
+    excluded_cost_centers: list[str],
 ) -> dict | None:
     normalized_sku = sku.strip().upper()
     if not normalized_sku:
@@ -206,6 +223,7 @@ def _build_material_dashboard_detail(
         settings,
         normalized_sku,
         cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
     )
     if material is None:
         return None
@@ -273,13 +291,16 @@ def get_material_dashboard_history(
     start_date: date | None = None,
     end_date: date | None = None,
     cost_centers: list[str] | None = None,
+    excluded_cost_centers: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict:
     normalized_sku = sku.strip().upper()
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
+    normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
     cache_key = _dashboard_cache_key(
         {
             "cecos": normalized_cost_centers,
+            "excluded_cecos": normalized_excluded_cost_centers,
             "history_days": max(int(history_days), 1),
             "sku": normalized_sku,
             "start_date": start_date.isoformat() if start_date else None,
@@ -295,6 +316,7 @@ def get_material_dashboard_history(
             start_date=start_date,
             end_date=end_date,
             cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
         )
 
     return _load_material_dashboard_cache(
@@ -315,6 +337,7 @@ def _build_material_dashboard_history(
     start_date: date | None,
     end_date: date | None,
     cost_centers: list[str],
+    excluded_cost_centers: list[str],
 ) -> dict:
     normalized_sku = sku.strip().upper()
     series = get_material_movement_history(
@@ -324,6 +347,7 @@ def _build_material_dashboard_history(
         start_day=start_date,
         end_day=end_date,
         cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
     )
     if not series:
         fallback_end_day = end_date or datetime.utcnow().date()
@@ -397,6 +421,19 @@ def _load_material_dashboard_cache(
     entry.expires_at = now + ttl
     try:
         session.flush()
+    except IntegrityError as exc:
+        if _is_duplicate_material_dashboard_cache_key(exc):
+            session.rollback()
+            existing_entry = session.scalar(
+                select(MaterialDashboardCacheEntry).where(
+                    MaterialDashboardCacheEntry.cache_kind == cache_kind,
+                    MaterialDashboardCacheEntry.cache_key == cache_key,
+                )
+            )
+            if existing_entry is not None:
+                return _clone_cached_payload(existing_entry.payload)
+            return _clone_cached_payload(payload)
+        raise
     except (ProgrammingError, OperationalError) as exc:
         if _is_missing_material_dashboard_cache_table(exc):
             session.rollback()
@@ -414,6 +451,14 @@ def _cache_entry_is_fresh(entry: MaterialDashboardCacheEntry, now: datetime) -> 
 
 def _clone_cached_payload(payload: dict) -> dict:
     return json.loads(json.dumps(payload))
+
+
+def _is_duplicate_material_dashboard_cache_key(exc: IntegrityError) -> bool:
+    message = str(exc).lower()
+    return (
+        "duplicate key value violates unique constraint" in message
+        and "material_dashboard_cache_entries_cache_kind_cache_key_key" in message
+    )
 
 
 def _dashboard_cache_key(parts: dict[str, object]) -> str:

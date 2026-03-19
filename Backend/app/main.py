@@ -30,9 +30,13 @@ from app.api_models import (
     ExportJobModel,
     LoginRequest,
     MaterialDashboardCecoResponse,
+    MaterialDashboardDateRangeRequest,
     MaterialDashboardDetailResponse,
+    MaterialDashboardFilterRequest,
+    MaterialDashboardHouseComparisonRequest,
     MaterialDashboardHouseComparisonResponse,
     MaterialDashboardHouseTypesResponse,
+    MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
     MaterialOccurrenceUpdateRequest,
@@ -1484,6 +1488,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @app.post("/api/v1/dashboard/materials", response_model=MaterialDashboardResponse)
+    def material_dashboard_v1_post(
+        payload: MaterialDashboardListRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            return get_recent_material_dashboard(
+                request.app.state.settings,
+                session=session,
+                movement_days=payload.movement_days,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/api/v1/dashboard/materials/cecos", response_model=MaterialDashboardCecoResponse)
     def material_dashboard_cecos_v1(
         request: Request,
@@ -1528,6 +1552,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session=session,
                 cost_centers=ceco_filters,
                 force_refresh=force_refresh,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Material not found")
+        return detail
+
+    @app.post("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
+    def material_dashboard_detail_v1_post(
+        sku: str,
+        payload: MaterialDashboardFilterRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            detail = get_material_dashboard_detail(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -1584,6 +1632,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @app.post("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
+    def material_dashboard_house_comparison_v1_post(
+        sku: str,
+        payload: MaterialDashboardHouseComparisonRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            history = get_material_dashboard_history(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                history_days=history_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                force_refresh=payload.refresh,
+            )
+            return get_material_dashboard_house_start_comparison(
+                request.app.state.settings,
+                sku=sku,
+                movements=history.get("movements", []),
+                house_type_id=payload.house_type_id,
+                cost_centers=payload.cecos,
+                history_days=int(history.get("movement_days") or history_days),
+                start_date=payload.start_date.isoformat() if payload.start_date else None,
+                end_date=payload.end_date.isoformat() if payload.end_date else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.get("/api/v1/dashboard/materials/{sku}/movements", response_model=MaterialDashboardMovementResponse)
     def material_dashboard_movements_v1(
         sku: str,
@@ -1618,6 +1709,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 end_date=requested_end_date,
                 cost_centers=ceco_filters,
                 force_refresh=force_refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/dashboard/materials/{sku}/movements", response_model=MaterialDashboardMovementResponse)
+    def material_dashboard_movements_v1_post(
+        sku: str,
+        payload: MaterialDashboardDateRangeRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            return get_material_dashboard_history(
+                request.app.state.settings,
+                sku,
+                session=session,
+                history_days=history_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

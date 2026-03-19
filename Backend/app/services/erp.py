@@ -163,10 +163,12 @@ def get_recent_movement_materials(
     *,
     days: int = 60,
     cost_centers: Sequence[str] | None = None,
+    excluded_cost_centers: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     window_days = max(int(days), 1)
     start_day = datetime.utcnow().date() - timedelta(days=window_days)
     ceco_filters = _normalize_cost_centers(cost_centers)
+    excluded_ceco_filters = _normalize_cost_centers(excluded_cost_centers)
 
     try:
         with _open_connection(settings) as connection:
@@ -175,6 +177,7 @@ def get_recent_movement_materials(
                 movement_cursor,
                 start_day=start_day,
                 cost_centers=ceco_filters,
+                excluded_cost_centers=excluded_ceco_filters,
             )
     except Exception as exc:
         logger.warning("ERP recent movement material lookup failed: %s", exc)
@@ -186,12 +189,14 @@ def get_material_procurement_details(
     sku: str,
     *,
     cost_centers: Sequence[str] | None = None,
+    excluded_cost_centers: Sequence[str] | None = None,
 ) -> dict[str, Any] | None:
     normalized_sku = sku.strip().upper()
     if not normalized_sku:
         return None
 
     ceco_filters = _normalize_cost_centers(cost_centers)
+    excluded_ceco_filters = _normalize_cost_centers(excluded_cost_centers)
 
     try:
         with _open_connection(settings) as connection:
@@ -242,6 +247,7 @@ def get_material_procurement_details(
                     [normalized_sku],
                     start_day=datetime.utcnow().date() - timedelta(days=30),
                     cost_centers=ceco_filters,
+                    excluded_cost_centers=excluded_ceco_filters,
                 ).get(normalized_sku, 0.0),
                 default=0.0,
                 label=f"30-day movement for {normalized_sku}",
@@ -283,6 +289,7 @@ def get_material_movement_history(
     start_day: date | None = None,
     end_day: date | None = None,
     cost_centers: Sequence[str] | None = None,
+    excluded_cost_centers: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_sku = sku.strip().upper()
     if not normalized_sku:
@@ -298,6 +305,7 @@ def get_material_movement_history(
 
     window_days = max((requested_end_day - requested_start_day).days + 1, 1)
     ceco_filters = _normalize_cost_centers(cost_centers)
+    excluded_ceco_filters = _normalize_cost_centers(excluded_cost_centers)
 
     try:
         with _open_connection(settings) as connection:
@@ -308,6 +316,7 @@ def get_material_movement_history(
                 start_day=requested_start_day,
                 end_day=requested_end_day,
                 cost_centers=ceco_filters,
+                excluded_cost_centers=excluded_ceco_filters,
             )
             quantity_by_day = {row_date.isoformat(): quantity for row_date, quantity in raw_rows}
             history: list[dict[str, Any]] = []
@@ -325,13 +334,20 @@ def get_material_movement_history(
         raise RuntimeError(f"Could not load ERP movement history for {normalized_sku}") from exc
 
 
-def _fetch_recent_movement_materials(cursor, *, start_day: date, cost_centers: Sequence[str]) -> list[dict[str, Any]]:
-    ceco_clause = ""
+def _fetch_recent_movement_materials(
+    cursor,
+    *,
+    start_day: date,
+    cost_centers: Sequence[str],
+    excluded_cost_centers: Sequence[str],
+) -> list[dict[str, Any]]:
     params: list[object] = [start_day.strftime("%Y%m%d")]
-    if cost_centers:
-        placeholders = ",".join(["?"] * len(cost_centers))
-        ceco_clause = f"\n              AND RTRIM(LTRIM(h.CodiCC)) IN ({placeholders})"
-        params.extend(cost_centers)
+    ceco_clause, ceco_params = _build_cost_center_clause(
+        "RTRIM(LTRIM(h.CodiCC))",
+        cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
+    )
+    params.extend(ceco_params)
 
     cursor.execute(
         f"""
@@ -493,17 +509,19 @@ def _get_outgoing_quantities_for_products_batch(
     *,
     start_day: date,
     cost_centers: Sequence[str],
+    excluded_cost_centers: Sequence[str],
 ) -> dict[str, float]:
     if not product_codes:
         return {}
 
     product_placeholders = ",".join(["?"] * len(product_codes))
-    ceco_clause = ""
     params: list[object] = [start_day.strftime("%Y%m%d"), *product_codes]
-    if cost_centers:
-        ceco_placeholders = ",".join(["?"] * len(cost_centers))
-        ceco_clause = f"\n          AND RTRIM(LTRIM(h.CodiCC)) IN ({ceco_placeholders})"
-        params.extend(cost_centers)
+    ceco_clause, ceco_params = _build_cost_center_clause(
+        "RTRIM(LTRIM(h.CodiCC))",
+        cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
+    )
+    params.extend(ceco_params)
 
     cursor.execute(
         f"""
@@ -540,13 +558,15 @@ def _get_outgoing_movements_for_product(
     start_day: date,
     end_day: date,
     cost_centers: Sequence[str],
+    excluded_cost_centers: Sequence[str],
 ) -> list[tuple[date, float]]:
-    ceco_clause = ""
     params: list[object] = [start_day.strftime("%Y%m%d"), end_day.strftime("%Y%m%d"), product_code]
-    if cost_centers:
-        placeholders = ",".join(["?"] * len(cost_centers))
-        ceco_clause = f"\n          AND RTRIM(LTRIM(h.CodiCC)) IN ({placeholders})"
-        params.extend(cost_centers)
+    ceco_clause, ceco_params = _build_cost_center_clause(
+        "RTRIM(LTRIM(h.CodiCC))",
+        cost_centers=cost_centers,
+        excluded_cost_centers=excluded_cost_centers,
+    )
+    params.extend(ceco_params)
 
     cursor.execute(
         f"""
@@ -849,6 +869,21 @@ def _normalize_identifiers(raw_value: Any, pad_lengths: Sequence[int] | None = N
 
 def _normalize_cost_centers(cost_centers: Sequence[str] | None) -> list[str]:
     return [str(value).strip() for value in cost_centers or [] if value is not None and str(value).strip()]
+
+
+def _build_cost_center_clause(
+    column_name: str,
+    *,
+    cost_centers: Sequence[str],
+    excluded_cost_centers: Sequence[str],
+) -> tuple[str, list[object]]:
+    if cost_centers:
+        placeholders = ",".join(["?"] * len(cost_centers))
+        return f"\n          AND {column_name} IN ({placeholders})", list(cost_centers)
+    if excluded_cost_centers:
+        placeholders = ",".join(["?"] * len(excluded_cost_centers))
+        return f"\n          AND {column_name} NOT IN ({placeholders})", list(excluded_cost_centers)
+    return "", []
 
 
 def _serialize_datetime(value: Any) -> str | None:

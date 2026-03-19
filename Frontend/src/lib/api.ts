@@ -147,6 +147,18 @@ type MaterialDashboardRequestOptions = {
   endDate?: string;
 };
 
+type MaterialDashboardFilterSelection = {
+  cecos?: string[];
+  excludedCecos?: string[];
+};
+
+function buildMaterialDashboardFilterPayload(filters: MaterialDashboardFilterSelection = {}) {
+  return {
+    cecos: filters.cecos ?? [],
+    excluded_cecos: filters.excludedCecos ?? [],
+  };
+}
+
 export const api = {
   login(payload: LoginRequest) {
     return request<SessionUser>("/api/v1/login", {
@@ -234,17 +246,18 @@ export const api = {
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");
   },
-  getMaterialDashboard(cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
-    const params = new URLSearchParams();
-    cecos.forEach((ceco) => params.append("ceco", ceco));
-    if (options.movementDays && Number.isFinite(options.movementDays)) {
-      params.set("movement_days", String(Math.max(Math.floor(options.movementDays), 1)));
-    }
-    if (options.refresh) {
-      params.set("refresh", "1");
-    }
-    const query = params.toString();
-    return request<MaterialDashboardData>(`/api/v1/dashboard/materials${query ? `?${query}` : ""}`);
+  getMaterialDashboard(filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialDashboardData>("/api/v1/dashboard/materials", {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        movement_days:
+          options.movementDays && Number.isFinite(options.movementDays)
+            ? Math.max(Math.floor(options.movementDays), 1)
+            : 60,
+        refresh: Boolean(options.refresh),
+      }),
+    });
   },
   getMaterialDashboardCostCenters(options: MaterialDashboardRequestOptions = {}) {
     const params = new URLSearchParams();
@@ -257,52 +270,42 @@ export const api = {
   getMaterialDashboardHouseTypes() {
     return request<MaterialDashboardHouseTypesResponse>("/api/v1/dashboard/materials/house-types");
   },
-  getMaterialDashboardDetail(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
-    const params = new URLSearchParams();
-    cecos.forEach((ceco) => params.append("ceco", ceco));
-    if (options.refresh) {
-      params.set("refresh", "1");
-    }
-    const query = params.toString();
-    return request<MaterialDashboardDetailData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}${query ? `?${query}` : ""}`);
+  getMaterialDashboardDetail(sku: string, filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialDashboardDetailData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        refresh: Boolean(options.refresh),
+      }),
+    });
   },
-  getMaterialDashboardHistory(sku: string, cecos: string[] = [], options: MaterialDashboardRequestOptions = {}) {
-    const params = new URLSearchParams();
-    cecos.forEach((ceco) => params.append("ceco", ceco));
-    if (options.startDate) {
-      params.set("start_date", options.startDate);
-    }
-    if (options.endDate) {
-      params.set("end_date", options.endDate);
-    }
-    if (options.refresh) {
-      params.set("refresh", "1");
-    }
-    const query = params.toString();
-    return request<MaterialDashboardMovementData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/movements${query ? `?${query}` : ""}`);
+  getMaterialDashboardHistory(sku: string, filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialDashboardMovementData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/movements`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
   },
   getMaterialDashboardHouseComparison(
     sku: string,
     houseTypeId: number,
-    cecos: string[] = [],
+    filters: MaterialDashboardFilterSelection = {},
     options: MaterialDashboardRequestOptions = {},
   ) {
-    const params = new URLSearchParams();
-    params.set("house_type_id", String(houseTypeId));
-    if (options.startDate) {
-      params.set("start_date", options.startDate);
-    }
-    if (options.endDate) {
-      params.set("end_date", options.endDate);
-    }
-    cecos.forEach((ceco) => params.append("ceco", ceco));
-    if (options.refresh) {
-      params.set("refresh", "1");
-    }
-    const query = params.toString();
-    return request<MaterialDashboardHouseComparisonData>(
-      `/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison${query ? `?${query}` : ""}`,
-    );
+    return request<MaterialDashboardHouseComparisonData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        house_type_id: houseTypeId,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
   },
   getActivityHistory() {
     return request<ActivityGroup[]>("/api/v1/activity");

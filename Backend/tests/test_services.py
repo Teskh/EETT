@@ -1281,6 +1281,7 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(public_skus.status_code, 200)
         self.assertIn("MAT-006", public_skus.json()["skus"])
 
+    @patch("app.main.get_material_dashboard_house_start_comparison")
     @patch("app.main.get_material_dashboard_history")
     @patch("app.main.get_material_dashboard_detail")
     @patch("app.main.get_material_dashboard_cost_centers")
@@ -1291,6 +1292,7 @@ class ServiceLayerTests(unittest.TestCase):
         cost_centers_mock,
         detail_mock,
         movement_history_mock,
+        house_comparison_mock,
     ) -> None:
         recent_dashboard_mock.return_value = {
             "materials": [
@@ -1307,7 +1309,12 @@ class ServiceLayerTests(unittest.TestCase):
             "ceco_filters": ["CC-01"],
             "generated_at": "2026-03-12T12:00:00",
         }
-        cost_centers_mock.return_value = {"cecos": [{"code": "CC-01", "name": "Produccion"}]}
+        cost_centers_mock.return_value = {
+            "cecos": [
+                {"code": "CC-01", "name": "Produccion"},
+                {"code": "CC-02", "name": "Despacho"},
+            ]
+        }
         detail_mock.return_value = {
             "sku": "ERP-001",
             "material_name": "Steel Stud 90",
@@ -1341,6 +1348,31 @@ class ServiceLayerTests(unittest.TestCase):
             ],
             "generated_at": "2026-03-12T12:05:00",
         }
+        house_comparison_mock.return_value = {
+            "sku": "ERP-001",
+            "house_type_id": 3,
+            "house_type_name": "Casa Base",
+            "number_of_modules": 2,
+            "movement_days": 12,
+            "ceco_filters": ["CC-01"],
+            "range_start": "2026-03-01",
+            "range_end": "2026-03-12",
+            "total_material_quantity": 45.0,
+            "total_house_starts": 9,
+            "material_per_house": 5.0,
+            "latest_house_start_date": "2026-03-12",
+            "points": [
+                {
+                    "date": "2026-03-10",
+                    "material_quantity": 10.0,
+                    "house_starts": 2,
+                    "cumulative_material_quantity": 10.0,
+                    "cumulative_house_starts": 2,
+                    "material_per_house": 5.0,
+                }
+            ],
+            "generated_at": "2026-03-12T12:07:00",
+        }
 
         dashboard = self.client.get(
             "/api/v1/dashboard/materials?ceco=CC-01",
@@ -1364,12 +1396,51 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["stock_on_hand"], 32.0)
 
+        dashboard_post = self.client.post(
+            "/api/v1/dashboard/materials",
+            json={"excluded_cecos": ["CC-02"]},
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(dashboard_post.status_code, 200)
+        self.assertEqual(dashboard_post.json()["materials"][0]["sku"], "ERP-001")
+        self.assertEqual(recent_dashboard_mock.call_args.kwargs["cost_centers"], [])
+        self.assertEqual(recent_dashboard_mock.call_args.kwargs["excluded_cost_centers"], ["CC-02"])
+
+        detail_post = self.client.post(
+            "/api/v1/dashboard/materials/ERP-001",
+            json={"excluded_cecos": ["CC-02"]},
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(detail_post.status_code, 200)
+        self.assertEqual(detail_post.json()["stock_on_hand"], 32.0)
+        self.assertEqual(detail_mock.call_args.kwargs["cost_centers"], [])
+        self.assertEqual(detail_mock.call_args.kwargs["excluded_cost_centers"], ["CC-02"])
+
         movements = self.client.get(
             "/api/v1/dashboard/materials/ERP-001/movements?ceco=CC-01",
             headers={"X-Spec-Sheets-User": "editor"},
         )
         self.assertEqual(movements.status_code, 200)
         self.assertEqual(movements.json()["movements"][0]["quantity"], 10.0)
+
+        movements_post = self.client.post(
+            "/api/v1/dashboard/materials/ERP-001/movements",
+            json={"excluded_cecos": ["CC-02"], "start_date": "2026-03-01", "end_date": "2026-03-12"},
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(movements_post.status_code, 200)
+        self.assertEqual(movements_post.json()["movements"][0]["quantity"], 10.0)
+        self.assertEqual(movement_history_mock.call_args.kwargs["cost_centers"], [])
+        self.assertEqual(movement_history_mock.call_args.kwargs["excluded_cost_centers"], ["CC-02"])
+
+        house_comparison = self.client.post(
+            "/api/v1/dashboard/materials/ERP-001/house-comparison",
+            json={"excluded_cecos": ["CC-02"], "house_type_id": 3, "start_date": "2026-03-01", "end_date": "2026-03-12"},
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(house_comparison.status_code, 200)
+        self.assertEqual(house_comparison.json()["house_type_id"], 3)
+        self.assertEqual(house_comparison_mock.call_args.kwargs["cost_centers"], [])
 
         denied = self.client.get(
             "/api/v1/dashboard/materials",
@@ -1398,6 +1469,49 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(first["materials"][0]["sku"], "ERP-001")
         self.assertEqual(first, second)
         self.assertEqual(recent_movement_mock.call_count, 1)
+        self.assertEqual(len(cached_entries), 1)
+
+    @patch("app.services.dashboard.get_recent_movement_materials")
+    def test_material_dashboard_server_cache_ignores_duplicate_insert_race(self, recent_movement_mock) -> None:
+        recent_movement_mock.return_value = [
+            {
+                "sku": "ERP-001",
+                "material_name": "Steel Stud 90",
+                "unit": "UN",
+                "last_movement_date": "2026-03-10",
+                "movement_quantity_60d": 180.0,
+                "movement_count_60d": 6,
+            }
+        ]
+
+        with self.session_factory() as session:
+            original_flush = session.flush
+            inserted_competing_entry = False
+
+            def flush_with_race(*args, **kwargs):
+                nonlocal inserted_competing_entry
+                if not inserted_competing_entry:
+                    inserted_competing_entry = True
+                    with self.session_factory() as competing_session:
+                        get_recent_material_dashboard(
+                            self.settings,
+                            session=competing_session,
+                            excluded_cost_centers=["CC-01"],
+                        )
+                        competing_session.commit()
+                return original_flush(*args, **kwargs)
+
+            session.flush = flush_with_race  # type: ignore[method-assign]
+            result = get_recent_material_dashboard(
+                self.settings,
+                session=session,
+                excluded_cost_centers=["CC-01"],
+            )
+
+        with self.session_factory() as verification_session:
+            cached_entries = verification_session.scalars(select(MaterialDashboardCacheEntry)).all()
+
+        self.assertEqual(result["materials"][0]["sku"], "ERP-001")
         self.assertEqual(len(cached_entries), 1)
 
     def test_app_lifespan_requires_existing_schema(self) -> None:
