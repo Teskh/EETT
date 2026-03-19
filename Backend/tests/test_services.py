@@ -20,6 +20,7 @@ from app.models import (
     CatalogComponent,
     ComponentMaterialRule,
     MaterialDashboardCacheEntry,
+    MaterialStudyGroup,
     Project,
     ProjectBomEntry,
     ProjectInstance,
@@ -40,6 +41,12 @@ from app.services.catalog import (
 from app.services.dashboard import get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import _get_lead_time_samples_for_product
+from app.services.material_groups import (
+    create_material_study_group,
+    get_material_dashboard_group_detail,
+    get_material_dashboard_group_history,
+    get_material_dashboard_groups,
+)
 from app.services.projects import (
     _visible_project_subtype_rows,
     create_project_instance,
@@ -1541,6 +1548,136 @@ class ServiceLayerTests(unittest.TestCase):
 
         with self.session_factory() as session:
             self.assertIsNotNone(session.query(CatalogCategory).first())
+
+
+class MaterialStudyGroupTests(ServiceLayerTests):
+    @patch("app.services.material_groups.get_recent_movement_materials")
+    def test_group_list_normalizes_recent_movement_metrics(self, recent_movement_mock) -> None:
+        with self.session_factory() as session:
+            create_material_study_group(
+                session,
+                name="Insulation",
+                description="Normalized in m2",
+                study_unit="m2",
+                members=[
+                    {"sku": "INS-S", "material_name": "Insulation Small", "unit": "roll", "factor_to_study_unit": 2},
+                    {"sku": "INS-L", "material_name": "Insulation Large", "unit": "roll", "factor_to_study_unit": 10},
+                ],
+            )
+            session.commit()
+
+        recent_movement_mock.return_value = [
+            {
+                "sku": "INS-S",
+                "material_name": "Insulation Small",
+                "unit": "roll",
+                "last_movement_date": "2026-03-10",
+                "movement_quantity_60d": 3.0,
+                "movement_count_60d": 2,
+            },
+            {
+                "sku": "INS-L",
+                "material_name": "Insulation Large",
+                "unit": "roll",
+                "last_movement_date": "2026-03-12",
+                "movement_quantity_60d": 4.0,
+                "movement_count_60d": 1,
+            },
+        ]
+
+        with self.session_factory() as session:
+            response = get_material_dashboard_groups(self.settings, session=session, movement_days=60)
+
+        self.assertEqual(len(response["groups"]), 1)
+        self.assertEqual(response["groups"][0]["movement_quantity_60d"], 46.0)
+        self.assertEqual(response["groups"][0]["movement_count_60d"], 3)
+        self.assertEqual(response["groups"][0]["last_movement_date"], "2026-03-12")
+        self.assertEqual(response["groups"][0]["sku"], "GROUP:1")
+
+    @patch("app.services.material_groups.get_material_movement_details")
+    @patch("app.services.material_groups.get_material_movement_history")
+    @patch("app.services.material_groups.get_material_procurement_details")
+    def test_group_detail_and_history_normalize_member_values(
+        self,
+        procurement_mock,
+        movement_history_mock,
+        movement_details_mock,
+    ) -> None:
+        with self.session_factory() as session:
+            create_material_study_group(
+                session,
+                name="Insulation",
+                description="Normalized in m2",
+                study_unit="m2",
+                members=[
+                    {"sku": "INS-S", "material_name": "Insulation Small", "unit": "roll", "factor_to_study_unit": 2},
+                    {"sku": "INS-L", "material_name": "Insulation Large", "unit": "roll", "factor_to_study_unit": 10},
+                ],
+            )
+            session.commit()
+
+        procurement_by_sku = {
+            "INS-S": {
+                "material_name": "Insulation Small",
+                "unit": "roll",
+                "movement_quantity_30d": 5.0,
+                "stock_on_hand": 8.0,
+                "pending_purchase_quantity": 2.0,
+            },
+            "INS-L": {
+                "material_name": "Insulation Large",
+                "unit": "roll",
+                "movement_quantity_30d": 2.0,
+                "stock_on_hand": 3.0,
+                "pending_purchase_quantity": 1.0,
+            },
+        }
+        procurement_mock.side_effect = lambda _settings, sku, **_kwargs: procurement_by_sku[sku]
+
+        movement_history_by_sku = {
+            "INS-S": [
+                {"date": "2026-03-10", "quantity": 1.0},
+                {"date": "2026-03-11", "quantity": 2.0},
+            ],
+            "INS-L": [
+                {"date": "2026-03-10", "quantity": 0.0},
+                {"date": "2026-03-11", "quantity": 1.0},
+            ],
+        }
+        movement_history_mock.side_effect = lambda _settings, sku, **_kwargs: movement_history_by_sku[sku]
+        movement_details_mock.side_effect = lambda _settings, sku, **_kwargs: [
+            {
+                "date": "2026-03-11",
+                "quantity": movement_history_by_sku[sku][-1]["quantity"],
+                "ceco": "CC-01",
+                "ceco_name": "Main",
+                "movement_internal_number": f"MOV-{sku}",
+                "line_count": 1,
+            }
+        ]
+
+        with self.session_factory() as session:
+            detail = get_material_dashboard_group_detail(self.settings, 1, session=session)
+            history = get_material_dashboard_group_history(
+                self.settings,
+                1,
+                session=session,
+                start_date=date(2026, 3, 10),
+                end_date=date(2026, 3, 11),
+            )
+
+        self.assertIsNotNone(detail)
+        self.assertIsNotNone(history)
+        assert detail is not None
+        assert history is not None
+
+        self.assertEqual(detail["movement_quantity_30d"], 30.0)
+        self.assertEqual(detail["stock_on_hand"], 46.0)
+        self.assertEqual(detail["pending_purchase_quantity"], 14.0)
+        self.assertEqual(history["movements"][0]["quantity"], 2.0)
+        self.assertEqual(history["movements"][1]["quantity"], 14.0)
+        self.assertEqual(history["movement_details"][0]["sku"], "INS-L")
+        self.assertEqual(history["movement_details"][0]["quantity"], 10.0)
 
 
 class MaterialDashboardBusinessDayTests(unittest.TestCase):

@@ -193,9 +193,9 @@ export function App() {
 
   if (route.name === "material-dashboard") {
     return (
-      <AppShell title="Material Dashboard" activeNav="dashboard" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <AppShell title="Material Dashboard" activeNav="dashboard" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
         {session.permissions.material_dashboard ? (
-          <MaterialDashboardPage />
+          <MaterialDashboardPage canEditGroups={session.permissions.erp_admin} />
         ) : (
           <AccessDenied message="This role cannot open the material dashboard." />
         )}

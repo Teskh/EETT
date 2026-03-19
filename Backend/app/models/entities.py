@@ -299,6 +299,39 @@ class Material(Base):
     erp_cache_entries: Mapped[list["ErpMaterialCache"]] = relationship(back_populates="material")
 
 
+class MaterialStudyGroup(Base):
+    __tablename__ = "material_study_groups"
+    __table_args__ = (UniqueConstraint("name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+    study_unit: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    members: Mapped[list["MaterialStudyGroupMember"]] = relationship(
+        back_populates="group",
+        cascade="all, delete-orphan",
+        order_by="MaterialStudyGroupMember.display_order",
+    )
+
+
+class MaterialStudyGroupMember(Base):
+    __tablename__ = "material_study_group_members"
+    __table_args__ = (UniqueConstraint("group_id", "sku"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("material_study_groups.id", ondelete="CASCADE"), nullable=False)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    material_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(50), default=None)
+    factor_to_study_unit: Mapped[float] = mapped_column(Float, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    group: Mapped[MaterialStudyGroup] = relationship(back_populates="members")
+
+
 class ComponentMaterialRule(Base):
     __tablename__ = "component_material_rules"
 

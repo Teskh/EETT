@@ -131,6 +131,118 @@ export type MaterialDashboardHouseComparisonData = {
   generated_at: string;
 };
 
+export type MaterialStudyGroupMember = {
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  factor_to_study_unit: number;
+  display_order: number;
+};
+
+export type MaterialStudyGroupRow = {
+  group_id: number;
+  name: string;
+  description: string | null;
+  study_unit: string;
+  member_count: number;
+  members: MaterialStudyGroupMember[];
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  last_movement_date: string | null;
+  movement_quantity_60d: number;
+  movement_count_60d: number;
+};
+
+export type MaterialStudyGroupListResponse = {
+  groups: MaterialStudyGroupRow[];
+  movement_window_days: number;
+  ceco_filters: string[];
+  generated_at: string;
+};
+
+export type MaterialStudyGroupPayloadMember = {
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  factor_to_study_unit: number;
+};
+
+export type MaterialStudyGroupPayload = {
+  name: string;
+  description: string | null;
+  study_unit: string;
+  members: MaterialStudyGroupPayloadMember[];
+};
+
+export type MaterialDashboardGroupDetailData = {
+  group_id: number;
+  name: string;
+  description: string | null;
+  study_unit: string;
+  member_count: number;
+  members: MaterialStudyGroupMember[];
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  movement_quantity_30d: number;
+  stock_on_hand: number | null;
+  pending_purchase_quantity: number | null;
+  average_price: number | null;
+  average_lead_time_days: number | null;
+  max_lead_time_days: number | null;
+  lead_time_sample_count: number;
+  average_daily_outgoing_30d: number;
+  days_of_stock_30d: number | null;
+  reorder_date_recent_rate: string | null;
+  last_purchase_order: MaterialDashboardPurchaseOrder;
+  generated_at: string;
+};
+
+export type MaterialDashboardGroupMovementDetail = {
+  date: string;
+  quantity: number;
+  ceco: string | null;
+  ceco_name: string | null;
+  movement_internal_number: string | null;
+  line_count: number;
+  sku: string;
+  material_name: string;
+  source_unit: string | null;
+  factor_to_study_unit: number;
+  source_quantity: number;
+};
+
+export type MaterialDashboardGroupMovementData = {
+  group_id: number;
+  group_name: string;
+  description: string | null;
+  study_unit: string;
+  member_count: number;
+  members: MaterialStudyGroupMember[];
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  movement_days: number;
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  movements: MaterialDashboardMovementPoint[];
+  movement_details: MaterialDashboardGroupMovementDetail[];
+  generated_at: string;
+};
+
+export type MaterialDashboardGroupHouseComparisonData = MaterialDashboardHouseComparisonData & {
+  group_id: number;
+  group_name: string;
+  description: string | null;
+  study_unit: string;
+  member_count: number;
+  members: MaterialStudyGroupMember[];
+  material_name: string;
+  unit: string | null;
+};
+
 export type LoginRequest = {
   username: string;
   password: string;

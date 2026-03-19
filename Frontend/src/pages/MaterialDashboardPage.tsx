@@ -1,11 +1,16 @@
 import { useDeferredValue, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
+import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import type {
   MaterialDashboardCeco,
   MaterialDashboardData,
   MaterialDashboardDetailData,
+  MaterialDashboardGroupDetailData,
+  MaterialDashboardGroupHouseComparisonData,
+  MaterialDashboardGroupMovementData,
+  MaterialDashboardGroupMovementDetail,
   MaterialDashboardHouseComparisonData,
   MaterialDashboardHouseComparisonPoint,
   MaterialDashboardHouseType,
@@ -13,6 +18,8 @@ import type {
   MaterialDashboardMovementDetail,
   MaterialDashboardMovementData,
   MaterialDashboardMovementPoint,
+  MaterialStudyGroupListResponse,
+  MaterialStudyGroupRow,
 } from "../lib/types";
 
 type SortKey = "material_name" | "sku" | "last_movement_date" | "movement_quantity_60d" | "movement_count_60d";
@@ -115,6 +122,43 @@ function historyCacheKey(sku: string, cecos: string[], range?: { startDate?: str
 
 function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[], range: HouseRange) {
   return `houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
+function groupDashboardCacheKey(cecos: string[], movementDays = 60) {
+  const normalized = normalizeCecos(cecos);
+  return `groups::${movementDays}::${normalized.join("|") || "all"}`;
+}
+
+function groupDetailCacheKey(groupId: number, cecos: string[]) {
+  return `group-detail::${groupId}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
+function groupHistoryCacheKey(groupId: number, cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null) {
+  const startDate = range?.startDate || "default";
+  const endDate = range?.endDate || "default";
+  return `group-history::${groupId}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
+function groupHouseComparisonCacheKey(groupId: number, houseTypeId: number, cecos: string[], range: HouseRange) {
+  return `group-houses::${groupId}::${houseTypeId}::${range.startDate}::${range.endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
+type DashboardSelectionRow = MaterialDashboardListRow | MaterialStudyGroupRow;
+type DashboardDetailLike = MaterialDashboardDetailData | MaterialDashboardGroupDetailData;
+type DashboardHistoryLike = MaterialDashboardMovementData | MaterialDashboardGroupMovementData;
+type DashboardHistoryDetailLike = MaterialDashboardMovementDetail | MaterialDashboardGroupMovementDetail;
+type DashboardHouseComparisonLike = MaterialDashboardHouseComparisonData | MaterialDashboardGroupHouseComparisonData;
+
+function isGroupRow(value: DashboardSelectionRow | null): value is MaterialStudyGroupRow {
+  return Boolean(value && "group_id" in value);
+}
+
+function isGroupDetail(value: DashboardDetailLike | null): value is MaterialDashboardGroupDetailData {
+  return Boolean(value && "group_id" in value);
+}
+
+function isGroupHistory(value: DashboardHistoryLike | null): value is MaterialDashboardGroupMovementData {
+  return Boolean(value && "group_id" in value);
 }
 
 function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardListRow, sort: SortState) {
@@ -305,7 +349,7 @@ function addBusinessDays(value: Date, offset: number) {
   return date;
 }
 
-function getLeadTimeReference(detail: MaterialDashboardDetailData | null): LeadTimeReference | null {
+function getLeadTimeReference(detail: DashboardDetailLike | null): LeadTimeReference | null {
   if (!detail) {
     return null;
   }
@@ -324,7 +368,7 @@ function getPurchaseOrderEstimate({
   isCustomSelection,
   bufferWeeks,
 }: {
-  detail: MaterialDashboardDetailData | null;
+  detail: DashboardDetailLike | null;
   summary: ReturnType<typeof getSeriesSummary>;
   isCustomSelection: boolean;
   bufferWeeks: number;
@@ -744,7 +788,7 @@ function MovementBreakdownList({
   rangeStart,
   rangeEnd,
 }: {
-  movements: MaterialDashboardMovementDetail[];
+  movements: DashboardHistoryDetailLike[];
   loading: boolean;
   rangeStart: string | null;
   rangeEnd: string | null;
@@ -777,6 +821,7 @@ function MovementBreakdownList({
                 `Fecha: ${formatDate(movement.date)}`,
                 `Cantidad: ${formatNumber(movement.quantity)}`,
                 `CECO: ${cecoLabel}`,
+                "sku" in movement ? `SKU: ${movement.sku}` : null,
                 movement.movement_internal_number ? `Mov. ERP: ${movement.movement_internal_number}` : null,
                 movement.line_count > 0 ? `Lineas SKU: ${formatNumber(movement.line_count, 0)}` : null,
               ].filter(Boolean);
@@ -789,6 +834,11 @@ function MovementBreakdownList({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-semibold text-zinc-900 dark:text-white">{formatDate(movement.date)}</span>
+                      {"sku" in movement ? (
+                        <span className="rounded-full border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
+                          {movement.sku}
+                        </span>
+                      ) : null}
                       <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
                         {movement.ceco ?? "No CECO"}
                       </span>
@@ -799,13 +849,16 @@ function MovementBreakdownList({
                       ) : null}
                     </div>
                     <p className="mt-1 truncate text-xs text-zinc-500">
+                      {"material_name" in movement ? `${movement.material_name} • ` : ""}
                       {movement.ceco_name || "No CECO description"}
                       {movement.line_count > 0 ? ` • ${formatNumber(movement.line_count, 0)} lineas SKU` : ""}
                     </p>
                   </div>
                   <div className="text-left md:text-right">
                     <div className="text-base font-semibold text-zinc-900 dark:text-white">{formatNumber(movement.quantity)}</div>
-                    <div className="text-[11px] text-zinc-500">Salida</div>
+                    <div className="text-[11px] text-zinc-500">
+                      {"source_quantity" in movement ? `${formatNumber(movement.source_quantity)} src` : "Salida"}
+                    </div>
                   </div>
                 </div>
               );
@@ -841,9 +894,9 @@ function MovementHistoryCard({
   houseComparisonRefreshing,
   houseComparisonError,
 }: {
-  selected: MaterialDashboardListRow | null;
-  detail: MaterialDashboardDetailData | null;
-  history: MaterialDashboardMovementData | null;
+  selected: DashboardSelectionRow | null;
+  detail: DashboardDetailLike | null;
+  history: DashboardHistoryLike | null;
   viewMode: DashboardViewMode;
   houseTypes: MaterialDashboardHouseType[];
   selectedHouseTypeId: number | null;
@@ -851,7 +904,7 @@ function MovementHistoryCard({
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
   onResetHouseRange: () => void;
-  houseComparison: MaterialDashboardHouseComparisonData | null;
+  houseComparison: DashboardHouseComparisonLike | null;
   detailLoading: boolean;
   historyLoading: boolean;
   houseComparisonLoading: boolean;
@@ -866,6 +919,8 @@ function MovementHistoryCard({
   const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
   const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
+  const selectedGroup = isGroupRow(selected) ? selected : null;
+  const groupSelection = Boolean(selectedGroup);
 
   useEffect(() => {
     setSelection(null);
@@ -885,9 +940,9 @@ function MovementHistoryCard({
             </svg>
           </div>
           <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-3">Pinned Graph</p>
-          <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">No material selected</h2>
+          <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">No study selected</h2>
           <p className="text-sm text-zinc-500">
-            Select a material from the list to analyze its movement history, consumption rate, and procurement metrics.
+            Select a material or group from the list to analyze normalized movement history and stock trends.
           </p>
         </div>
       </section>
@@ -955,6 +1010,9 @@ function MovementHistoryCard({
     bufferWeeks,
   });
   const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
+  const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
+  const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
+  const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const activeHouseMovementRangeStart = houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate;
   const activeHouseMovementRangeEnd = houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate;
   const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
@@ -1076,9 +1134,22 @@ function MovementHistoryCard({
           <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
           <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight">{selected.material_name}</h2>
           <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
-            <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selected.sku}</span>
-            {selected.unit ? <span>&bull; {selected.unit}</span> : null}
+            <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selectedBadge}</span>
+            {selectedUnitLabel ? <span>&bull; {selectedUnitLabel}</span> : null}
+            {groupSelection ? <span>&bull; {formatNumber(selectedGroup?.member_count, 0)} members</span> : null}
           </p>
+          {groupSelection && detailMembers.length ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {detailMembers.map((member) => (
+                <span
+                  key={member.sku}
+                  className="rounded-full border border-black/10 bg-white/80 px-2.5 py-1 text-[10px] font-medium text-zinc-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-300"
+                >
+                  {member.sku} = {formatNumber(member.factor_to_study_unit)} {detail?.unit || selectedGroup?.study_unit}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex gap-6 items-end">
           <div className="text-right">
@@ -1103,8 +1174,10 @@ function MovementHistoryCard({
           </div>
           <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           <div className="text-right">
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Avg Price</div>
-            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"}</div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{groupSelection ? "Study Unit" : "Avg Price"}</div>
+            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+              {groupSelection ? detail?.unit || selectedGroup?.study_unit : detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"}
+            </div>
           </div>
         </div>
       </div>
@@ -1650,7 +1723,7 @@ function MovementHistoryCard({
                 </text>
               </svg>
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this material.</div>
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this study.</div>
             )}
           </div>
 
@@ -1707,7 +1780,7 @@ function MovementHistoryCard({
                 <MetricRow label="Last house start" value={houseComparisonInRange ? formatDate(houseComparisonInRange.latest_house_start_date) : houseComparisonLoading ? "..." : "—"} />
                 <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
                 <MetricRow label="Stock on hand" value={detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Avg price" value={detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"} />
+                <MetricRow label="Avg price" value={!groupSelection && detail ? formatCurrency(detail.average_price) : "—"} />
               </div>
             </div>
           ) : (
@@ -1777,8 +1850,8 @@ function MovementHistoryCard({
                 <MetricRow label="Nueva OC" value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.purchaseOrderDate) : "—"} />
                 <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
                 <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Ult. OC" value={detail ? formatDate(detail.last_purchase_order.date) : detailLoading ? "..." : "—"} />
-                <MetricRow label="No. OC" value={detail ? detail.last_purchase_order.number || "—" : detailLoading ? "..." : "—"} />
+                <MetricRow label="Ult. OC" value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
+                <MetricRow label="No. OC" value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
               </div>
             </div>
           )}
@@ -1788,22 +1861,27 @@ function MovementHistoryCard({
   );
 }
 
-export function MaterialDashboardPage() {
+export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups?: boolean }) {
   const storedCecoPreferences = getStoredCecoFilterPreferences();
   const [cecos, setCecos] = useState<MaterialDashboardCeco[]>([]);
   const [dashboardCache, setDashboardCache] = useState<Record<string, MaterialDashboardData>>({});
   const [detailCache, setDetailCache] = useState<Record<string, MaterialDashboardDetailData>>({});
   const [historyCache, setHistoryCache] = useState<Record<string, MaterialDashboardMovementData>>({});
   const [houseComparisonCache, setHouseComparisonCache] = useState<Record<string, MaterialDashboardHouseComparisonData>>({});
+  const [groupListCache, setGroupListCache] = useState<Record<string, MaterialStudyGroupListResponse>>({});
+  const [groupDetailCache, setGroupDetailCache] = useState<Record<string, MaterialDashboardGroupDetailData>>({});
+  const [groupHistoryCache, setGroupHistoryCache] = useState<Record<string, MaterialDashboardGroupMovementData>>({});
+  const [groupHouseComparisonCache, setGroupHouseComparisonCache] = useState<Record<string, MaterialDashboardGroupHouseComparisonData>>({});
   const [houseTypes, setHouseTypes] = useState<MaterialDashboardHouseType[]>([]);
   const [cecoFilterMode, setCecoFilterMode] = useState<CecoFilterMode>(storedCecoPreferences?.mode ?? "exclude");
   const [selectedCecos, setSelectedCecos] = useState<string[]>(storedCecoPreferences?.cecos ?? []);
-  const [activeTab, setActiveTab] = useState<"materials" | "cecos">("materials");
+  const [activeTab, setActiveTab] = useState<"materials" | "groups" | "cecos">("materials");
   const [viewMode, setViewMode] = useState<DashboardViewMode>("stock");
   const [cecoSearch, setCecoSearch] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
-  const [selectedSku, setSelectedSku] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [groupEditorOpen, setGroupEditorOpen] = useState(false);
   const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
     () => getStoredHouseViewPreferences()?.selectedHouseTypeId ?? null,
   );
@@ -1825,12 +1903,17 @@ export function MaterialDashboardPage() {
   const detailRefreshNonceRef = useRef(0);
   const historyRefreshNonceRef = useRef(0);
   const houseComparisonRefreshNonceRef = useRef(0);
+  const groupListRefreshNonceRef = useRef(0);
+  const groupDetailRefreshNonceRef = useRef(0);
+  const groupHistoryRefreshNonceRef = useRef(0);
+  const groupHouseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
   const selectedCecoSet = new Set(normalizedSelectedCecoCodes);
   const normalizedSelectedCecos =
     cecoFilterMode === "exclude"
       ? normalizeCecos(cecos.map((ceco) => ceco.code).filter((code) => !selectedCecoSet.has(code)))
       : normalizedSelectedCecoCodes;
+  const cecoApiFilters = cecoFilterMode === "exclude" ? { excludedCecos: normalizedSelectedCecoCodes } : { cecos: normalizedSelectedCecoCodes };
   const allCecosExcluded = cecos.length > 0 && normalizedSelectedCecos.length === 0;
   const currentDashboardMovementDays =
     viewMode === "houses"
@@ -1842,6 +1925,12 @@ export function MaterialDashboardPage() {
         )
       : 60;
   const latestHistoryDate = toDateInputValue(moveToPreviousBusinessDay(new Date()));
+  const selectedMaterialSku = selectedKey?.startsWith("material:") ? selectedKey.slice("material:".length) : null;
+  const parsedSelectedGroupId = selectedKey?.startsWith("group:") ? Number(selectedKey.slice("group:".length)) : null;
+  const selectedGroupId =
+    parsedSelectedGroupId !== null && parsedSelectedGroupId !== undefined && Number.isFinite(parsedSelectedGroupId)
+      ? parsedSelectedGroupId
+      : null;
   const historyRequestRange =
     viewMode === "houses"
       ? {
@@ -1850,6 +1939,7 @@ export function MaterialDashboardPage() {
         }
       : null;
   const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos, currentDashboardMovementDays);
+  const currentGroupDashboardKey = groupDashboardCacheKey(normalizedSelectedCecos, currentDashboardMovementDays);
   const data = allCecosExcluded
     ? {
         materials: [],
@@ -1858,26 +1948,75 @@ export function MaterialDashboardPage() {
         generated_at: "",
       }
     : dashboardCache[currentDashboardKey] || null;
-  const currentDetailKey = selectedSku ? detailCacheKey(selectedSku, normalizedSelectedCecos) : null;
+  const groupData = allCecosExcluded
+    ? {
+        groups: [],
+        movement_window_days: currentDashboardMovementDays,
+        ceco_filters: [],
+        generated_at: "",
+      }
+    : groupListCache[currentGroupDashboardKey] || null;
+  const currentDetailKey = selectedMaterialSku ? detailCacheKey(selectedMaterialSku, normalizedSelectedCecos) : null;
   const selectedDetail = allCecosExcluded ? null : currentDetailKey ? detailCache[currentDetailKey] || null : null;
-  const currentHistoryKey = selectedSku ? historyCacheKey(selectedSku, normalizedSelectedCecos, historyRequestRange) : null;
+  const currentGroupDetailKey = selectedGroupId ? groupDetailCacheKey(selectedGroupId, normalizedSelectedCecos) : null;
+  const selectedGroupDetail = allCecosExcluded ? null : currentGroupDetailKey ? groupDetailCache[currentGroupDetailKey] || null : null;
+  const currentHistoryKey = selectedMaterialSku ? historyCacheKey(selectedMaterialSku, normalizedSelectedCecos, historyRequestRange) : null;
   const currentHistory = allCecosExcluded ? null : currentHistoryKey ? historyCache[currentHistoryKey] || null : null;
+  const currentGroupHistoryKey = selectedGroupId ? groupHistoryCacheKey(selectedGroupId, normalizedSelectedCecos, historyRequestRange) : null;
+  const currentGroupHistory = allCecosExcluded
+    ? null
+    : currentGroupHistoryKey
+      ? groupHistoryCache[currentGroupHistoryKey] || null
+      : null;
   const currentHouseComparisonKey =
-    selectedSku && selectedHouseTypeId
-      ? houseComparisonCacheKey(selectedSku, selectedHouseTypeId, normalizedSelectedCecos, houseRange)
+    selectedMaterialSku && selectedHouseTypeId
+      ? houseComparisonCacheKey(selectedMaterialSku, selectedHouseTypeId, normalizedSelectedCecos, houseRange)
       : null;
   const currentHouseComparison = allCecosExcluded
     ? null
     : currentHouseComparisonKey
       ? houseComparisonCache[currentHouseComparisonKey] || null
       : null;
+  const currentGroupHouseComparisonKey =
+    selectedGroupId && selectedHouseTypeId
+      ? groupHouseComparisonCacheKey(selectedGroupId, selectedHouseTypeId, normalizedSelectedCecos, houseRange)
+      : null;
+  const currentGroupHouseComparison = allCecosExcluded
+    ? null
+    : currentGroupHouseComparisonKey
+      ? groupHouseComparisonCache[currentGroupHouseComparisonKey] || null
+      : null;
+  const selectedMaterialRow = (data?.materials || []).find((row) => row.sku === selectedMaterialSku) || null;
+  const selectedGroupRow = (groupData?.groups || []).find((row) => row.group_id === selectedGroupId) || null;
+  const selectedRow = selectedMaterialRow || selectedGroupRow;
+  const selectedDetailLike = selectedMaterialRow ? selectedDetail : selectedGroupRow ? selectedGroupDetail : null;
+  const selectedHistoryLike = selectedMaterialRow ? currentHistory : selectedGroupRow ? currentGroupHistory : null;
+  const selectedHouseComparisonLike = selectedMaterialRow ? currentHouseComparison : selectedGroupRow ? currentGroupHouseComparison : null;
 
-  function syncSelectedSku(response: MaterialDashboardData) {
-    setSelectedSku((current) => {
-      if (current && response.materials.some((row) => row.sku === current)) {
-        return current;
+  function syncSelectedMaterial(response: MaterialDashboardData) {
+    setSelectedKey((current) => {
+      if (current?.startsWith("material:")) {
+        const currentSku = current.slice("material:".length);
+        if (response.materials.some((row) => row.sku === currentSku)) {
+          return current;
+        }
       }
-      return response.materials[0]?.sku ?? null;
+      return !current && response.materials[0] ? `material:${response.materials[0].sku}` : current;
+    });
+  }
+
+  function syncSelectedGroup(response: MaterialStudyGroupListResponse) {
+    setSelectedKey((current) => {
+      if (current?.startsWith("group:")) {
+        const currentGroupId = Number(current.slice("group:".length));
+        if (response.groups.some((row) => row.group_id === currentGroupId)) {
+          return current;
+        }
+      }
+      if ((!current || activeTab === "groups") && response.groups[0]) {
+        return `group:${response.groups[0].group_id}`;
+      }
+      return current;
     });
   }
 
@@ -1990,7 +2129,7 @@ export function MaterialDashboardPage() {
         if (cached) {
           hasCached = true;
           setDashboardCache((current) => (current[currentDashboardKey] ? current : { ...current, [currentDashboardKey]: cached }));
-          syncSelectedSku(cached);
+          syncSelectedMaterial(cached);
           setLoading(false);
         }
       }
@@ -2006,7 +2145,7 @@ export function MaterialDashboardPage() {
           return;
         }
         setDashboardCache((current) => ({ ...current, [currentDashboardKey]: response }));
-        syncSelectedSku(response);
+        syncSelectedMaterial(response);
         void setMaterialDashboardCacheValue(currentDashboardKey, response);
       } catch (err) {
         if (cancelled) {
@@ -2014,7 +2153,7 @@ export function MaterialDashboardPage() {
         }
         if (!hasCached) {
           setError(err instanceof ApiError ? err.message : "Could not load dashboard materials.");
-          setSelectedSku(null);
+          setSelectedKey((current) => (current?.startsWith("material:") ? null : current));
         }
       } finally {
         if (!cancelled) {
@@ -2029,7 +2168,56 @@ export function MaterialDashboardPage() {
   }, [allCecosExcluded, currentDashboardKey, currentDashboardMovementDays, refreshNonce]);
 
   useEffect(() => {
-    const sku = selectedSku;
+    let cancelled = false;
+    async function loadGroups() {
+      if (allCecosExcluded) {
+        return;
+      }
+      const forceRefresh = refreshNonce > 0 && groupListRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        groupListRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      if (!forceRefresh) {
+        const cached =
+          groupListCache[currentGroupDashboardKey] ||
+          (await getMaterialDashboardCacheValue<MaterialStudyGroupListResponse>(currentGroupDashboardKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setGroupListCache((current) =>
+            current[currentGroupDashboardKey] ? current : { ...current, [currentGroupDashboardKey]: cached },
+          );
+          syncSelectedGroup(cached);
+        }
+      }
+      try {
+        const response = await api.getMaterialStudyGroups(cecoApiFilters, {
+          movementDays: currentDashboardMovementDays,
+          refresh: forceRefresh,
+        });
+        if (cancelled) {
+          return;
+        }
+        setGroupListCache((current) => ({ ...current, [currentGroupDashboardKey]: response }));
+        syncSelectedGroup(response);
+        void setMaterialDashboardCacheValue(currentGroupDashboardKey, response);
+      } catch (err) {
+        if (!cancelled && !hasCached) {
+          setError((current) => current || (err instanceof ApiError ? err.message : "Could not load material groups."));
+        }
+      }
+    }
+    void loadGroups();
+    return () => {
+      cancelled = true;
+    };
+  }, [allCecosExcluded, currentDashboardMovementDays, currentGroupDashboardKey, refreshNonce]);
+
+  useEffect(() => {
+    const sku = selectedMaterialSku;
     const cacheKey = sku ? detailCacheKey(sku, normalizedSelectedCecos) : null;
     if (allCecosExcluded || !sku || !cacheKey) {
       setHistoryError(null);
@@ -2080,7 +2268,58 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentDetailKey, refreshNonce, selectedSku]);
+  }, [allCecosExcluded, currentDetailKey, refreshNonce, selectedMaterialSku]);
+
+  useEffect(() => {
+    const groupId = selectedGroupId;
+    const cacheKey = groupId ? groupDetailCacheKey(groupId, normalizedSelectedCecos) : null;
+    if (allCecosExcluded || !groupId || !cacheKey) {
+      return;
+    }
+    let cancelled = false;
+    async function loadGroupDetail() {
+      const forceRefresh = refreshNonce > 0 && groupDetailRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        groupDetailRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      setHistoryError(null);
+      if (!forceRefresh) {
+        const cached =
+          groupDetailCache[cacheKey] || (await getMaterialDashboardCacheValue<MaterialDashboardGroupDetailData>(cacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setGroupDetailCache((current) => (current[cacheKey] ? current : { ...current, [cacheKey]: cached }));
+          setDetailLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setDetailLoading(true);
+      }
+      try {
+        const response = await api.getMaterialStudyGroupDetail(groupId, cecoApiFilters, { refresh: forceRefresh });
+        if (!cancelled) {
+          setGroupDetailCache((current) => ({ ...current, [cacheKey]: response }));
+          void setMaterialDashboardCacheValue(cacheKey, response);
+        }
+      } catch (err) {
+        if (!cancelled && !hasCached) {
+          setHistoryError(err instanceof ApiError ? err.message : "Could not load material group detail.");
+        }
+      } finally {
+        if (!cancelled) {
+          setDetailLoading(false);
+        }
+      }
+    }
+    void loadGroupDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [allCecosExcluded, currentGroupDetailKey, refreshNonce, selectedGroupId]);
 
   useEffect(() => {
     if (!houseTypes.length) {
@@ -2106,7 +2345,7 @@ export function MaterialDashboardPage() {
   }, [houseRange, selectedHouseTypeId]);
 
   useEffect(() => {
-    const sku = selectedSku;
+    const sku = selectedMaterialSku;
     const cacheKey = sku ? historyCacheKey(sku, normalizedSelectedCecos, historyRequestRange) : null;
     if (allCecosExcluded || !sku || !cacheKey) {
       setHistoryError(null);
@@ -2161,10 +2400,65 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentHistoryKey, historyRequestRange?.endDate, historyRequestRange?.startDate, refreshNonce, selectedSku]);
+  }, [allCecosExcluded, currentHistoryKey, historyRequestRange?.endDate, historyRequestRange?.startDate, refreshNonce, selectedMaterialSku]);
 
   useEffect(() => {
-    const sku = selectedSku;
+    const groupId = selectedGroupId;
+    const cacheKey = groupId ? groupHistoryCacheKey(groupId, normalizedSelectedCecos, historyRequestRange) : null;
+    if (allCecosExcluded || !groupId || !cacheKey) {
+      return;
+    }
+    let cancelled = false;
+    async function loadGroupHistory() {
+      const forceRefresh = refreshNonce > 0 && groupHistoryRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        groupHistoryRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      setHistoryError(null);
+      if (!forceRefresh) {
+        const cached =
+          groupHistoryCache[cacheKey] || (await getMaterialDashboardCacheValue<MaterialDashboardGroupMovementData>(cacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setGroupHistoryCache((current) => (current[cacheKey] ? current : { ...current, [cacheKey]: cached }));
+          setHistoryLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setHistoryLoading(true);
+      }
+      try {
+        const response = await api.getMaterialStudyGroupHistory(groupId, cecoApiFilters, {
+          refresh: forceRefresh,
+          startDate: historyRequestRange?.startDate,
+          endDate: historyRequestRange?.endDate,
+        });
+        if (!cancelled) {
+          setGroupHistoryCache((current) => ({ ...current, [cacheKey]: response }));
+          void setMaterialDashboardCacheValue(cacheKey, response);
+        }
+      } catch (err) {
+        if (!cancelled && !hasCached) {
+          setHistoryError(err instanceof ApiError ? err.message : "Could not load material group history.");
+        }
+      } finally {
+        if (!cancelled) {
+          setHistoryLoading(false);
+        }
+      }
+    }
+    void loadGroupHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [allCecosExcluded, currentGroupHistoryKey, historyRequestRange?.endDate, historyRequestRange?.startDate, refreshNonce, selectedGroupId]);
+
+  useEffect(() => {
+    const sku = selectedMaterialSku;
     const houseTypeId = selectedHouseTypeId;
     const cacheKey = sku && houseTypeId ? houseComparisonCacheKey(sku, houseTypeId, normalizedSelectedCecos, houseRange) : null;
     if (allCecosExcluded || !sku || !houseTypeId || !cacheKey || viewMode !== "houses") {
@@ -2230,7 +2524,65 @@ export function MaterialDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedSku, viewMode]);
+  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedMaterialSku, viewMode]);
+
+  useEffect(() => {
+    const groupId = selectedGroupId;
+    const houseTypeId = selectedHouseTypeId;
+    const cacheKey =
+      groupId && houseTypeId ? groupHouseComparisonCacheKey(groupId, houseTypeId, normalizedSelectedCecos, houseRange) : null;
+    if (allCecosExcluded || !groupId || !houseTypeId || !cacheKey || viewMode !== "houses") {
+      return;
+    }
+    let cancelled = false;
+    async function loadGroupHouseComparison() {
+      const forceRefresh = refreshNonce > 0 && groupHouseComparisonRefreshNonceRef.current !== refreshNonce;
+      if (forceRefresh) {
+        groupHouseComparisonRefreshNonceRef.current = refreshNonce;
+      }
+      let hasCached = false;
+      setHouseComparisonError(null);
+      if (!forceRefresh) {
+        const cached =
+          groupHouseComparisonCache[cacheKey] ||
+          (await getMaterialDashboardCacheValue<MaterialDashboardGroupHouseComparisonData>(cacheKey));
+        if (cancelled) {
+          return;
+        }
+        if (cached) {
+          hasCached = true;
+          setGroupHouseComparisonCache((current) => (current[cacheKey] ? current : { ...current, [cacheKey]: cached }));
+          setHouseComparisonLoading(false);
+        }
+      }
+      if (!hasCached) {
+        setHouseComparisonLoading(true);
+      }
+      try {
+        const response = await api.getMaterialStudyGroupHouseComparison(groupId, houseTypeId, cecoApiFilters, {
+          refresh: forceRefresh,
+          startDate: houseRange.startDate,
+          endDate: houseRange.endDate,
+        });
+        if (!cancelled) {
+          setGroupHouseComparisonCache((current) => ({ ...current, [cacheKey]: response }));
+          void setMaterialDashboardCacheValue(cacheKey, response);
+        }
+      } catch (err) {
+        if (!cancelled && !hasCached) {
+          setHouseComparisonError(err instanceof ApiError ? err.message : "Could not load group house-start comparison.");
+        }
+      } finally {
+        if (!cancelled) {
+          setHouseComparisonLoading(false);
+        }
+      }
+    }
+    void loadGroupHouseComparison();
+    return () => {
+      cancelled = true;
+    };
+  }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, viewMode]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const rows = (data?.materials || [])
@@ -2242,8 +2594,16 @@ export function MaterialDashboardPage() {
     })
     .slice()
     .sort((left, right) => compareRows(left, right, sort));
+  const groupRows = (groupData?.groups || [])
+    .filter((row) => {
+      if (!normalizedMaterialSearch) {
+        return true;
+      }
+      return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.name.toLowerCase().includes(normalizedMaterialSearch);
+    })
+    .slice()
+    .sort((left, right) => compareRows(left, right, sort));
 
-  const selectedRow = (data?.materials || []).find((row) => row.sku === selectedSku) || null;
   const filteredCecos = cecos.filter((ceco) => {
     const term = cecoSearch.trim().toLowerCase();
     if (!term) {
@@ -2251,7 +2611,6 @@ export function MaterialDashboardPage() {
     }
     return ceco.code.toLowerCase().includes(term) || ceco.name.toLowerCase().includes(term);
   });
-  const cecoApiFilters = cecoFilterMode === "exclude" ? { excludedCecos: normalizedSelectedCecoCodes } : { cecos: normalizedSelectedCecoCodes };
 
   function toggleSort(key: SortKey) {
     setSort((current) => (current.key === key ? { key, direction: current.direction === 1 ? -1 : 1 } : { key, direction: -1 }));
@@ -2272,6 +2631,23 @@ export function MaterialDashboardPage() {
     setSelectedCecos([]);
   }
 
+  function handleGroupEditorChanged(groupId: number | null) {
+    setRefreshNonce((current) => current + 1);
+    if (groupId) {
+      setSelectedKey(`group:${groupId}`);
+      setActiveTab("groups");
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "materials" && !selectedMaterialRow && rows[0]) {
+      setSelectedKey(`material:${rows[0].sku}`);
+    }
+    if (activeTab === "groups" && !selectedGroupRow && groupRows[0]) {
+      setSelectedKey(`group:${groupRows[0].group_id}`);
+    }
+  }, [activeTab, groupRows, rows, selectedGroupRow, selectedMaterialRow]);
+
   return (
     <div className="absolute inset-0 top-16 flex flex-col xl:flex-row overflow-hidden bg-zinc-50 dark:bg-zinc-950/40 z-30">
       
@@ -2284,7 +2660,7 @@ export function MaterialDashboardPage() {
             <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Filters</p>
             <div className="flex items-end justify-between mb-4">
               <h2 className="text-lg font-bold text-zinc-900 dark:text-white">ERP Activity</h2>
-              <div className="text-xs text-zinc-500">Updated: {formatDate(data?.generated_at)}</div>
+              <div className="text-xs text-zinc-500">Updated: {formatDate(activeTab === "groups" ? groupData?.generated_at : data?.generated_at)}</div>
             </div>
           </div>
 
@@ -2296,6 +2672,16 @@ export function MaterialDashboardPage() {
             >
               Materials
               {activeTab === "materials" ? (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500 rounded-t-full" />
+              ) : null}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("groups")}
+              className={`pb-3 text-sm font-semibold transition-colors relative ${activeTab === "groups" ? "text-accent-600 dark:text-accent-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
+            >
+              Groups
+              {activeTab === "groups" ? (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500 rounded-t-full" />
               ) : null}
             </button>
@@ -2380,11 +2766,11 @@ export function MaterialDashboardPage() {
                 ) : rows.length ? (
                   <div className="divide-y divide-black/5 dark:divide-white/5">
                     {rows.map((row) => {
-                      const active = row.sku === selectedSku;
+                      const active = row.sku === selectedMaterialSku;
                       return (
                         <div
                           key={row.sku}
-                          onClick={() => setSelectedSku(row.sku)}
+                          onClick={() => setSelectedKey(`material:${row.sku}`)}
                           className={`cursor-pointer p-4 transition-colors ${
                             active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
                           }`}
@@ -2408,6 +2794,101 @@ export function MaterialDashboardPage() {
                   </div>
                 ) : (
                   <div className="p-10 text-center text-sm text-zinc-500">No materials match the current filters.</div>
+                )}
+              </div>
+            </div>
+          ) : activeTab === "groups" ? (
+            <div className="flex-1 flex flex-col min-h-0">
+              <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
+                <div className="relative">
+                  <input
+                    value={materialSearch}
+                    onChange={(event) => setMaterialSearch(event.target.value)}
+                    className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+                    placeholder="Group name"
+                  />
+                  <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleReload}
+                    className="flex-1 rounded-xl bg-accent-500 text-zinc-950 font-semibold text-sm px-4 py-2 hover:bg-accent-400 transition-colors shadow-sm"
+                  >
+                    Reload
+                  </button>
+                  {canEditGroups ? (
+                    <button
+                      type="button"
+                      onClick={() => setGroupEditorOpen(true)}
+                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-medium px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/10 transition-colors shadow-sm"
+                    >
+                      Manage Groups
+                    </button>
+                  ) : null}
+                </div>
+                <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("stock")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      Stock View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("houses")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      House View
+                    </button>
+                  </div>
+                </div>
+                {error ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
+                {historyError ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{historyError}</div> : null}
+                {houseComparisonError && viewMode === "houses" ? (
+                  <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{houseComparisonError}</div>
+                ) : null}
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {groupRows.length ? (
+                  <div className="divide-y divide-black/5 dark:divide-white/5">
+                    {groupRows.map((row) => {
+                      const active = row.group_id === selectedGroupId;
+                      return (
+                        <div
+                          key={row.group_id}
+                          onClick={() => setSelectedKey(`group:${row.group_id}`)}
+                          className={`cursor-pointer p-4 transition-colors ${
+                            active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
+                          }`}
+                        >
+                          {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
+                          <div className="flex justify-between items-start gap-4 mb-2">
+                            <div>
+                              <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
+                                {row.name}
+                              </h4>
+                              <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} members</div>
+                            </div>
+                            <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                              {row.study_unit}
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between text-xs text-zinc-500">
+                            <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} (60d)</div>
+                            <div>Last mov: {formatDate(row.last_movement_date)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-10 text-center text-sm text-zinc-500">No groups match the current filters.</div>
                 )}
               </div>
             </div>
@@ -2545,8 +3026,8 @@ export function MaterialDashboardPage() {
       <main className="flex-1 min-w-0 bg-white dark:bg-zinc-950 flex flex-col h-full relative overflow-hidden">
         <MovementHistoryCard
           selected={selectedRow}
-          detail={selectedDetail}
-          history={currentHistory}
+          detail={selectedDetailLike}
+          history={selectedHistoryLike}
           viewMode={viewMode}
           houseTypes={houseTypes}
           selectedHouseTypeId={selectedHouseTypeId}
@@ -2554,16 +3035,24 @@ export function MaterialDashboardPage() {
           houseRange={houseRange}
           onHouseRangeChange={setHouseRange}
           onResetHouseRange={() => setHouseRange(getDefaultHouseRange())}
-          houseComparison={currentHouseComparison}
+          houseComparison={selectedHouseComparisonLike}
           detailLoading={detailLoading}
           historyLoading={historyLoading}
           houseComparisonLoading={houseComparisonLoading}
-          detailRefreshing={detailLoading && Boolean(selectedDetail)}
-          historyRefreshing={historyLoading && Boolean(currentHistory)}
-          houseComparisonRefreshing={houseComparisonLoading && Boolean(currentHouseComparison)}
+          detailRefreshing={detailLoading && Boolean(selectedDetailLike)}
+          historyRefreshing={historyLoading && Boolean(selectedHistoryLike)}
+          houseComparisonRefreshing={houseComparisonLoading && Boolean(selectedHouseComparisonLike)}
           houseComparisonError={houseComparisonError}
         />
       </main>
+      {canEditGroups ? (
+        <MaterialStudyGroupEditor
+          open={groupEditorOpen}
+          groups={groupData?.groups || []}
+          onClose={() => setGroupEditorOpen(false)}
+          onChanged={handleGroupEditorChanged}
+        />
+      ) : null}
     </div>
   );
 }

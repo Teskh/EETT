@@ -33,12 +33,18 @@ from app.api_models import (
     MaterialDashboardDateRangeRequest,
     MaterialDashboardDetailResponse,
     MaterialDashboardFilterRequest,
+    MaterialDashboardGroupDetailResponse,
+    MaterialDashboardGroupHouseComparisonResponse,
+    MaterialDashboardGroupMovementResponse,
     MaterialDashboardHouseComparisonRequest,
     MaterialDashboardHouseComparisonResponse,
     MaterialDashboardHouseTypesResponse,
     MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
+    MaterialStudyGroupListResponse,
+    MaterialStudyGroupModel,
+    MaterialStudyGroupPayloadModel,
     MaterialOccurrenceUpdateRequest,
     MaterialModeResponse,
     ManagedUserModel,
@@ -110,6 +116,15 @@ from app.services.dashboard import (
     get_recent_material_dashboard,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
+from app.services.material_groups import (
+    create_material_study_group,
+    delete_material_study_group,
+    get_material_dashboard_group_detail,
+    get_material_dashboard_group_history,
+    get_material_dashboard_group_house_comparison,
+    get_material_dashboard_groups,
+    update_material_study_group,
+)
 from app.services.production_dashboard import (
     get_material_dashboard_house_start_comparison,
     get_material_dashboard_house_types,
@@ -1534,6 +1549,300 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return get_material_dashboard_house_types(app.state.settings)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/material-groups", response_model=MaterialStudyGroupListResponse)
+    def material_study_groups_v1(
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        movement_days_param = request.query_params.get("movement_days")
+        try:
+            movement_days = max(int(movement_days_param), 1) if movement_days_param is not None else 60
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="movement_days must be a positive integer") from exc
+        try:
+            return get_material_dashboard_groups(
+                request.app.state.settings,
+                session=session,
+                movement_days=movement_days,
+                cost_centers=ceco_filters,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/dashboard/material-groups/query", response_model=MaterialStudyGroupListResponse)
+    def material_study_groups_v1_post(
+        payload: MaterialDashboardListRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            return get_material_dashboard_groups(
+                request.app.state.settings,
+                session=session,
+                movement_days=payload.movement_days,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/dashboard/material-groups", response_model=MaterialStudyGroupModel)
+    def create_material_study_group_v1(
+        payload: MaterialStudyGroupPayloadModel,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_erp_admin(current_user)
+        try:
+            return create_material_study_group(
+                session,
+                name=payload.name,
+                description=payload.description,
+                study_unit=payload.study_unit,
+                members=[member.model_dump() for member in payload.members],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.put("/api/v1/dashboard/material-groups/{group_id}", response_model=MaterialStudyGroupModel)
+    def update_material_study_group_v1(
+        group_id: int,
+        payload: MaterialStudyGroupPayloadModel,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_erp_admin(current_user)
+        try:
+            group = update_material_study_group(
+                session,
+                group_id,
+                name=payload.name,
+                description=payload.description,
+                study_unit=payload.study_unit,
+                members=[member.model_dump() for member in payload.members],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if group is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return group
+
+    @app.delete("/api/v1/dashboard/material-groups/{group_id}", response_model=MutationResultModel)
+    def delete_material_study_group_v1(
+        group_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_erp_admin(current_user)
+        if not delete_material_study_group(session, group_id):
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return {"ok": True}
+
+    @app.get("/api/v1/dashboard/material-groups/{group_id}/detail", response_model=MaterialDashboardGroupDetailResponse)
+    def material_dashboard_group_detail_v1(
+        group_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        try:
+            detail = get_material_dashboard_group_detail(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                cost_centers=ceco_filters,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return detail
+
+    @app.post("/api/v1/dashboard/material-groups/{group_id}/detail", response_model=MaterialDashboardGroupDetailResponse)
+    def material_dashboard_group_detail_v1_post(
+        group_id: int,
+        payload: MaterialDashboardFilterRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            detail = get_material_dashboard_group_detail(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return detail
+
+    @app.get("/api/v1/dashboard/material-groups/{group_id}/house-comparison", response_model=MaterialDashboardGroupHouseComparisonResponse)
+    def material_dashboard_group_house_comparison_v1(
+        group_id: int,
+        house_type_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        try:
+            requested_start_date = date.fromisoformat(start_date) if start_date else None
+            requested_end_date = date.fromisoformat(end_date) if end_date else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid date range; expected YYYY-MM-DD") from exc
+        if requested_start_date and requested_end_date and requested_start_date > requested_end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((requested_end_date - requested_start_date).days + 1, 1)
+            if requested_start_date and requested_end_date
+            else 90
+        )
+        try:
+            comparison = get_material_dashboard_group_house_comparison(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                house_type_id=house_type_id,
+                cost_centers=ceco_filters,
+                history_days=history_days,
+                start_date=requested_start_date,
+                end_date=requested_end_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if comparison is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return comparison
+
+    @app.post("/api/v1/dashboard/material-groups/{group_id}/house-comparison", response_model=MaterialDashboardGroupHouseComparisonResponse)
+    def material_dashboard_group_house_comparison_v1_post(
+        group_id: int,
+        payload: MaterialDashboardHouseComparisonRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            comparison = get_material_dashboard_group_house_comparison(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                house_type_id=payload.house_type_id,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                history_days=history_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if comparison is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return comparison
+
+    @app.get("/api/v1/dashboard/material-groups/{group_id}/movements", response_model=MaterialDashboardGroupMovementResponse)
+    def material_dashboard_group_movements_v1(
+        group_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        ceco_filters = request.query_params.getlist("ceco")
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        try:
+            requested_start_date = date.fromisoformat(start_date) if start_date else None
+            requested_end_date = date.fromisoformat(end_date) if end_date else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid date range provided for movement history") from exc
+        if requested_start_date and requested_end_date and requested_start_date > requested_end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((requested_end_date - requested_start_date).days + 1, 1)
+            if requested_start_date and requested_end_date
+            else 90
+        )
+        try:
+            history = get_material_dashboard_group_history(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                history_days=history_days,
+                start_date=requested_start_date,
+                end_date=requested_end_date,
+                cost_centers=ceco_filters,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if history is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return history
+
+    @app.post("/api/v1/dashboard/material-groups/{group_id}/movements", response_model=MaterialDashboardGroupMovementResponse)
+    def material_dashboard_group_movements_v1_post(
+        group_id: int,
+        payload: MaterialDashboardDateRangeRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            history = get_material_dashboard_group_history(
+                request.app.state.settings,
+                group_id,
+                session=session,
+                history_days=history_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if history is None:
+            raise HTTPException(status_code=404, detail="Material group not found")
+        return history
 
     @app.get("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
     def material_dashboard_detail_v1(

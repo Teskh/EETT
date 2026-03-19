@@ -14,10 +14,16 @@ import type {
   ManagedUser,
   MaterialDashboardCecoResponse,
   MaterialDashboardHouseComparisonData,
+  MaterialDashboardGroupDetailData,
+  MaterialDashboardGroupHouseComparisonData,
+  MaterialDashboardGroupMovementData,
   MaterialDashboardHouseTypesResponse,
   MaterialDashboardData,
   MaterialDashboardDetailData,
   MaterialDashboardMovementData,
+  MaterialStudyGroupListResponse,
+  MaterialStudyGroupPayload,
+  MaterialStudyGroupRow,
   MutationResult,
   ProjectDetailData,
   ProjectsBoardData,
@@ -269,6 +275,72 @@ export const api = {
   },
   getMaterialDashboardHouseTypes() {
     return request<MaterialDashboardHouseTypesResponse>("/api/v1/dashboard/materials/house-types");
+  },
+  getMaterialStudyGroups(filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialStudyGroupListResponse>("/api/v1/dashboard/material-groups/query", {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        movement_days:
+          options.movementDays && Number.isFinite(options.movementDays)
+            ? Math.max(Math.floor(options.movementDays), 1)
+            : 60,
+      }),
+    });
+  },
+  createMaterialStudyGroup(payload: MaterialStudyGroupPayload) {
+    return request<MaterialStudyGroupRow>("/api/v1/dashboard/material-groups", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateMaterialStudyGroup(groupId: number, payload: MaterialStudyGroupPayload) {
+    return request<MaterialStudyGroupRow>(`/api/v1/dashboard/material-groups/${groupId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  deleteMaterialStudyGroup(groupId: number) {
+    return request<MutationResult>(`/api/v1/dashboard/material-groups/${groupId}`, {
+      method: "DELETE",
+    });
+  },
+  getMaterialStudyGroupDetail(groupId: number, filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialDashboardGroupDetailData>(`/api/v1/dashboard/material-groups/${groupId}/detail`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
+  getMaterialStudyGroupHistory(groupId: number, filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
+    return request<MaterialDashboardGroupMovementData>(`/api/v1/dashboard/material-groups/${groupId}/movements`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
+  getMaterialStudyGroupHouseComparison(
+    groupId: number,
+    houseTypeId: number,
+    filters: MaterialDashboardFilterSelection = {},
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    return request<MaterialDashboardGroupHouseComparisonData>(`/api/v1/dashboard/material-groups/${groupId}/house-comparison`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        house_type_id: houseTypeId,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
   },
   getMaterialDashboardDetail(sku: string, filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
     return request<MaterialDashboardDetailData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}`, {

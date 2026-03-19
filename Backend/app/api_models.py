@@ -689,6 +689,98 @@ class MaterialDashboardHouseComparisonResponse(BaseModel):
     generated_at: str
 
 
+class MaterialStudyGroupMemberModel(BaseModel):
+    sku: str
+    material_name: str
+    unit: str | None
+    factor_to_study_unit: float
+    display_order: int
+
+
+class MaterialStudyGroupMemberPayloadModel(BaseModel):
+    sku: str
+    material_name: str
+    unit: str | None = None
+    factor_to_study_unit: float
+
+
+class MaterialStudyGroupModel(BaseModel):
+    group_id: int
+    name: str
+    description: str | None
+    study_unit: str
+    member_count: int
+    members: list[MaterialStudyGroupMemberModel] = Field(default_factory=list)
+    sku: str
+    material_name: str
+    unit: str | None
+    last_movement_date: str | None
+    movement_quantity_60d: float
+    movement_count_60d: int
+
+
+class MaterialStudyGroupListResponse(BaseModel):
+    groups: list[MaterialStudyGroupModel] = Field(default_factory=list)
+    movement_window_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialStudyGroupPayloadModel(BaseModel):
+    name: str
+    description: str | None = None
+    study_unit: str
+    members: list[MaterialStudyGroupMemberPayloadModel] = Field(default_factory=list)
+
+
+class MaterialDashboardGroupDetailResponse(MaterialDashboardDetailModel):
+    group_id: int
+    name: str
+    description: str | None
+    study_unit: str
+    member_count: int
+    members: list[MaterialStudyGroupMemberModel] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardGroupMovementDetailModel(MaterialDashboardMovementDetailModel):
+    sku: str
+    material_name: str
+    source_unit: str | None
+    factor_to_study_unit: float
+    source_quantity: float
+
+
+class MaterialDashboardGroupMovementResponse(BaseModel):
+    group_id: int
+    group_name: str
+    description: str | None
+    study_unit: str
+    member_count: int
+    members: list[MaterialStudyGroupMemberModel] = Field(default_factory=list)
+    sku: str
+    material_name: str
+    unit: str | None
+    movement_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    movements: list[MaterialDashboardMovementPointModel] = Field(default_factory=list)
+    movement_details: list[MaterialDashboardGroupMovementDetailModel] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardGroupHouseComparisonResponse(MaterialDashboardHouseComparisonResponse):
+    group_id: int
+    group_name: str
+    description: str | None
+    study_unit: str
+    member_count: int
+    members: list[MaterialStudyGroupMemberModel] = Field(default_factory=list)
+    material_name: str
+    unit: str | None
+
+
 class NotificationModel(BaseModel):
     id: int
     type: str
