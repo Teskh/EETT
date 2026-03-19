@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+import hashlib
 import json
 
 from sqlalchemy import select
@@ -28,6 +29,7 @@ MATERIAL_DASHBOARD_CACHE_TTL_CECOS = timedelta(hours=24)
 MATERIAL_DASHBOARD_CACHE_TTL_LIST = timedelta(minutes=30)
 MATERIAL_DASHBOARD_CACHE_TTL_DETAIL = timedelta(minutes=15)
 MATERIAL_DASHBOARD_CACHE_TTL_HISTORY = timedelta(hours=6)
+MATERIAL_DASHBOARD_CACHE_KEY_MAX_LENGTH = 255
 
 
 def get_project_material_dashboard(session: Session, project_id: int) -> dict | None:
@@ -473,9 +475,20 @@ def _is_duplicate_material_dashboard_cache_key(exc: IntegrityError) -> bool:
 
 
 def _dashboard_cache_key(parts: dict[str, object]) -> str:
-    return json.dumps(
+    serialized = json.dumps(
         {
             "parts": parts,
+            "version": MATERIAL_DASHBOARD_CACHE_VERSION,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(serialized) <= MATERIAL_DASHBOARD_CACHE_KEY_MAX_LENGTH:
+        return serialized
+
+    return json.dumps(
+        {
+            "key_hash": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
             "version": MATERIAL_DASHBOARD_CACHE_VERSION,
         },
         sort_keys=True,

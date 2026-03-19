@@ -38,7 +38,7 @@ from app.services.catalog import (
     search_material_candidates,
     update_attribute_definition,
 )
-from app.services.dashboard import get_recent_material_dashboard
+from app.services.dashboard import get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import _get_lead_time_samples_for_product
 from app.services.material_groups import (
@@ -1520,6 +1520,44 @@ class ServiceLayerTests(unittest.TestCase):
 
         self.assertEqual(result["materials"][0]["sku"], "ERP-001")
         self.assertEqual(len(cached_entries), 1)
+
+    @patch("app.services.dashboard.get_material_movement_details")
+    @patch("app.services.dashboard.get_material_movement_history")
+    def test_material_dashboard_history_cache_hashes_long_filter_keys(
+        self,
+        movement_history_mock,
+        movement_details_mock,
+    ) -> None:
+        movement_history_mock.return_value = [{"date": "2026-03-18", "quantity": 10.0}]
+        movement_details_mock.return_value = [{"date": "2026-03-18", "quantity": 10.0}]
+        excluded_cost_centers = [f"{index:02d}-{index:02d}-{index:02d}" for index in range(1, 31)]
+
+        with self.session_factory() as session:
+            first = get_material_dashboard_history(
+                self.settings,
+                "ERP-001",
+                session=session,
+                excluded_cost_centers=excluded_cost_centers,
+                history_days=90,
+                start_date=date(2025, 12, 22),
+                end_date=date(2026, 3, 19),
+            )
+            second = get_material_dashboard_history(
+                self.settings,
+                "ERP-001",
+                session=session,
+                excluded_cost_centers=excluded_cost_centers,
+                history_days=90,
+                start_date=date(2025, 12, 22),
+                end_date=date(2026, 3, 19),
+            )
+            cached_entries = session.scalars(select(MaterialDashboardCacheEntry)).all()
+
+        self.assertEqual(first, second)
+        self.assertEqual(movement_history_mock.call_count, 1)
+        self.assertEqual(movement_details_mock.call_count, 1)
+        self.assertEqual(len(cached_entries), 1)
+        self.assertLessEqual(len(cached_entries[0].cache_key), 255)
 
     def test_app_lifespan_requires_existing_schema(self) -> None:
         Base.metadata.drop_all(self.engine)

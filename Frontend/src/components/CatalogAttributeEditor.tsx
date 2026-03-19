@@ -162,7 +162,7 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
                   <select
                     value={attribute.value_type}
                     onChange={(event) => updateAttribute(attribute.local_id, { value_type: event.target.value })}
-                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   >
                     <option value="text">Text</option>
                     <option value="number">Number</option>

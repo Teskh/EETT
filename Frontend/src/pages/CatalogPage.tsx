@@ -282,7 +282,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                   <select
                     value={form.component_type}
                     onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))}
-                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                    className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   >
                     <option value="item">Item</option>
                     <option value="accessory">Accessory</option>
@@ -749,7 +749,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                   <select
                     value={categoryForm.scope}
                     onChange={(event) => setCategoryForm((current) => ({ ...current, scope: event.target.value }))}
-                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                    className="w-full bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   >
                     <option value="item">Item</option>
                     <option value="accessory">Accessory</option>
@@ -789,7 +789,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     <select
                       value={componentForm.component_type}
                       onChange={(event) => setComponentForm((current) => ({ ...current, component_type: event.target.value }))}
-                      className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                      className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     >
                       <option value="item">Item</option>
                       <option value="accessory">Accessory</option>

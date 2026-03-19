@@ -758,7 +758,7 @@ function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?: Chart
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 px-4 py-3">
+    <div className="rounded-2xl border border-black/10 bg-zinc-50 px-4 py-3 shadow-sm transition-colors hover:bg-zinc-100/50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/[0.07]">
       <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">{label}</div>
       <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
     </div>
@@ -767,7 +767,7 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 
 function SelectionMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-[132px] rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50/90 dark:bg-white/5 px-4 py-3">
+    <div className="min-w-[132px] rounded-2xl border border-black/10 bg-zinc-50/90 px-4 py-3 shadow-sm transition-colors hover:bg-zinc-100/90 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/[0.07]">
       <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">{label}</div>
       <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
     </div>
@@ -776,8 +776,8 @@ function SelectionMetric({ label, value }: { label: string; value: string }) {
 
 function MetricRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between py-1 border-b border-black/5 dark:border-white/5 last:border-0">
-      <div className="text-xs font-medium text-zinc-500">{label}</div>
+    <div className="group flex items-center justify-between border-b border-black/5 py-1.5 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
+      <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">{label}</div>
       <div className="text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
     </div>
   );
@@ -856,12 +856,18 @@ function MovementBreakdownSkeleton() {
         </div>
       </div>
 
-      <div className="mt-3 h-[300px] overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
-        <div className="h-full divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+      <div className="mt-3 flex h-[300px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+        <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+          <SkeletonBlock className="h-3 w-32" />
+          <div className="flex md:justify-end">
+            <SkeletonBlock className="h-3 w-16" />
+          </div>
+        </div>
+        <div className="flex-1 divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
           {Array.from({ length: 5 }).map((_, index) => (
             <div
               key={index}
-              className="grid min-h-[74px] gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+              className="grid min-h-[74px] gap-3 px-4 py-3 transition-colors hover:bg-zinc-100/50 dark:hover:bg-white/[0.05] md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -900,7 +906,7 @@ const SidebarSearchInput = memo(function SidebarSearchInput({
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-10 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-10 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
         placeholder={placeholder}
       />
       <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1117,25 +1123,30 @@ function MovementBreakdownList({
         </div>
       </div>
 
-      <div className="mt-3 h-[300px] overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 flex h-[300px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
-          <div className="h-full divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
-            {movements.map((movement, index) => {
-              const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
-              const titleParts = [
-                `Fecha: ${formatDate(movement.date)}`,
-                `Cantidad: ${formatNumber(movement.quantity)}`,
-                `CECO: ${cecoLabel}`,
-                "sku" in movement ? `SKU: ${movement.sku}` : null,
-                movement.movement_internal_number ? `Mov. ERP: ${movement.movement_internal_number}` : null,
-                movement.line_count > 0 ? `Lineas SKU: ${formatNumber(movement.line_count, 0)}` : null,
-              ].filter(Boolean);
-              return (
-                <div
-                  key={`${movement.date}-${movement.movement_internal_number ?? "movement"}-${index}`}
-                  title={titleParts.join("\n")}
-                  className="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
-                >
+          <>
+            <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div>Detalles del Movimiento</div>
+              <div className="text-left md:text-right">Cantidad</div>
+            </div>
+            <div className="flex-1 divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+              {movements.map((movement, index) => {
+                const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
+                const titleParts = [
+                  `Fecha: ${formatDate(movement.date)}`,
+                  `Cantidad: ${formatNumber(movement.quantity)}`,
+                  `CECO: ${cecoLabel}`,
+                  "sku" in movement ? `SKU: ${movement.sku}` : null,
+                  movement.movement_internal_number ? `Mov. ERP: ${movement.movement_internal_number}` : null,
+                  movement.line_count > 0 ? `Lineas SKU: ${formatNumber(movement.line_count, 0)}` : null,
+                ].filter(Boolean);
+                return (
+                  <div
+                    key={`${movement.date}-${movement.movement_internal_number ?? "movement"}-${index}`}
+                    title={titleParts.join("\n")}
+                    className="grid gap-3 px-4 py-3 transition-colors hover:bg-zinc-100/50 dark:hover:bg-white/[0.05] md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+                  >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-semibold text-zinc-900 dark:text-white">{formatDate(movement.date)}</span>
@@ -1168,7 +1179,8 @@ function MovementBreakdownList({
                 </div>
               );
             })}
-          </div>
+            </div>
+          </>
         ) : (
           <div className="flex h-full items-center justify-center px-4 py-8 text-sm text-zinc-500">
             No outgoing movements fell within this plotted period.
@@ -1513,7 +1525,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     <select
                       value={selectedHouseTypeId ?? ""}
                       onChange={(event) => onSelectHouseType(Number(event.target.value))}
-                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
                     >
                       {houseTypes.map((houseType) => (
                         <option key={houseType.id} value={houseType.id}>
@@ -1528,7 +1540,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                         max={houseRange.endDate}
                         onChange={(event) => handleHouseRangeStartChange(event.target.value)}
                         aria-label="Start date"
-                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
+                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                       />
                       <span className="text-[11px] text-zinc-400">-</span>
                       <input
@@ -1538,7 +1550,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                         max={latestHouseRangeValue}
                         onChange={(event) => handleHouseRangeEndChange(event.target.value)}
                         aria-label="End date"
-                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
+                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                       />
                       <button
                         type="button"
@@ -3188,7 +3200,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 <input
                   value={cecoSearch}
                   onChange={(event) => setCecoSearch(event.target.value)}
-                  className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 transition-colors"
+                  className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
                   placeholder="Search CECO..."
                 />
 
