@@ -753,7 +753,7 @@ function MovementBreakdownList({
   const uniqueCecos = new Set(movements.map((movement) => movement.ceco).filter(Boolean)).size;
 
   return (
-    <div className="mt-6 pt-6 border-t border-black/5 dark:border-white/5">
+    <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Movement Breakdown</h4>
@@ -768,9 +768,9 @@ function MovementBreakdownList({
         </div>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 overflow-hidden rounded-2xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
-          <div className="max-h-[220px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
+          <div className="max-h-[300px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
             {movements.map((movement, index) => {
               const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
               const titleParts = [
@@ -1111,7 +1111,7 @@ function MovementHistoryCard({
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] flex-1">
         <div className="p-6 md:p-8 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10">
-          <div className="flex items-start justify-between mb-6 gap-4">
+          <div className="flex items-start justify-between mb-2 gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
@@ -1185,7 +1185,7 @@ function MovementHistoryCard({
               </div>
               {isHouseMode ? (
                 <>
-                  <div className="mt-3 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
+                  <div className="mt-1 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
                     <div className="flex items-center gap-2">
                       <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
                       <span>Material stock</span>
@@ -1195,9 +1195,6 @@ function MovementHistoryCard({
                       <span>Remaining house starts</span>
                     </div>
                   </div>
-                  <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                    Compare stock against remaining starts across the selected business-day range. Drag across the chart to focus a period; the movement list below follows the same dates.
-                  </p>
                 </>
               ) : (
                 <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
@@ -1223,7 +1220,7 @@ function MovementHistoryCard({
             ) : null}
           </div>
 
-          <div className="flex-1 w-full relative min-h-[240px]">
+          <div className="flex-1 w-full relative min-h-[180px]">
             {isHouseMode ? (
               !selectedHouseType ? (
                 <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house types available.</div>
