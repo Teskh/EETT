@@ -20,6 +20,8 @@ import type {
   MaterialDashboardMovementPoint,
   MaterialStudyGroupListResponse,
   MaterialStudyGroupRow,
+  ProjectSummary,
+  ProjectsBoardData,
 } from "../lib/types";
 
 type SortKey = "material_name" | "sku" | "last_movement_date" | "movement_quantity_60d" | "movement_count_60d";
@@ -121,8 +123,8 @@ function historyCacheKey(sku: string, cecos: string[], range?: { startDate?: str
   return `history::${sku}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[], range: HouseRange) {
-  return `houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
+function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[], range: HouseRange, projectId?: number | null) {
+  return `houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 function groupDashboardCacheKey(cecos: string[], movementDays = 60) {
@@ -140,8 +142,8 @@ function groupHistoryCacheKey(groupId: number, cecos: string[], range?: { startD
   return `group-history::${groupId}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-function groupHouseComparisonCacheKey(groupId: number, houseTypeId: number, cecos: string[], range: HouseRange) {
-  return `group-houses::${groupId}::${houseTypeId}::${range.startDate}::${range.endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
+function groupHouseComparisonCacheKey(groupId: number, houseTypeId: number, cecos: string[], range: HouseRange, projectId?: number | null) {
+  return `group-houses::${groupId}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 type DashboardSelectionRow = MaterialDashboardListRow | MaterialStudyGroupRow;
@@ -278,12 +280,17 @@ function getStoredHouseViewPreferences() {
     }
     const parsed = JSON.parse(raw) as {
       selectedHouseTypeId?: number | null;
+      selectedProjectId?: number | null;
       houseRange?: Partial<HouseRange> | null;
     };
     return {
       selectedHouseTypeId:
         typeof parsed.selectedHouseTypeId === "number" && Number.isFinite(parsed.selectedHouseTypeId)
           ? parsed.selectedHouseTypeId
+          : null,
+      selectedProjectId:
+        typeof parsed.selectedProjectId === "number" && Number.isFinite(parsed.selectedProjectId)
+          ? parsed.selectedProjectId
           : null,
       houseRange:
         parsed.houseRange?.startDate && parsed.houseRange?.endDate
@@ -575,8 +582,18 @@ type HouseTrendChartPoint = MaterialDashboardHouseComparisonPoint & {
   x: number;
   stockValue: number | null;
   stockY: number | null;
+  projectedStockValue: number | null;
+  projectedStockY: number | null;
+  projectedMaterialQuantity: number;
+  cumulativeProjectedMaterialQuantity: number;
   remainingHouseStarts: number;
   houseY: number;
+};
+
+type ProjectedStockByDayPoint = {
+  projectedStockValue: number;
+  projectedMaterialQuantity: number;
+  cumulativeProjectedMaterialQuantity: number;
 };
 
 function buildLineSegments(points: Array<{ x: number; y: number | null }>) {
@@ -610,12 +627,46 @@ function getStockValueForDate(stockSeries: StockSeriesPoint[], date: string) {
   return stockSeries[stockIndex]?.value ?? null;
 }
 
+function buildProjectedStockByDay(
+  houseComparison: MaterialDashboardHouseComparisonData | null,
+  stockSeries: StockSeriesPoint[],
+) {
+  const projectComparison = houseComparison?.project_comparison;
+  if (!houseComparison || !projectComparison || !houseComparison.points.length || !stockSeries.length) {
+    return null;
+  }
+  const firstPoint = houseComparison.points[0];
+  const firstStockValue = getStockValueForDate(stockSeries, firstPoint.date);
+  if (firstStockValue === null) {
+    return null;
+  }
+
+  const projectedStockByDay = new Map<number, ProjectedStockByDayPoint>();
+  let runningProjectedStock = firstStockValue + (Number(firstPoint.material_quantity) || 0);
+  let cumulativeProjectedMaterialQuantity = 0;
+
+  houseComparison.points.forEach((point) => {
+    const projectedMaterialQuantity = (Number(point.house_starts) || 0) * projectComparison.predicted_quantity_per_house;
+    cumulativeProjectedMaterialQuantity += projectedMaterialQuantity;
+    runningProjectedStock -= projectedMaterialQuantity;
+    projectedStockByDay.set(toStartOfDay(point.date).getTime(), {
+      projectedStockValue: Math.round(runningProjectedStock * 10000) / 10000,
+      projectedMaterialQuantity: Math.round(projectedMaterialQuantity * 10000) / 10000,
+      cumulativeProjectedMaterialQuantity: Math.round(cumulativeProjectedMaterialQuantity * 10000) / 10000,
+    });
+  });
+
+  return projectedStockByDay;
+}
+
 function buildHouseComparisonChart(
   houseComparison: MaterialDashboardHouseComparisonData,
   stockSeries: StockSeriesPoint[],
   width: number,
   height: number,
   stockAxisBaseline: number | null = null,
+  stockAxisCeiling: number | null = null,
+  projectedStockByDay: Map<number, ProjectedStockByDayPoint> | null = null,
 ) {
   if (!houseComparison.points.length) {
     return null;
@@ -629,18 +680,17 @@ function buildHouseComparisonChart(
   });
   const stockValues = stockSeries.map((point) => point.value);
   const finalStock = stockAxisBaseline ?? (stockValues.length ? stockValues[stockValues.length - 1] : 0);
-  const maxStock = Math.max(...stockValues, 1);
-  const minStock = Math.max(Math.min(finalStock, maxStock), 0);
-  const stockRange = Math.max(maxStock - minStock, 1);
   const totalHouseStarts = Math.max(houseComparison.total_house_starts, 0);
 
   const chartPoints: HouseTrendChartPoint[] = houseComparison.points.map((point, index) => {
+    const pointTime = toStartOfDay(point.date).getTime();
     const x =
       houseComparison.points.length === 1
         ? padding.left + plotWidth / 2
         : padding.left + (index / (houseComparison.points.length - 1)) * plotWidth;
-    const stockIndex = stockIndexByDay.get(toStartOfDay(point.date).getTime());
+    const stockIndex = stockIndexByDay.get(pointTime);
     const stockValue = stockIndex !== undefined ? stockSeries[stockIndex]?.value ?? null : null;
+    const projectedPoint = projectedStockByDay?.get(pointTime) ?? null;
     const remainingHouseStarts = Math.max(totalHouseStarts - (point.cumulative_house_starts - point.house_starts), 0);
     return {
       ...point,
@@ -648,19 +698,36 @@ function buildHouseComparisonChart(
       x,
       stockValue,
       stockY: null,
+      projectedStockValue: projectedPoint?.projectedStockValue ?? null,
+      projectedStockY: null,
+      projectedMaterialQuantity: projectedPoint?.projectedMaterialQuantity ?? 0,
+      cumulativeProjectedMaterialQuantity: projectedPoint?.cumulativeProjectedMaterialQuantity ?? 0,
       remainingHouseStarts,
       houseY: 0,
     };
   });
+  const combinedStockValues = chartPoints.flatMap((point) =>
+    [point.stockValue, point.projectedStockValue].filter((value): value is number => value !== null),
+  );
+  const maxStock = Math.max(...combinedStockValues, stockAxisCeiling ?? Number.NEGATIVE_INFINITY, 1);
+  const minStock = Math.max(finalStock, 0);
+  const stockRange = Math.max(maxStock - minStock, 1);
   const maxRemainingHouseStarts = Math.max(...chartPoints.map((point) => point.remainingHouseStarts), 1);
   const positionedPoints = chartPoints.map((point) => ({
     ...point,
     stockY:
-      point.stockValue !== null ? padding.top + plotHeight - ((point.stockValue - minStock) / stockRange) * plotHeight : null,
+      point.stockValue !== null
+        ? padding.top + plotHeight - ((point.stockValue - minStock) / stockRange) * plotHeight
+        : null,
+    projectedStockY:
+      point.projectedStockValue !== null
+        ? padding.top + plotHeight - ((point.projectedStockValue - minStock) / stockRange) * plotHeight
+        : null,
     houseY: padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight,
   }));
 
   const stockPath = buildLineSegments(positionedPoints.map((point) => ({ x: point.x, y: point.stockY })));
+  const projectedStockPath = buildLineSegments(positionedPoints.map((point) => ({ x: point.x, y: point.projectedStockY })));
   const housePath = buildLineSegments(positionedPoints.map((point) => ({ x: point.x, y: point.houseY })));
 
   return {
@@ -674,6 +741,7 @@ function buildHouseComparisonChart(
     maxRemainingHouseStarts,
     points: positionedPoints,
     stockPath,
+    projectedStockPath,
     housePath,
   };
 }
@@ -725,6 +793,13 @@ function getHouseComparisonForRange(
     material_per_house:
       cumulativeHouseStarts > 0 ? Math.round((cumulativeMaterialQuantity / cumulativeHouseStarts) * 10000) / 10000 : null,
     latest_house_start_date: latestHouseStartDate,
+    project_comparison: houseComparison.project_comparison
+      ? {
+          ...houseComparison.project_comparison,
+          projected_total_material_quantity:
+            Math.round(houseComparison.project_comparison.predicted_quantity_per_house * cumulativeHouseStarts * 10000) / 10000,
+        }
+      : null,
     points,
   };
 }
@@ -1197,8 +1272,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   history,
   viewMode,
   houseTypes,
+  projects,
   selectedHouseTypeId,
+  selectedProjectId,
   onSelectHouseType,
+  onSelectProject,
   houseRange,
   onHouseRangeChange,
   houseComparison,
@@ -1216,8 +1294,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   history: DashboardHistoryLike | null;
   viewMode: DashboardViewMode;
   houseTypes: MaterialDashboardHouseType[];
+  projects: ProjectSummary[];
   selectedHouseTypeId: number | null;
+  selectedProjectId: number | null;
   onSelectHouseType: (houseTypeId: number) => void;
+  onSelectProject: (projectId: number | null) => void;
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
   houseComparison: DashboardHouseComparisonLike | null;
@@ -1245,7 +1326,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     setDragCurrentIndex(null);
     setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
-  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, viewMode, selectedHouseTypeId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
+  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, viewMode, selectedHouseTypeId, selectedProjectId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
 
   if (!selected) {
     return (
@@ -1271,6 +1352,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const latestHouseRangeDate = moveToPreviousBusinessDay(new Date());
   const latestHouseRangeValue = toDateInputValue(latestHouseRangeDate);
   const houseComparisonInRange = getHouseComparisonForRange(houseComparison, houseRange);
+  const projectComparisonInRange = houseComparisonInRange?.project_comparison ?? null;
   const weekdayHouseComparison =
     houseComparisonInRange
       ? {
@@ -1285,17 +1367,20 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           endDate: latestHouseRangeValue,
         })
       : [];
+  const projectedStockByDay = buildProjectedStockByDay(houseComparisonInRange, houseStockSeries);
   const houseRangeEndStockValue = getStockValueForDate(houseStockSeries, houseRange.endDate);
   const isHouseMode = viewMode === "houses";
   const houseChart =
     weekdayHouseComparison && houseStockSeries.length
-      ? buildHouseComparisonChart(
-          weekdayHouseComparison,
-          houseStockSeries,
-          CHART_WIDTH,
-          CHART_HEIGHT,
-          houseRangeEndStockValue,
-        )
+        ? buildHouseComparisonChart(
+            weekdayHouseComparison,
+            houseStockSeries,
+            CHART_WIDTH,
+            CHART_HEIGHT,
+            houseRangeEndStockValue,
+            detail?.stock_on_hand ?? null,
+            projectedStockByDay,
+          )
       : weekdayHouseComparison
         ? buildHouseComparisonChart(
             weekdayHouseComparison,
@@ -1303,6 +1388,8 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             CHART_WIDTH,
             CHART_HEIGHT,
             houseRangeEndStockValue,
+            detail?.stock_on_hand ?? null,
+            projectedStockByDay,
           )
         : null;
   const activeSelection =
@@ -1333,6 +1420,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const activeHouseMovementRangeStart = houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate;
   const activeHouseMovementRangeEnd = houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate;
+  const projectedEndStock = houseChart?.points[houseChart.points.length - 1]?.projectedStockValue ?? null;
+  const projectedStockDelta =
+    projectedEndStock !== null && detail?.stock_on_hand !== null && detail?.stock_on_hand !== undefined
+      ? projectedEndStock - detail.stock_on_hand
+      : null;
   const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
     isDateWithinRange(movement.date, activeHouseMovementRangeStart, activeHouseMovementRangeEnd),
   );
@@ -1490,6 +1582,15 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     : "—"}
             </div>
           </div>
+          {isHouseMode && projectComparisonInRange ? <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" /> : null}
+          {isHouseMode && projectComparisonInRange ? (
+            <div className="text-right">
+              <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proj./House</div>
+              <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                {formatNumber(projectComparisonInRange.predicted_quantity_per_house)}
+              </div>
+            </div>
+          ) : null}
           <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           <div className="text-right">
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{groupSelection ? "Study Unit" : "Avg Price"}</div>
@@ -1530,6 +1631,18 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                       {houseTypes.map((houseType) => (
                         <option key={houseType.id} value={houseType.id}>
                           {houseType.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={selectedProjectId ?? ""}
+                      onChange={(event) => onSelectProject(event.target.value ? Number(event.target.value) : null)}
+                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
+                    >
+                      <option value="">No project</option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
                         </option>
                       ))}
                     </select>
@@ -1581,6 +1694,12 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                       <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
                       <span>Material stock</span>
                     </div>
+                    {projectComparisonInRange ? (
+                      <div className="flex items-center gap-2">
+                        <span className="block h-0.5 w-6 rounded-full bg-emerald-500" />
+                        <span>{projectComparisonInRange.project_name}</span>
+                      </div>
+                    ) : null}
                     <div className="flex items-center gap-2">
                       <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
                       <span>Remaining house starts</span>
@@ -1701,6 +1820,18 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                       className="transition-opacity duration-300"
                     />
                   ) : null}
+                  {houseChart.projectedStockPath ? (
+                    <path
+                      d={houseChart.projectedStockPath}
+                      fill="none"
+                      stroke="rgb(16 185 129)"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={selectionBounds ? 0.25 : 1}
+                      className="transition-opacity duration-300"
+                    />
+                  ) : null}
                   {houseChart.housePath ? (
                     <path
                       d={houseChart.housePath}
@@ -1726,6 +1857,17 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                           pointerEvents="none"
                         />
                       ) : null}
+                      {point.projectedStockY !== null ? (
+                        <circle
+                          cx={point.x}
+                          cy={point.projectedStockY}
+                          r={houseChartHoveredPoint?.index === point.index ? 5 : 2.5}
+                          fill="rgb(16 185 129)"
+                          opacity={selectionBounds ? 0.25 : 1}
+                          className="transition-opacity duration-300"
+                          pointerEvents="none"
+                        />
+                      ) : null}
                       <circle
                         cx={point.x}
                         cy={point.houseY}
@@ -1744,6 +1886,16 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                           d={houseChart.stockPath}
                           fill="none"
                           stroke="rgb(245 158 11)"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      ) : null}
+                      {houseChart.projectedStockPath ? (
+                        <path
+                          d={houseChart.projectedStockPath}
+                          fill="none"
+                          stroke="rgb(16 185 129)"
                           strokeWidth="3.5"
                           strokeLinecap="round"
                           strokeLinejoin="round"
@@ -1773,6 +1925,18 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                                 cy={point.stockY}
                                 r={houseChartHoveredPoint?.index === point.index ? 5.5 : 4.5}
                                 fill="rgb(245 158 11)"
+                                stroke="rgb(255 255 255)"
+                                strokeWidth="1.5"
+                                className="dark:stroke-zinc-900"
+                                pointerEvents="none"
+                              />
+                            ) : null}
+                            {point.projectedStockY !== null ? (
+                              <circle
+                                cx={point.x}
+                                cy={point.projectedStockY}
+                                r={houseChartHoveredPoint?.index === point.index ? 5.5 : 4.5}
+                                fill="rgb(16 185 129)"
                                 stroke="rgb(255 255 255)"
                                 strokeWidth="1.5"
                                 className="dark:stroke-zinc-900"
@@ -1815,6 +1979,17 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                           className="dark:stroke-zinc-900"
                         />
                       ) : null}
+                      {houseChartHoveredPoint.projectedStockY !== null ? (
+                        <circle
+                          cx={houseChartHoveredPoint.x}
+                          cy={houseChartHoveredPoint.projectedStockY}
+                          r={6}
+                          fill="rgb(16 185 129)"
+                          stroke="rgb(255 255 255)"
+                          strokeWidth="2"
+                          className="dark:stroke-zinc-900"
+                        />
+                      ) : null}
                       <circle
                         cx={houseChartHoveredPoint.x}
                         cy={houseChartHoveredPoint.houseY}
@@ -1840,17 +2015,28 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                               ) - 76
                         })`}
                       >
-                        <rect width="180" height="66" rx="10" fill="rgba(24, 24, 27, 0.92)" className="dark:fill-zinc-950/95" />
+                        <rect
+                          width="180"
+                          height={houseChartHoveredPoint.projectedStockValue !== null ? "80" : "66"}
+                          rx="10"
+                          fill="rgba(24, 24, 27, 0.92)"
+                          className="dark:fill-zinc-950/95"
+                        />
                         <text x="12" y="17" fontSize="11" fill="white" opacity="0.9">
                           {formatDate(houseChartHoveredPoint.date)}
                         </text>
                         <text x="12" y="31" fontSize="12" fill="white" fontWeight="700">
                           Stock: {formatNumber(houseChartHoveredPoint.stockValue)}
                         </text>
-                        <text x="12" y="45" fontSize="12" fill="white" fontWeight="700">
+                        {houseChartHoveredPoint.projectedStockValue !== null ? (
+                          <text x="12" y="45" fontSize="12" fill="white" fontWeight="700">
+                            Projected: {formatNumber(houseChartHoveredPoint.projectedStockValue)}
+                          </text>
+                        ) : null}
+                        <text x="12" y={houseChartHoveredPoint.projectedStockValue !== null ? "59" : "45"} fontSize="12" fill="white" fontWeight="700">
                           Remaining starts: {formatNumber(houseChartHoveredPoint.remainingHouseStarts, 0)}
                         </text>
-                        <text x="12" y="59" fontSize="12" fill="white" fontWeight="700">
+                        <text x="12" y={houseChartHoveredPoint.projectedStockValue !== null ? "73" : "59"} fontSize="12" fill="white" fontWeight="700">
                           Starts today: {formatNumber(houseChartHoveredPoint.house_starts, 0)}
                         </text>
                       </g>
@@ -2094,6 +2280,13 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                 <MetricRow label="Range material" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.total_material_quantity) : houseComparisonLoading ? "..." : "—"} />
                 <MetricRow label="Range starts" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.total_house_starts, 0) : houseComparisonLoading ? "..." : "—"} />
                 <MetricRow label="Material / house" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.material_per_house) : houseComparisonLoading ? "..." : "—"} />
+                <MetricRow label="Project" value={projectComparisonInRange?.project_name || "—"} />
+                <MetricRow
+                  label="Proj. range"
+                  value={projectComparisonInRange ? formatNumber(projectComparisonInRange.projected_total_material_quantity) : "—"}
+                />
+                <MetricRow label="Proj. end stock" value={projectComparisonInRange ? formatNumber(projectedEndStock) : "—"} />
+                <MetricRow label="Proj. vs real" value={projectComparisonInRange ? formatSignedNumber(projectedStockDelta) : "—"} />
                 <MetricRow label="Weekdays shown" value={houseChart ? formatNumber(houseChart.points.length, 0) : houseComparisonLoading ? "..." : "—"} />
                 <MetricRow label="Last house start" value={houseComparisonInRange ? formatDate(houseComparisonInRange.latest_house_start_date) : houseComparisonLoading ? "..." : "—"} />
                 <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
@@ -2182,6 +2375,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
 export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups?: boolean }) {
   const storedCecoPreferences = getStoredCecoFilterPreferences();
   const [cecos, setCecos] = useState<MaterialDashboardCeco[]>([]);
+  const [projectsBoard, setProjectsBoard] = useState<ProjectsBoardData | null>(null);
   const [dashboardCache, setDashboardCache] = useState<Record<string, MaterialDashboardData>>({});
   const [detailCache, setDetailCache] = useState<Record<string, MaterialDashboardDetailData>>({});
   const [historyCache, setHistoryCache] = useState<Record<string, MaterialDashboardMovementData>>({});
@@ -2203,6 +2397,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
   const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
     () => getStoredHouseViewPreferences()?.selectedHouseTypeId ?? null,
+  );
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
+    () => getStoredHouseViewPreferences()?.selectedProjectId ?? null,
   );
   const [houseRange, setHouseRange] = useState<HouseRange>(() => {
     const stored = getStoredHouseViewPreferences();
@@ -2291,7 +2488,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       : null;
   const currentHouseComparisonKey =
     selectedMaterialSku && selectedHouseTypeId
-      ? houseComparisonCacheKey(selectedMaterialSku, selectedHouseTypeId, normalizedSelectedCecos, houseRange)
+      ? houseComparisonCacheKey(selectedMaterialSku, selectedHouseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
       : null;
   const currentHouseComparison = allCecosExcluded
     ? null
@@ -2300,7 +2497,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       : null;
   const currentGroupHouseComparisonKey =
     selectedGroupId && selectedHouseTypeId
-      ? groupHouseComparisonCacheKey(selectedGroupId, selectedHouseTypeId, normalizedSelectedCecos, houseRange)
+      ? groupHouseComparisonCacheKey(selectedGroupId, selectedHouseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
       : null;
   const currentGroupHouseComparison = allCecosExcluded
     ? null
@@ -2313,6 +2510,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const selectedDetailLike = selectedMaterialRow ? selectedDetail : selectedGroupRow ? selectedGroupDetail : null;
   const selectedHistoryLike = selectedMaterialRow ? currentHistory : selectedGroupRow ? currentGroupHistory : null;
   const selectedHouseComparisonLike = selectedMaterialRow ? currentHouseComparison : selectedGroupRow ? currentGroupHouseComparison : null;
+  const projectOptions = useMemo(
+    () =>
+      Object.values(projectsBoard?.grouped_projects || {})
+        .flat()
+        .filter((project) => project.status === "execution")
+        .slice()
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    [projectsBoard],
+  );
 
   function syncSelectedMaterial(response: MaterialDashboardData) {
     setSelectedKey((current) => {
@@ -2422,6 +2628,27 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       }
     }
     void loadHouseTypes();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProjects() {
+      try {
+        const response = await api.getProjects();
+        if (!cancelled) {
+          setProjectsBoard(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setProjectsBoard({ grouped_projects: {}, status_labels: {} });
+          setSelectedProjectId(null);
+        }
+      }
+    }
+    void loadProjects();
     return () => {
       cancelled = true;
     };
@@ -2660,10 +2887,24 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       HOUSE_VIEW_PREFERENCES_KEY,
       JSON.stringify({
         selectedHouseTypeId,
+        selectedProjectId,
         houseRange,
       }),
     );
-  }, [houseRange, selectedHouseTypeId]);
+  }, [houseRange, selectedHouseTypeId, selectedProjectId]);
+
+  useEffect(() => {
+    if (!projectsBoard) {
+      return;
+    }
+    if (!selectedProjectId) {
+      return;
+    }
+    if (projectOptions.some((project) => project.id === selectedProjectId)) {
+      return;
+    }
+    setSelectedProjectId(null);
+  }, [projectOptions, projectsBoard, selectedProjectId]);
 
   useEffect(() => {
     const sku = selectedMaterialSku;
@@ -2781,7 +3022,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   useEffect(() => {
     const sku = selectedMaterialSku;
     const houseTypeId = selectedHouseTypeId;
-    const cacheKey = sku && houseTypeId ? houseComparisonCacheKey(sku, houseTypeId, normalizedSelectedCecos, houseRange) : null;
+    const cacheKey =
+      sku && houseTypeId ? houseComparisonCacheKey(sku, houseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId) : null;
     if (allCecosExcluded || !sku || !houseTypeId || !cacheKey || viewMode !== "houses") {
       setHouseComparisonError(null);
       setHouseComparisonLoading(false);
@@ -2825,6 +3067,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             refresh: forceRefresh,
             startDate: houseRange.startDate,
             endDate: houseRange.endDate,
+            projectId: selectedProjectId,
           },
         );
         if (!cancelled) {
@@ -2845,13 +3088,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedMaterialSku, viewMode]);
+  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedMaterialSku, selectedProjectId, viewMode]);
 
   useEffect(() => {
     const groupId = selectedGroupId;
     const houseTypeId = selectedHouseTypeId;
     const cacheKey =
-      groupId && houseTypeId ? groupHouseComparisonCacheKey(groupId, houseTypeId, normalizedSelectedCecos, houseRange) : null;
+      groupId && houseTypeId
+        ? groupHouseComparisonCacheKey(groupId, houseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
+        : null;
     if (allCecosExcluded || !groupId || !houseTypeId || !cacheKey || viewMode !== "houses") {
       return;
     }
@@ -2884,6 +3129,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           refresh: forceRefresh,
           startDate: houseRange.startDate,
           endDate: houseRange.endDate,
+          projectId: selectedProjectId,
         });
         if (!cancelled) {
           setGroupHouseComparisonCache((current) => ({ ...current, [cacheKey]: response }));
@@ -2903,7 +3149,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, viewMode]);
+  }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, selectedProjectId, viewMode]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const isMaterialSearchPending = materialSearchInput !== deferredMaterialSearch;
@@ -3292,8 +3538,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           history={selectedHistoryLike}
           viewMode={viewMode}
           houseTypes={houseTypes}
+          projects={projectOptions}
           selectedHouseTypeId={selectedHouseTypeId}
+          selectedProjectId={selectedProjectId}
           onSelectHouseType={setSelectedHouseTypeId}
+          onSelectProject={setSelectedProjectId}
           houseRange={houseRange}
           onHouseRangeChange={setHouseRange}
           houseComparison={selectedHouseComparisonLike}

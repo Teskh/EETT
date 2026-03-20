@@ -151,6 +151,7 @@ type MaterialDashboardRequestOptions = {
   movementDays?: number;
   startDate?: string;
   endDate?: string;
+  projectId?: number | null;
 };
 
 type MaterialDashboardFilterSelection = {
@@ -336,6 +337,7 @@ export const api = {
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
         house_type_id: houseTypeId,
+        project_id: options.projectId ?? null,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),
@@ -373,6 +375,7 @@ export const api = {
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
         house_type_id: houseTypeId,
+        project_id: options.projectId ?? null,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),

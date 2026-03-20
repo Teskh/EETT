@@ -613,6 +613,7 @@ class MaterialDashboardDateRangeRequest(MaterialDashboardFilterRequest):
 
 class MaterialDashboardHouseComparisonRequest(MaterialDashboardDateRangeRequest):
     house_type_id: int = Field(ge=1)
+    project_id: int | None = Field(default=None, ge=1)
 
 
 class MaterialDashboardDetailResponse(MaterialDashboardDetailModel):
@@ -672,6 +673,13 @@ class MaterialDashboardHouseComparisonPointModel(BaseModel):
     material_per_house: float | None
 
 
+class MaterialDashboardProjectComparisonModel(BaseModel):
+    project_id: int
+    project_name: str
+    predicted_quantity_per_house: float
+    projected_total_material_quantity: float
+
+
 class MaterialDashboardHouseComparisonResponse(BaseModel):
     sku: str
     house_type_id: int
@@ -685,6 +693,7 @@ class MaterialDashboardHouseComparisonResponse(BaseModel):
     total_house_starts: int
     material_per_house: float | None
     latest_house_start_date: str | None
+    project_comparison: MaterialDashboardProjectComparisonModel | None = None
     points: list[MaterialDashboardHouseComparisonPointModel] = Field(default_factory=list)
     generated_at: str
 

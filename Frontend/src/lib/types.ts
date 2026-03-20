@@ -114,6 +114,13 @@ export type MaterialDashboardHouseComparisonPoint = {
   material_per_house: number | null;
 };
 
+export type MaterialDashboardProjectComparison = {
+  project_id: number;
+  project_name: string;
+  predicted_quantity_per_house: number;
+  projected_total_material_quantity: number;
+};
+
 export type MaterialDashboardHouseComparisonData = {
   sku: string;
   house_type_id: number;
@@ -127,6 +134,7 @@ export type MaterialDashboardHouseComparisonData = {
   total_house_starts: number;
   material_per_house: number | null;
   latest_house_start_date: string | null;
+  project_comparison: MaterialDashboardProjectComparison | null;
   points: MaterialDashboardHouseComparisonPoint[];
   generated_at: string;
 };

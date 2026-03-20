@@ -112,6 +112,7 @@ from app.services.dashboard import (
     get_material_dashboard_cost_centers,
     get_material_dashboard_detail,
     get_material_dashboard_history,
+    get_material_dashboard_project_comparison,
     get_project_material_dashboard,
     get_recent_material_dashboard,
 )
@@ -234,6 +235,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def parse_refresh_flag(raw_value: str | None) -> bool:
         return (raw_value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+    def attach_project_comparison(
+        comparison: dict,
+        *,
+        project_id: int | None,
+        sku_factors: dict[str, float],
+        session: Session,
+        current_user,
+    ) -> dict:
+        if project_id is None:
+            comparison["project_comparison"] = None
+            return comparison
+        project_comparison = get_material_dashboard_project_comparison(
+            session,
+            project_id=project_id,
+            sku_factors=sku_factors,
+            total_house_starts=int(comparison.get("total_house_starts") or 0),
+        )
+        if project_comparison is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project_comparison["project"])
+        comparison["project_comparison"] = project_comparison["comparison"]
+        return comparison
 
     def parse_attribute_values_json(raw_value: str | None) -> dict[str, str | None]:
         if not raw_value:
@@ -1694,6 +1718,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         group_id: int,
         house_type_id: int,
         request: Request,
+        project_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -1730,7 +1755,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if comparison is None:
             raise HTTPException(status_code=404, detail="Material group not found")
-        return comparison
+        return attach_project_comparison(
+            comparison,
+            project_id=project_id,
+            sku_factors={
+                str(member.get("sku") or ""): float(member.get("factor_to_study_unit") or 0.0)
+                for member in comparison.get("members", [])
+            },
+            session=session,
+            current_user=current_user,
+        )
 
     @app.post("/api/v1/dashboard/material-groups/{group_id}/house-comparison", response_model=MaterialDashboardGroupHouseComparisonResponse)
     def material_dashboard_group_house_comparison_v1_post(
@@ -1766,7 +1800,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if comparison is None:
             raise HTTPException(status_code=404, detail="Material group not found")
-        return comparison
+        return attach_project_comparison(
+            comparison,
+            project_id=payload.project_id,
+            sku_factors={
+                str(member.get("sku") or ""): float(member.get("factor_to_study_unit") or 0.0)
+                for member in comparison.get("members", [])
+            },
+            session=session,
+            current_user=current_user,
+        )
 
     @app.get("/api/v1/dashboard/material-groups/{group_id}/movements", response_model=MaterialDashboardGroupMovementResponse)
     def material_dashboard_group_movements_v1(
@@ -1897,6 +1940,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sku: str,
         house_type_id: int,
         request: Request,
+        project_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -1926,7 +1970,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 history_days=history_days,
                 force_refresh=force_refresh,
             )
-            return get_material_dashboard_house_start_comparison(
+            comparison = get_material_dashboard_house_start_comparison(
                 request.app.state.settings,
                 sku=sku,
                 movements=history.get("movements", []),
@@ -1935,6 +1979,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 history_days=int(history.get("movement_days") or history_days),
                 start_date=start_date,
                 end_date=end_date,
+            )
+            return attach_project_comparison(
+                comparison,
+                project_id=project_id,
+                sku_factors={sku: 1.0},
+                session=session,
+                current_user=current_user,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1969,7 +2020,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 end_date=payload.end_date,
                 force_refresh=payload.refresh,
             )
-            return get_material_dashboard_house_start_comparison(
+            comparison = get_material_dashboard_house_start_comparison(
                 request.app.state.settings,
                 sku=sku,
                 movements=history.get("movements", []),
@@ -1978,6 +2029,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 history_days=int(history.get("movement_days") or history_days),
                 start_date=payload.start_date.isoformat() if payload.start_date else None,
                 end_date=payload.end_date.isoformat() if payload.end_date else None,
+            )
+            return attach_project_comparison(
+                comparison,
+                project_id=payload.project_id,
+                sku_factors={sku: 1.0},
+                session=session,
+                current_user=current_user,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

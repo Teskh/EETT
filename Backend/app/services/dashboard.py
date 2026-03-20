@@ -104,6 +104,46 @@ def get_project_material_dashboard(session: Session, project_id: int) -> dict | 
     }
 
 
+def get_material_dashboard_project_comparison(
+    session: Session,
+    *,
+    project_id: int,
+    sku_factors: dict[str, float],
+    total_house_starts: int,
+) -> dict | None:
+    normalized_factors = {
+        str(sku).strip().upper(): float(factor)
+        for sku, factor in sku_factors.items()
+        if str(sku).strip() and float(factor or 0.0) != 0.0
+    }
+    project = session.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material))
+    )
+    if project is None:
+        return None
+
+    predicted_quantity_per_house = 0.0
+    for entry in project.bom_entries:
+        if entry.quantity is None or entry.material is None:
+            continue
+        factor = normalized_factors.get(entry.material.sku.strip().upper())
+        if factor is None:
+            continue
+        predicted_quantity_per_house += float(entry.quantity) * factor
+
+    return {
+        "project": project,
+        "comparison": {
+            "project_id": project.id,
+            "project_name": project.name,
+            "predicted_quantity_per_house": round(predicted_quantity_per_house, 4),
+            "projected_total_material_quantity": round(predicted_quantity_per_house * max(int(total_house_starts), 0), 4),
+        },
+    }
+
+
 def get_recent_material_dashboard(
     settings: Settings,
     *,
