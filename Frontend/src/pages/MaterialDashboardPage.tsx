@@ -38,6 +38,9 @@ const currencyFormatter = new Intl.NumberFormat("es-CL", {
   currency: "CLP",
   maximumFractionDigits: 0,
 });
+const percentFormatter = new Intl.NumberFormat("es-CL", {
+  maximumFractionDigits: 1,
+});
 const DEFAULT_HOUSE_RANGE_DAYS = 90;
 const LIST_PAGE_SIZE = 50;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -78,6 +81,17 @@ function formatSignedNumber(value: number | null | undefined, digits = 1) {
     return absolute;
   }
   return `${value > 0 ? "+" : "-"}${absolute}`;
+}
+
+function formatPercent(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "—";
+  }
+  const absolute = percentFormatter.format(Math.abs(value));
+  if (value === 0) {
+    return `${absolute}%`;
+  }
+  return `${value > 0 ? "+" : "-"}${absolute}%`;
 }
 
 function formatDate(value: string | null | undefined) {
@@ -1418,6 +1432,19 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
   const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
+  const actualConsumptionPerHouse = houseSummary?.averageConsumptionPerHouse ?? houseComparisonInRange?.material_per_house ?? null;
+  const projectedConsumptionPerHouse = projectComparisonInRange?.predicted_quantity_per_house ?? null;
+  const consumptionDeltaPercent =
+    actualConsumptionPerHouse !== null && projectedConsumptionPerHouse && projectedConsumptionPerHouse !== 0
+      ? ((actualConsumptionPerHouse - projectedConsumptionPerHouse) / projectedConsumptionPerHouse) * 100
+      : null;
+  const consumptionCostDeltaPerHouse =
+    actualConsumptionPerHouse !== null &&
+    projectedConsumptionPerHouse !== null &&
+    detail?.average_price !== null &&
+    detail?.average_price !== undefined
+      ? (actualConsumptionPerHouse - projectedConsumptionPerHouse) * detail.average_price
+      : null;
   const activeHouseMovementRangeStart = houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate;
   const activeHouseMovementRangeEnd = houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate;
   const projectedEndStock = houseChart?.points[houseChart.points.length - 1]?.projectedStockValue ?? null;
@@ -1566,20 +1593,36 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
               {isHouseMode ? "Cons./House" : "Stock on Hand"}
             </div>
-            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-              {isHouseMode
-                ? houseSummary
-                  ? formatNumber(houseSummary.averageConsumptionPerHouse)
-                  : houseComparisonInRange
-                    ? formatNumber(houseComparisonInRange.material_per_house)
-                    : houseComparisonLoading
+            <div className="flex items-center justify-end gap-2">
+              <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                {isHouseMode
+                  ? houseSummary
+                    ? formatNumber(houseSummary.averageConsumptionPerHouse)
+                    : houseComparisonInRange
+                      ? formatNumber(houseComparisonInRange.material_per_house)
+                      : houseComparisonLoading
+                        ? "..."
+                        : "—"
+                  : detail
+                    ? formatNumber(detail.stock_on_hand)
+                    : detailLoading
                       ? "..."
-                      : "—"
-                : detail
-                  ? formatNumber(detail.stock_on_hand)
-                  : detailLoading
-                    ? "..."
-                    : "—"}
+                      : "—"}
+              </div>
+              {isHouseMode && projectComparisonInRange && consumptionDeltaPercent !== null ? (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
+                    consumptionDeltaPercent > 0
+                      ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
+                      : consumptionDeltaPercent < 0
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+                        : "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
+                  }`}
+                >
+                  <span>{consumptionDeltaPercent > 0 ? "↑" : consumptionDeltaPercent < 0 ? "↓" : "→"}</span>
+                  <span>{percentFormatter.format(Math.abs(consumptionDeltaPercent))}%</span>
+                </span>
+              ) : null}
             </div>
           </div>
           {isHouseMode && projectComparisonInRange ? <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" /> : null}
@@ -1588,6 +1631,27 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proj./House</div>
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
                 {formatNumber(projectComparisonInRange.predicted_quantity_per_house)}
+              </div>
+            </div>
+          ) : null}
+          {isHouseMode && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
+            <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
+          ) : null}
+          {isHouseMode && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
+            <div className="text-right">
+              <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
+                {consumptionCostDeltaPerHouse > 0 ? "Overcost/House" : consumptionCostDeltaPerHouse < 0 ? "Savings/House" : "Cost/House"}
+              </div>
+              <div
+                className={`text-3xl font-light tracking-tight ${
+                  consumptionCostDeltaPerHouse > 0
+                    ? "text-red-700 dark:text-red-300"
+                    : consumptionCostDeltaPerHouse < 0
+                      ? "text-emerald-700 dark:text-emerald-300"
+                      : "text-zinc-900 dark:text-white"
+                }`}
+              >
+                {formatCurrency(Math.abs(consumptionCostDeltaPerHouse))}
               </div>
             </div>
           ) : null}
@@ -2388,7 +2452,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [cecoFilterMode, setCecoFilterMode] = useState<CecoFilterMode>(storedCecoPreferences?.mode ?? "exclude");
   const [selectedCecos, setSelectedCecos] = useState<string[]>(storedCecoPreferences?.cecos ?? []);
   const [activeTab, setActiveTab] = useState<"materials" | "groups" | "cecos">("materials");
-  const [viewMode, setViewMode] = useState<DashboardViewMode>("stock");
+  const [viewMode, setViewMode] = useState<DashboardViewMode>("houses");
   const [cecoSearch, setCecoSearch] = useState("");
   const [materialSearchInput, setMaterialSearchInput] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
@@ -2427,6 +2491,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const groupHouseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
   const selectedCecoSet = useMemo(() => new Set(normalizedSelectedCecoCodes), [normalizedSelectedCecoCodes]);
+  const cecoNameByCode = useMemo(
+    () => new Map(cecos.map((ceco) => [ceco.code, ceco.name])),
+    [cecos],
+  );
   const normalizedSelectedCecos =
     cecoFilterMode === "exclude"
       ? normalizeCecos(cecos.map((ceco) => ceco.code).filter((code) => !selectedCecoSet.has(code)))
@@ -2871,7 +2939,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   useEffect(() => {
     if (!houseTypes.length) {
-      setSelectedHouseTypeId(null);
       return;
     }
     setSelectedHouseTypeId((current) =>
@@ -3348,17 +3415,17 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   <div className="grid grid-cols-2 gap-1">
                     <button
                       type="button"
-                      onClick={() => setViewMode("stock")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      Stock View
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setViewMode("houses")}
                       className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
                     >
                       House View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("stock")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      Stock View
                     </button>
                   </div>
                 </div>
@@ -3415,17 +3482,17 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   <div className="grid grid-cols-2 gap-1">
                     <button
                       type="button"
-                      onClick={() => setViewMode("stock")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      Stock View
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setViewMode("houses")}
                       className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
                     >
                       House View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode("stock")}
+                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
+                    >
+                      Stock View
                     </button>
                   </div>
                 </div>
@@ -3500,7 +3567,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                               : "border border-accent-500/30 bg-accent-50 dark:bg-accent-500/10 text-accent-700 dark:text-accent-300 hover:bg-accent-100 dark:hover:bg-accent-500/20"
                           }`}
                         >
-                          {code}
+                          {cecoNameByCode.get(code) || code}
                           <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
