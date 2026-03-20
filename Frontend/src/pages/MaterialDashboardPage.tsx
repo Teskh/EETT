@@ -215,7 +215,6 @@ type ChartSelection = {
   endIndex: number;
 };
 
-type DashboardViewMode = "stock" | "houses";
 type CecoFilterMode = "exclude" | "include";
 type HouseRange = {
   startDate: string;
@@ -236,6 +235,27 @@ type PurchaseOrderEstimate = {
   leadTimeDays: number;
   thresholdDate: string;
   purchaseOrderDate: string;
+};
+
+type EstimatedConsumptionPurchaseOrderEstimate = {
+  bufferWeeks: number;
+  minimumExpectedStock: number;
+  estimatedConsumptionPerWeek: number;
+  estimatedConsumptionPerBusinessDay: number;
+  rateSource: "selection" | "range";
+  leadTimeDays: number;
+  thresholdDate: string;
+  purchaseOrderDate: string;
+};
+
+type StockTrendSummary = {
+  start: { date: string };
+  end: { date: string };
+  elapsedDays: number;
+  stockDelta: number | null;
+  consumed: number | null;
+  averageConsumptionPerDay: number | null;
+  averageConsumptionPerWeek: number | null;
 };
 
 function toStartOfDay(value: string | Date) {
@@ -298,6 +318,7 @@ function getStoredHouseViewPreferences() {
       houseRange?: Partial<HouseRange> | null;
     };
     return {
+      hasSelectedHouseTypePreference: Object.prototype.hasOwnProperty.call(parsed, "selectedHouseTypeId"),
       selectedHouseTypeId:
         typeof parsed.selectedHouseTypeId === "number" && Number.isFinite(parsed.selectedHouseTypeId)
           ? parsed.selectedHouseTypeId
@@ -360,15 +381,35 @@ function clampHouseRange(range: HouseRange, referenceDate = new Date()): HouseRa
 }
 
 function addBusinessDays(value: Date, offset: number) {
-  const date = moveToNextBusinessDay(value);
-  let remaining = Math.max(Math.ceil(offset), 0);
+  const roundedOffset = offset >= 0 ? Math.ceil(offset) : -Math.ceil(Math.abs(offset));
+  const date = roundedOffset >= 0 ? moveToNextBusinessDay(value) : moveToPreviousBusinessDay(value);
+  let remaining = Math.max(Math.abs(roundedOffset), 0);
   while (remaining > 0) {
-    date.setDate(date.getDate() + 1);
+    date.setDate(date.getDate() + (roundedOffset >= 0 ? 1 : -1));
     if (!isWeekend(date)) {
       remaining -= 1;
     }
   }
   return date;
+}
+
+function getPurchaseOrderUrgencyClasses(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+  const targetDate = toStartOfDay(value);
+  if (Number.isNaN(targetDate.getTime())) {
+    return "";
+  }
+  const today = toStartOfDay(new Date());
+  const daysUntilTarget = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  if (daysUntilTarget <= 7) {
+    return "text-red-600 dark:text-red-400";
+  }
+  if (daysUntilTarget <= 14) {
+    return "text-amber-600 dark:text-amber-400";
+  }
+  return "text-zinc-900 dark:text-white";
 }
 
 function getLeadTimeReference(detail: DashboardDetailLike | null): LeadTimeReference | null {
@@ -433,6 +474,57 @@ function getPurchaseOrderEstimate({
   };
 }
 
+function getEstimatedConsumptionPurchaseOrderEstimate({
+  detail,
+  estimatedConsumptionPerWeek,
+  isCustomSelection,
+  bufferWeeks,
+}: {
+  detail: DashboardDetailLike | null;
+  estimatedConsumptionPerWeek: number | null | undefined;
+  isCustomSelection: boolean;
+  bufferWeeks: number;
+}): EstimatedConsumptionPurchaseOrderEstimate | null {
+  if (!detail || detail.stock_on_hand === null || detail.stock_on_hand === undefined || Number.isNaN(detail.stock_on_hand)) {
+    return null;
+  }
+
+  const leadTimeReference = getLeadTimeReference(detail);
+  if (!leadTimeReference) {
+    return null;
+  }
+
+  if (
+    estimatedConsumptionPerWeek === null ||
+    estimatedConsumptionPerWeek === undefined ||
+    !Number.isFinite(estimatedConsumptionPerWeek) ||
+    estimatedConsumptionPerWeek <= 0
+  ) {
+    return null;
+  }
+
+  const normalizedBufferWeeks = Math.max(bufferWeeks, 0);
+  const minimumStock = estimatedConsumptionPerWeek * normalizedBufferWeeks;
+  const estimatedConsumptionPerBusinessDay = estimatedConsumptionPerWeek / 5;
+  const today = moveToNextBusinessDay(new Date());
+  const businessDaysUntilThreshold =
+    detail.stock_on_hand <= minimumStock ? 0 : Math.ceil((detail.stock_on_hand - minimumStock) / estimatedConsumptionPerBusinessDay);
+  const leadTimeDays = Math.max(Math.ceil(leadTimeReference.days), 0);
+  const thresholdDate = addBusinessDays(today, businessDaysUntilThreshold);
+  const purchaseOrderDate = addBusinessDays(thresholdDate, -leadTimeDays);
+
+  return {
+    bufferWeeks: normalizedBufferWeeks,
+    minimumExpectedStock: minimumStock,
+    estimatedConsumptionPerWeek,
+    estimatedConsumptionPerBusinessDay,
+    rateSource: isCustomSelection ? "selection" : "range",
+    leadTimeDays,
+    thresholdDate: thresholdDate.toISOString(),
+    purchaseOrderDate: purchaseOrderDate.toISOString(),
+  };
+}
+
 function buildLinePath(
   points: StockSeriesPoint[],
   width: number,
@@ -481,7 +573,7 @@ function getClampedSelectionBounds(selection: ChartSelection, pointCount: number
   };
 }
 
-function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | null) {
+function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | null): StockTrendSummary | null {
   if (!points.length) {
     return null;
   }
@@ -501,6 +593,7 @@ function getSeriesSummary(points: ChartPoint[], selection?: ChartSelection | nul
     stockDelta,
     consumed,
     averageConsumptionPerDay: consumed / elapsedDays,
+    averageConsumptionPerWeek: (consumed / elapsedDays) * 5,
   };
 }
 
@@ -831,6 +924,8 @@ function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?: Chart
   const elapsedDays = Math.max(bounds.endIndex - bounds.startIndex, 1);
   const materialConsumed = end.cumulative_material_quantity - (start.cumulative_material_quantity - start.material_quantity);
   const housesProduced = end.cumulative_house_starts - (start.cumulative_house_starts - start.house_starts);
+  const projectedMaterialConsumed =
+    end.cumulativeProjectedMaterialQuantity - (start.cumulativeProjectedMaterialQuantity - start.projectedMaterialQuantity);
   const stockDelta =
     start.stockValue !== null && end.stockValue !== null ? end.stockValue - start.stockValue : null;
 
@@ -840,8 +935,46 @@ function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?: Chart
     elapsedDays,
     stockDelta,
     materialConsumed,
+    projectedMaterialConsumed,
     housesProduced,
     averageConsumptionPerHouse: housesProduced > 0 ? materialConsumed / housesProduced : null,
+    averageProjectedConsumptionPerBusinessDay: projectedMaterialConsumed / elapsedDays,
+    averageProjectedConsumptionPerWeek: (projectedMaterialConsumed / elapsedDays) * 5,
+  };
+}
+
+function getHouseStockSeriesSummary(points: HouseTrendChartPoint[], selection?: ChartSelection | null): StockTrendSummary | null {
+  if (!points.length) {
+    return null;
+  }
+  const bounds = selection ? getClampedSelectionBounds(selection, points.length) : { startIndex: 0, endIndex: points.length - 1 };
+  if (!bounds) {
+    return null;
+  }
+  const start = points[bounds.startIndex];
+  const end = points[bounds.endIndex];
+  if (start.stockValue === null || end.stockValue === null) {
+    return {
+      start,
+      end,
+      elapsedDays: Math.max(bounds.endIndex - bounds.startIndex, 1),
+      stockDelta: null,
+      consumed: null,
+      averageConsumptionPerDay: null,
+      averageConsumptionPerWeek: null,
+    };
+  }
+  const elapsedDays = Math.max(bounds.endIndex - bounds.startIndex, 1);
+  const stockDelta = end.stockValue - start.stockValue;
+  const consumed = start.stockValue - end.stockValue;
+  return {
+    start,
+    end,
+    elapsedDays,
+    stockDelta,
+    consumed,
+    averageConsumptionPerDay: consumed / elapsedDays,
+    averageConsumptionPerWeek: (consumed / elapsedDays) * 5,
   };
 }
 
@@ -1284,7 +1417,6 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   selected,
   detail,
   history,
-  viewMode,
   houseTypes,
   projects,
   selectedHouseTypeId,
@@ -1306,12 +1438,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   selected: DashboardSelectionRow | null;
   detail: DashboardDetailLike | null;
   history: DashboardHistoryLike | null;
-  viewMode: DashboardViewMode;
   houseTypes: MaterialDashboardHouseType[];
   projects: ProjectSummary[];
   selectedHouseTypeId: number | null;
   selectedProjectId: number | null;
-  onSelectHouseType: (houseTypeId: number) => void;
+  onSelectHouseType: (houseTypeId: number | null) => void;
   onSelectProject: (projectId: number | null) => void;
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
@@ -1340,7 +1471,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     setDragCurrentIndex(null);
     setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
-  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, viewMode, selectedHouseTypeId, selectedProjectId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
+  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, selectedHouseTypeId, selectedProjectId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
 
   if (!selected) {
     return (
@@ -1361,10 +1492,9 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     );
   }
 
-  const stockSeries = detail ? buildHistoricalStockSeries(history?.movements || [], detail.stock_on_hand) : [];
-  const chart = stockSeries.length ? buildLinePath(stockSeries, CHART_WIDTH, CHART_HEIGHT) : null;
   const latestHouseRangeDate = moveToPreviousBusinessDay(new Date());
   const latestHouseRangeValue = toDateInputValue(latestHouseRangeDate);
+  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
   const houseComparisonInRange = getHouseComparisonForRange(houseComparison, houseRange);
   const projectComparisonInRange = houseComparisonInRange?.project_comparison ?? null;
   const weekdayHouseComparison =
@@ -1383,7 +1513,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
       : [];
   const projectedStockByDay = buildProjectedStockByDay(houseComparisonInRange, houseStockSeries);
   const houseRangeEndStockValue = getStockValueForDate(houseStockSeries, houseRange.endDate);
-  const isHouseMode = viewMode === "houses";
+  const stockRangeChart = houseStockSeries.length ? buildLinePath(houseStockSeries, CHART_WIDTH, CHART_HEIGHT) : null;
   const houseChart =
     weekdayHouseComparison && houseStockSeries.length
         ? buildHouseComparisonChart(
@@ -1408,24 +1538,36 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
         : null;
   const activeSelection =
     dragAnchorIndex !== null && dragCurrentIndex !== null ? { startIndex: dragAnchorIndex, endIndex: dragCurrentIndex } : selection;
-  const summary = chart ? getSeriesSummary(chart.points, activeSelection) : null;
+  const stockSummary = stockRangeChart ? getSeriesSummary(stockRangeChart.points, activeSelection) : null;
   const houseSummary = houseChart ? getHouseSeriesSummary(houseChart.points, activeSelection) : null;
-  const activeChart = isHouseMode ? houseChart : chart;
+  const houseStockSummary = houseChart ? getHouseStockSeriesSummary(houseChart.points, activeSelection) : null;
+  const activeChart = selectedHouseType ? houseChart : stockRangeChart;
   const selectionBounds = activeSelection && activeChart ? getClampedSelectionBounds(activeSelection, activeChart.points.length) : null;
   const selectionStart = selectionBounds && activeChart ? activeChart.points[selectionBounds.startIndex] : null;
   const selectionEnd = selectionBounds && activeChart ? activeChart.points[selectionBounds.endIndex] : null;
-  const hoveredPoint = chart && hoveredPointIndex !== null ? chart.points[hoveredPointIndex] || null : null;
+  const hoveredPoint = stockRangeChart && hoveredPointIndex !== null ? stockRangeChart.points[hoveredPointIndex] || null : null;
   const houseChartHoveredPoint = houseChart && hoveredPointIndex !== null ? houseChart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(activeSelection && selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
-  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
   const isBlockingLoad = !historyError && (!detail || !history);
   const isHouseBlockingLoad = !historyError && !houseComparisonError && Boolean(selectedHouseType) && (!detail || !history || !houseComparison);
   const isRefreshing = detailRefreshing || historyRefreshing;
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
   const leadTimeReference = getLeadTimeReference(detail);
+  const procurementSummary = selectedHouseType ? houseStockSummary : stockSummary;
   const purchaseOrderEstimate = getPurchaseOrderEstimate({
     detail,
-    summary,
+    summary: procurementSummary,
+    isCustomSelection,
+    bufferWeeks,
+  });
+  const estimatedConsumptionPurchaseOrderEstimate = getEstimatedConsumptionPurchaseOrderEstimate({
+    detail,
+    estimatedConsumptionPerWeek:
+      selectedHouseType && projectComparisonInRange
+        ? isCustomSelection
+          ? houseSummary?.averageProjectedConsumptionPerWeek ?? null
+          : projectComparisonInRange.projected_total_material_quantity / Math.max((houseChart?.points.length ?? 0) / 5, 0.2)
+        : null,
     isCustomSelection,
     bufferWeeks,
   });
@@ -1445,15 +1587,14 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     detail?.average_price !== undefined
       ? (actualConsumptionPerHouse - projectedConsumptionPerHouse) * detail.average_price
       : null;
-  const activeHouseMovementRangeStart = houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate;
-  const activeHouseMovementRangeEnd = houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate;
-  const projectedEndStock = houseChart?.points[houseChart.points.length - 1]?.projectedStockValue ?? null;
-  const projectedStockDelta =
-    projectedEndStock !== null && detail?.stock_on_hand !== null && detail?.stock_on_hand !== undefined
-      ? projectedEndStock - detail.stock_on_hand
-      : null;
+  const activeMovementRangeStart = selectedHouseType
+    ? houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate
+    : stockSummary?.start.date ?? houseRange.startDate;
+  const activeMovementRangeEnd = selectedHouseType
+    ? houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate
+    : stockSummary?.end.date ?? houseRange.endDate;
   const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
-    isDateWithinRange(movement.date, activeHouseMovementRangeStart, activeHouseMovementRangeEnd),
+    isDateWithinRange(movement.date, activeMovementRangeStart, activeMovementRangeEnd),
   );
 
   function getPointIndexFromEvent(event: ReactPointerEvent<SVGSVGElement>) {
@@ -1591,11 +1732,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
         <div className="flex gap-6 items-end">
           <div className="text-right">
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
-              {isHouseMode ? "Cons./House" : "Stock on Hand"}
+              {selectedHouseType ? "Cons./House" : "Stock on Hand"}
             </div>
             <div className="flex items-center justify-end gap-2">
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-                {isHouseMode
+                {selectedHouseType
                   ? houseSummary
                     ? formatNumber(houseSummary.averageConsumptionPerHouse)
                     : houseComparisonInRange
@@ -1609,7 +1750,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                       ? "..."
                       : "—"}
               </div>
-              {isHouseMode && projectComparisonInRange && consumptionDeltaPercent !== null ? (
+              {selectedHouseType && projectComparisonInRange && consumptionDeltaPercent !== null ? (
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
                     consumptionDeltaPercent > 0
@@ -1625,8 +1766,8 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               ) : null}
             </div>
           </div>
-          {isHouseMode && projectComparisonInRange ? <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" /> : null}
-          {isHouseMode && projectComparisonInRange ? (
+          {selectedHouseType && projectComparisonInRange ? <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" /> : null}
+          {selectedHouseType && projectComparisonInRange ? (
             <div className="text-right">
               <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proj./House</div>
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
@@ -1634,10 +1775,10 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               </div>
             </div>
           ) : null}
-          {isHouseMode && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
+          {selectedHouseType && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
             <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           ) : null}
-          {isHouseMode && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
+          {selectedHouseType && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
             <div className="text-right">
               <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
                 {consumptionCostDeltaPerHouse > 0 ? "Overcost/House" : consumptionCostDeltaPerHouse < 0 ? "Savings/House" : "Cost/House"}
@@ -1671,87 +1812,82 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                  {isHouseMode
+                  {selectedHouseType
                     ? isCustomSelection
                       ? "Selected House Period"
                       : houseChart
                         ? `${houseChart.points.length}-Weekday House Trend`
                         : "House Trend"
                     : isCustomSelection
-                      ? "Selected Period"
-                      : chart
-                        ? `${chart.points.length}-Business-Day Trend`
-                        : history
-                          ? `${history.movement_days}-Day Trend`
-                          : "Trend"}
+                      ? "Selected Stock Period"
+                      : stockRangeChart
+                        ? `${stockRangeChart.points.length}-Business-Day Stock Trend`
+                        : "Stock Trend"}
                 </h3>
-                {isHouseMode ? (
-                  <>
-                    <select
-                      value={selectedHouseTypeId ?? ""}
-                      onChange={(event) => onSelectHouseType(Number(event.target.value))}
-                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
-                    >
-                      {houseTypes.map((houseType) => (
-                        <option key={houseType.id} value={houseType.id}>
-                          {houseType.name}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={selectedProjectId ?? ""}
-                      onChange={(event) => onSelectProject(event.target.value ? Number(event.target.value) : null)}
-                      className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
-                    >
-                      <option value="">No project</option>
-                      {projects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1.5 py-1 dark:border-white/10 dark:bg-white/[0.03]">
-                      <input
-                        type="date"
-                        value={houseRange.startDate}
-                        max={houseRange.endDate}
-                        onChange={(event) => handleHouseRangeStartChange(event.target.value)}
-                        aria-label="Start date"
-                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
-                      />
-                      <span className="text-[11px] text-zinc-400">-</span>
-                      <input
-                        type="date"
-                        value={houseRange.endDate}
-                        min={houseRange.startDate}
-                        max={latestHouseRangeValue}
-                        onChange={(event) => handleHouseRangeEndChange(event.target.value)}
-                        aria-label="End date"
-                        className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => onHouseRangeChange(getDefaultHouseRange())}
-                        className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
-                      >
-                        90d
-                      </button>
-                    </div>
-                  </>
-                ) : null}
+                <select
+                  value={selectedHouseTypeId === null ? "none" : String(selectedHouseTypeId)}
+                  onChange={(event) => onSelectHouseType(event.target.value === "none" ? null : Number(event.target.value))}
+                  className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
+                >
+                  <option value="none">None</option>
+                  {houseTypes.map((houseType) => (
+                    <option key={houseType.id} value={houseType.id}>
+                      {houseType.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={selectedProjectId ?? ""}
+                  onChange={(event) => onSelectProject(event.target.value ? Number(event.target.value) : null)}
+                  className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
+                >
+                  <option value="">No project</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1.5 py-1 dark:border-white/10 dark:bg-white/[0.03]">
+                  <input
+                    type="date"
+                    value={houseRange.startDate}
+                    max={houseRange.endDate}
+                    onChange={(event) => handleHouseRangeStartChange(event.target.value)}
+                    aria-label="Start date"
+                    className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
+                  />
+                  <span className="text-[11px] text-zinc-400">-</span>
+                  <input
+                    type="date"
+                    value={houseRange.endDate}
+                    min={houseRange.startDate}
+                    max={latestHouseRangeValue}
+                    onChange={(event) => handleHouseRangeEndChange(event.target.value)}
+                    aria-label="End date"
+                    className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onHouseRangeChange(getDefaultHouseRange())}
+                    className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
+                  >
+                    90d
+                  </button>
+                </div>
               </div>
               <div className="text-xs text-zinc-500 mt-1">
-                {isHouseMode
+                {selectedHouseType
                   ? houseSummary
                     ? `${formatDate(houseSummary.start.date)} - ${formatDate(houseSummary.end.date)}`
                     : houseComparisonInRange
                       ? `${formatDate(houseComparisonInRange.range_start)} - ${formatDate(houseComparisonInRange.range_end)}`
                       : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`
-                  : summary
-                    ? `${formatDate(summary.start.date)} - ${formatDate(summary.end.date)}`
-                    : "—"}
+                  : stockSummary
+                    ? `${formatDate(stockSummary.start.date)} - ${formatDate(stockSummary.end.date)}`
+                    : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`}
               </div>
-              {isHouseMode ? (
+              {selectedHouseType ? (
                 <>
                   <div className="mt-1 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
                     <div className="flex items-center gap-2">
@@ -1775,11 +1911,11 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted.
                 </p>
               )}
-              {isRefreshing && !isHouseMode ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
-              {houseComparisonRefreshing && isHouseMode ? (
+              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
+              {houseComparisonRefreshing && selectedHouseType ? (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing house-start comparison...</p>
               ) : null}
-              {houseComparisonError && isHouseMode ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
+              {houseComparisonError && selectedHouseType ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
             </div>
             {isCustomSelection ? (
               <div className="shrink-0">
@@ -1795,10 +1931,190 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           </div>
 
           <div className="flex-1 w-full relative min-h-[180px]">
-            {isHouseMode ? (
-              !selectedHouseType ? (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house types available.</div>
-              ) : isHouseBlockingLoad ? (
+            {!selectedHouseType ? (
+              isBlockingLoad ? (
+                <TrendChartSkeleton />
+              ) : stockRangeChart ? (
+                <svg
+                  viewBox={`0 0 ${stockRangeChart.width} ${stockRangeChart.height}`}
+                  className="w-full h-full max-h-[400px] overflow-visible cursor-crosshair touch-none select-none"
+                  focusable="false"
+                  style={{ userSelect: "none", WebkitUserSelect: "none" }}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  onPointerLeave={handlePointerLeave}
+                >
+                  <defs>
+                    {selectionStart && selectionEnd ? (
+                      <clipPath id="selection-clip">
+                        <rect
+                          x={Math.min(selectionStart.x, selectionEnd.x)}
+                          y={0}
+                          width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 0.001)}
+                          height={stockRangeChart.height}
+                        />
+                      </clipPath>
+                    ) : null}
+                  </defs>
+                  {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
+                    const y = stockRangeChart.padding.top + stockRangeChart.plotHeight - stop * stockRangeChart.plotHeight;
+                    return (
+                      <g key={stop}>
+                        <line
+                          x1={stockRangeChart.padding.left}
+                          y1={y}
+                          x2={stockRangeChart.width - stockRangeChart.padding.right}
+                          y2={y}
+                          stroke="rgba(113,113,122,0.18)"
+                          strokeDasharray="4 6"
+                        />
+                        <text
+                          x={stockRangeChart.padding.left - 10}
+                          y={y + 4}
+                          textAnchor="end"
+                          fontSize="11"
+                          fill="currentColor"
+                          opacity="0.55"
+                          pointerEvents="none"
+                        >
+                          {formatNumber(stockRangeChart.maxValue * stop)}
+                        </text>
+                      </g>
+                    );
+                  })}
+                  {selectionStart && selectionEnd ? (
+                    <g>
+                      <rect
+                        x={Math.min(selectionStart.x, selectionEnd.x)}
+                        y={stockRangeChart.padding.top}
+                        width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 2)}
+                        height={stockRangeChart.plotHeight}
+                        fill="rgba(245, 158, 11, 0.12)"
+                      />
+                      <line
+                        x1={selectionStart.x}
+                        y1={stockRangeChart.padding.top}
+                        x2={selectionStart.x}
+                        y2={stockRangeChart.padding.top + stockRangeChart.plotHeight}
+                        stroke="rgba(245, 158, 11, 0.55)"
+                        strokeDasharray="4 4"
+                      />
+                      <line
+                        x1={selectionEnd.x}
+                        y1={stockRangeChart.padding.top}
+                        x2={selectionEnd.x}
+                        y2={stockRangeChart.padding.top + stockRangeChart.plotHeight}
+                        stroke="rgba(245, 158, 11, 0.55)"
+                        strokeDasharray="4 4"
+                      />
+                    </g>
+                  ) : null}
+                  <path
+                    d={stockRangeChart.path}
+                    fill="none"
+                    stroke="rgb(245 158 11)"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={selectionBounds ? 0.25 : 1}
+                    className="transition-opacity duration-300"
+                  />
+                  {stockRangeChart.points.map((point) => (
+                    <circle
+                      key={`base-${point.date}`}
+                      cx={point.x}
+                      cy={point.y}
+                      r={hoveredPoint?.index === point.index ? 5 : 2.5}
+                      fill="rgb(245 158 11)"
+                      opacity={selectionBounds ? 0.25 : 1}
+                      className="transition-opacity duration-300"
+                      pointerEvents="none"
+                    />
+                  ))}
+                  {selectionBounds ? (
+                    <g clipPath="url(#selection-clip)">
+                      <path
+                        d={stockRangeChart.path}
+                        fill="none"
+                        stroke="rgb(245 158 11)"
+                        strokeWidth="3.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      {stockRangeChart.points.map((point) => {
+                        const highlighted = point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
+                        if (!highlighted) {
+                          return null;
+                        }
+                        return (
+                          <circle
+                            key={`hi-${point.date}`}
+                            cx={point.x}
+                            cy={point.y}
+                            r={hoveredPoint?.index === point.index ? 5.5 : 4.5}
+                            fill="rgb(245 158 11)"
+                            stroke="rgb(255 255 255)"
+                            strokeWidth="1.5"
+                            className="dark:stroke-zinc-900"
+                            pointerEvents="none"
+                          />
+                        );
+                      })}
+                    </g>
+                  ) : null}
+                  {hoveredPoint ? (
+                    <g pointerEvents="none">
+                      <line
+                        x1={hoveredPoint.x}
+                        y1={stockRangeChart.padding.top}
+                        x2={hoveredPoint.x}
+                        y2={stockRangeChart.padding.top + stockRangeChart.plotHeight}
+                        stroke="rgba(245, 158, 11, 0.35)"
+                        strokeDasharray="4 4"
+                      />
+                      <circle
+                        cx={hoveredPoint.x}
+                        cy={hoveredPoint.y}
+                        r={6}
+                        fill="rgb(245 158 11)"
+                        stroke="rgb(255 255 255)"
+                        strokeWidth="2"
+                        className="dark:stroke-zinc-900"
+                      />
+                      <g
+                        transform={`translate(${clamp(hoveredPoint.x - 68, stockRangeChart.padding.left, stockRangeChart.width - stockRangeChart.padding.right - 136)}, ${
+                          hoveredPoint.y < stockRangeChart.padding.top + 56 ? hoveredPoint.y + 14 : hoveredPoint.y - 54
+                        })`}
+                      >
+                        <rect
+                          width="136"
+                          height="42"
+                          rx="10"
+                          fill="rgba(24, 24, 27, 0.92)"
+                          className="dark:fill-zinc-950/95"
+                        />
+                        <text x="12" y="17" fontSize="11" fill="white" opacity="0.9">
+                          {formatDate(hoveredPoint.date)}
+                        </text>
+                        <text x="12" y="31" fontSize="12" fill="white" fontWeight="700">
+                          Stock: {formatNumber(hoveredPoint.value)}
+                        </text>
+                      </g>
+                    </g>
+                  ) : null}
+                  <text x={stockRangeChart.padding.left} y={stockRangeChart.height - 8} fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
+                    {formatDate(stockRangeChart.points[0]?.date)}
+                  </text>
+                  <text x={stockRangeChart.width - stockRangeChart.padding.right} y={stockRangeChart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
+                    {formatDate(stockRangeChart.points[stockRangeChart.points.length - 1]?.date)}
+                  </text>
+                </svg>
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this study.</div>
+              )
+            ) : isHouseBlockingLoad ? (
                 <TrendChartSkeleton dualSeries />
               ) : houseComparison && houseChart ? (
                 <svg
@@ -2115,321 +2431,114 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                 </svg>
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house-start data available for this range and house type.</div>
-              )
-            ) : isBlockingLoad ? (
-              <TrendChartSkeleton />
-            ) : history && chart ? (
-              <svg
-                viewBox={`0 0 ${chart.width} ${chart.height}`}
-                className="w-full h-full max-h-[400px] overflow-visible cursor-crosshair touch-none select-none"
-                focusable="false"
-                style={{ userSelect: "none", WebkitUserSelect: "none" }}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerCancel}
-                onPointerLeave={handlePointerLeave}
-              >
-                <defs>
-                  {selectionStart && selectionEnd ? (
-                    <clipPath id="selection-clip">
-                      <rect
-                        x={Math.min(selectionStart.x, selectionEnd.x)}
-                        y={0}
-                        width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 0.001)}
-                        height={chart.height}
-                      />
-                    </clipPath>
-                  ) : null}
-                </defs>
-                {[0, 0.25, 0.5, 0.75, 1].map((stop) => {
-                  const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
-                  return (
-                    <g key={stop}>
-                      <line
-                        x1={chart.padding.left}
-                        y1={y}
-                        x2={chart.width - chart.padding.right}
-                        y2={y}
-                        stroke="rgba(113,113,122,0.18)"
-                        strokeDasharray="4 6"
-                      />
-                      <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
-                        {formatNumber(chart.maxValue * stop)}
-                      </text>
-                    </g>
-                  );
-                })}
-                {selectionStart && selectionEnd ? (
-                  <g>
-                    <rect
-                      x={Math.min(selectionStart.x, selectionEnd.x)}
-                      y={chart.padding.top}
-                      width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 2)}
-                      height={chart.plotHeight}
-                      fill="rgba(245, 158, 11, 0.12)"
-                    />
-                    <line
-                      x1={selectionStart.x}
-                      y1={chart.padding.top}
-                      x2={selectionStart.x}
-                      y2={chart.padding.top + chart.plotHeight}
-                      stroke="rgba(245, 158, 11, 0.55)"
-                      strokeDasharray="4 4"
-                    />
-                    <line
-                      x1={selectionEnd.x}
-                      y1={chart.padding.top}
-                      x2={selectionEnd.x}
-                      y2={chart.padding.top + chart.plotHeight}
-                      stroke="rgba(245, 158, 11, 0.55)"
-                      strokeDasharray="4 4"
-                    />
-                  </g>
-                ) : null}
-                
-                <path 
-                  d={chart.path} 
-                  fill="none" 
-                  stroke="rgb(245 158 11)" 
-                  strokeWidth="3" 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round" 
-                  opacity={selectionBounds ? 0.25 : 1}
-                  className="transition-opacity duration-300"
-                />
-                
-                {chart.points.map((point) => (
-                  <circle
-                    key={`base-${point.date}`}
-                    cx={point.x}
-                    cy={point.y}
-                    r={hoveredPoint?.index === point.index ? 5 : 2.5}
-                    fill="rgb(245 158 11)"
-                    opacity={selectionBounds ? 0.25 : 1}
-                    className="transition-opacity duration-300"
-                    pointerEvents="none"
-                  />
-                ))}
-
-                {selectionBounds ? (
-                  <g clipPath="url(#selection-clip)">
-                    <path 
-                      d={chart.path} 
-                      fill="none" 
-                      stroke="rgb(245 158 11)" 
-                      strokeWidth="3.5" 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                    />
-                    {chart.points.map((point) => {
-                      const highlighted = point.index >= selectionBounds.startIndex && point.index <= selectionBounds.endIndex;
-                      if (!highlighted) return null;
-                      return (
-                        <circle
-                          key={`hi-${point.date}`}
-                          cx={point.x}
-                          cy={point.y}
-                          r={hoveredPoint?.index === point.index ? 5.5 : 4.5}
-                          fill="rgb(245 158 11)"
-                          stroke="rgb(255 255 255)"
-                          strokeWidth="1.5"
-                          className="dark:stroke-zinc-900"
-                          pointerEvents="none"
-                        />
-                      );
-                    })}
-                  </g>
-                ) : null}
-
-                {hoveredPoint ? (
-                  <g pointerEvents="none">
-                    <line
-                      x1={hoveredPoint.x}
-                      y1={chart.padding.top}
-                      x2={hoveredPoint.x}
-                      y2={chart.padding.top + chart.plotHeight}
-                      stroke="rgba(245, 158, 11, 0.35)"
-                      strokeDasharray="4 4"
-                    />
-                    <circle
-                      cx={hoveredPoint.x}
-                      cy={hoveredPoint.y}
-                      r={6}
-                      fill="rgb(245 158 11)"
-                      stroke="rgb(255 255 255)"
-                      strokeWidth="2"
-                      className="dark:stroke-zinc-900"
-                    />
-                    <g
-                      transform={`translate(${clamp(hoveredPoint.x - 68, chart.padding.left, chart.width - chart.padding.right - 136)}, ${
-                        hoveredPoint.y < chart.padding.top + 56 ? hoveredPoint.y + 14 : hoveredPoint.y - 54
-                      })`}
-                    >
-                      <rect
-                        width="136"
-                        height="42"
-                        rx="10"
-                        fill="rgba(24, 24, 27, 0.92)"
-                        className="dark:fill-zinc-950/95"
-                      />
-                      <text x="12" y="17" fontSize="11" fill="white" opacity="0.9">
-                        {formatDate(hoveredPoint.date)}
-                      </text>
-                      <text x="12" y="31" fontSize="12" fill="white" fontWeight="700">
-                        Stock: {formatNumber(hoveredPoint.value)}
-                      </text>
-                    </g>
-                  </g>
-                ) : null}
-
-                <text x={chart.padding.left} y={chart.height - 8} fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
-                  {formatDate(chart.points[0]?.date)}
-                </text>
-                <text x={chart.width - chart.padding.right} y={chart.height - 8} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
-                  {formatDate(chart.points[chart.points.length - 1]?.date)}
-                </text>
-              </svg>
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this study.</div>
-            )}
+              )}
           </div>
 
-          {isHouseMode ? (
-            <MovementBreakdownList
-              movements={filteredHouseMovementDetails}
-              loading={!history && !historyError}
-              rangeStart={activeHouseMovementRangeStart}
-              rangeEnd={activeHouseMovementRangeEnd}
-            />
-          ) : history && chart ? (
-            <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-black/5 dark:border-white/5">
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Variation</div>
-                <div className={`text-lg font-medium ${summary ? (summary.stockDelta < 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400') : 'text-zinc-900 dark:text-white'}`}>
-                  {summary ? formatSignedNumber(summary.stockDelta) : "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Cons./day</div>
-                <div className="text-lg font-medium text-zinc-900 dark:text-white">
-                  {summary ? formatNumber(summary.averageConsumptionPerDay) : "—"}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500 mb-1">Span</div>
-                <div className="text-lg font-medium text-zinc-900 dark:text-white">
-                  {summary ? `${formatNumber(summary.elapsedDays, 0)} d` : "—"}
-                </div>
-              </div>
-            </div>
-          ) : null}
+          <MovementBreakdownList
+            movements={filteredHouseMovementDetails}
+            loading={!history && !historyError}
+            rangeStart={activeMovementRangeStart}
+            rangeEnd={activeMovementRangeEnd}
+          />
         </div>
 
         <div className="p-6 md:p-8 bg-zinc-50/50 dark:bg-white/[0.02] flex flex-col gap-6">
-          {isHouseMode ? (
-            <div>
-              <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Production Comparison</h3>
-              <div className="space-y-3">
-                <MetricRow label="House type" value={houseComparisonInRange?.house_type_name || selectedHouseType?.name || "—"} />
-                <MetricRow
-                  label="Range"
-                  value={
-                    houseComparisonInRange
-                      ? `${formatDate(houseComparisonInRange.range_start)} - ${formatDate(houseComparisonInRange.range_end)}`
-                      : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`
-                  }
-                />
-                <MetricRow label="Modules/type" value={selectedHouseType ? formatNumber(selectedHouseType.number_of_modules, 0) : "—"} />
-                <MetricRow label="Range material" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.total_material_quantity) : houseComparisonLoading ? "..." : "—"} />
-                <MetricRow label="Range starts" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.total_house_starts, 0) : houseComparisonLoading ? "..." : "—"} />
-                <MetricRow label="Material / house" value={houseComparisonInRange ? formatNumber(houseComparisonInRange.material_per_house) : houseComparisonLoading ? "..." : "—"} />
-                <MetricRow label="Project" value={projectComparisonInRange?.project_name || "—"} />
-                <MetricRow
-                  label="Proj. range"
-                  value={projectComparisonInRange ? formatNumber(projectComparisonInRange.projected_total_material_quantity) : "—"}
-                />
-                <MetricRow label="Proj. end stock" value={projectComparisonInRange ? formatNumber(projectedEndStock) : "—"} />
-                <MetricRow label="Proj. vs real" value={projectComparisonInRange ? formatSignedNumber(projectedStockDelta) : "—"} />
-                <MetricRow label="Weekdays shown" value={houseChart ? formatNumber(houseChart.points.length, 0) : houseComparisonLoading ? "..." : "—"} />
-                <MetricRow label="Last house start" value={houseComparisonInRange ? formatDate(houseComparisonInRange.latest_house_start_date) : houseComparisonLoading ? "..." : "—"} />
-                <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
-                <MetricRow label="Stock on hand" value={detail ? formatNumber(detail.stock_on_hand) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Avg price" value={!groupSelection && detail ? formatCurrency(detail.average_price) : "—"} />
-              </div>
+          <div>
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
+            <div className="space-y-3">
+              <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
+              <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
+              <MetricRow label="Reorden 30d" value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"} />
+              <MetricRow label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
+              <MetricRow
+                label="Lead time"
+                value={
+                  !detail ? (detailLoading ? "..." : "—")
+                  : leadTimeReference
+                    ? `${formatNumber(leadTimeReference.days, leadTimeReference.source === "average" ? 1 : 0)} d`
+                    : "—"
+                }
+              />
+              <MetricRow
+                label="Buffer sem."
+                value={
+                  isEditingBufferWeeks ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        autoFocus
+                        value={bufferWeeksInput}
+                        onChange={(event) => setBufferWeeksInput(event.target.value)}
+                        onBlur={() => setIsEditingBufferWeeks(false)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === "Escape") {
+                            setIsEditingBufferWeeks(false);
+                          }
+                        }}
+                        className="w-24 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-right text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                      />
+                      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingBufferWeeks(true)}
+                      className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                      title="Click to edit stock buffer in weeks"
+                    >
+                      {formatNumber(bufferWeeks)}
+                      <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                    </button>
+                  )
+                }
+              />
+              <MetricRow
+                label="Min. stock calc."
+                value={purchaseOrderEstimate ? formatNumber(purchaseOrderEstimate.minimumExpectedStock) : "—"}
+              />
+              <MetricRow
+                label="Cons. usada"
+                value={
+                  purchaseOrderEstimate
+                    ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
+                    : "—"
+                }
+              />
+              <MetricRow label="Nueva OC" value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.purchaseOrderDate) : "—"} />
+              <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
+              <MetricRow
+                label="Cons. est./sem"
+                value={
+                  estimatedConsumptionPurchaseOrderEstimate
+                    ? `${formatNumber(estimatedConsumptionPurchaseOrderEstimate.estimatedConsumptionPerWeek)}${estimatedConsumptionPurchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
+                    : "—"
+                }
+              />
+              <MetricRow
+                label="Min. est. calc."
+                value={estimatedConsumptionPurchaseOrderEstimate ? formatNumber(estimatedConsumptionPurchaseOrderEstimate.minimumExpectedStock) : "—"}
+              />
+              <MetricRow
+                label="Nueva OC est."
+                value={
+                  estimatedConsumptionPurchaseOrderEstimate ? (
+                    <span className={getPurchaseOrderUrgencyClasses(estimatedConsumptionPurchaseOrderEstimate.purchaseOrderDate)}>
+                      {formatDate(estimatedConsumptionPurchaseOrderEstimate.purchaseOrderDate)}
+                    </span>
+                  ) : "—"
+                }
+              />
+              <MetricRow
+                label="Llega min. est."
+                value={estimatedConsumptionPurchaseOrderEstimate ? formatDate(estimatedConsumptionPurchaseOrderEstimate.thresholdDate) : "—"}
+              />
+              <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
+              <MetricRow label="Ult. OC" value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
+              <MetricRow label="No. OC" value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
             </div>
-          ) : (
-            <div>
-              <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
-              <div className="space-y-3">
-                <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
-                <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Reorden 30d" value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
-                <MetricRow 
-                  label="Lead time" 
-                  value={
-                    !detail ? (detailLoading ? "..." : "—") 
-                    : leadTimeReference
-                      ? `${formatNumber(leadTimeReference.days, leadTimeReference.source === "average" ? 1 : 0)} d`
-                      : "—"
-                  } 
-                />
-                <MetricRow
-                  label="Buffer sem."
-                  value={
-                    isEditingBufferWeeks ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.5"
-                          autoFocus
-                          value={bufferWeeksInput}
-                          onChange={(event) => setBufferWeeksInput(event.target.value)}
-                          onBlur={() => setIsEditingBufferWeeks(false)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === "Escape") {
-                              setIsEditingBufferWeeks(false);
-                            }
-                          }}
-                          className="w-24 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-right text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
-                        />
-                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingBufferWeeks(true)}
-                        className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                        title="Click to edit stock buffer in weeks"
-                      >
-                        {formatNumber(bufferWeeks)}
-                        <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
-                      </button>
-                    )
-                  }
-                />
-                <MetricRow
-                  label="Min. stock calc."
-                  value={purchaseOrderEstimate ? formatNumber(purchaseOrderEstimate.minimumExpectedStock) : "—"}
-                />
-                <MetricRow
-                  label="Cons. usada"
-                  value={
-                    purchaseOrderEstimate
-                      ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
-                      : "—"
-                  }
-                />
-                <MetricRow label="Nueva OC" value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.purchaseOrderDate) : "—"} />
-                <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
-                <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
-                <MetricRow label="Ult. OC" value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
-                <MetricRow label="No. OC" value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
-              </div>
-            </div>
-          )}
+          </div>
         </div>
       </div>
     </section>
@@ -2437,6 +2546,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
 });
 
 export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups?: boolean }) {
+  const [storedHousePreferences] = useState(() => getStoredHouseViewPreferences());
   const storedCecoPreferences = getStoredCecoFilterPreferences();
   const [cecos, setCecos] = useState<MaterialDashboardCeco[]>([]);
   const [projectsBoard, setProjectsBoard] = useState<ProjectsBoardData | null>(null);
@@ -2452,7 +2562,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [cecoFilterMode, setCecoFilterMode] = useState<CecoFilterMode>(storedCecoPreferences?.mode ?? "exclude");
   const [selectedCecos, setSelectedCecos] = useState<string[]>(storedCecoPreferences?.cecos ?? []);
   const [activeTab, setActiveTab] = useState<"materials" | "groups" | "cecos">("materials");
-  const [viewMode, setViewMode] = useState<DashboardViewMode>("houses");
   const [cecoSearch, setCecoSearch] = useState("");
   const [materialSearchInput, setMaterialSearchInput] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
@@ -2460,14 +2569,13 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
   const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
-    () => getStoredHouseViewPreferences()?.selectedHouseTypeId ?? null,
+    () => storedHousePreferences?.selectedHouseTypeId ?? null,
   );
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
-    () => getStoredHouseViewPreferences()?.selectedProjectId ?? null,
+    () => storedHousePreferences?.selectedProjectId ?? null,
   );
   const [houseRange, setHouseRange] = useState<HouseRange>(() => {
-    const stored = getStoredHouseViewPreferences();
-    return clampHouseRange(stored?.houseRange || getDefaultHouseRange());
+    return clampHouseRange(storedHousePreferences?.houseRange || getDefaultHouseRange());
   });
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -2501,15 +2609,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       : normalizedSelectedCecoCodes;
   const cecoApiFilters = cecoFilterMode === "exclude" ? { excludedCecos: normalizedSelectedCecoCodes } : { cecos: normalizedSelectedCecoCodes };
   const allCecosExcluded = cecos.length > 0 && normalizedSelectedCecos.length === 0;
-  const currentDashboardMovementDays =
-    viewMode === "houses"
-      ? Math.max(
-          Math.round(
-            (toStartOfDay(houseRange.endDate).getTime() - toStartOfDay(houseRange.startDate).getTime()) / (1000 * 60 * 60 * 24),
-          ) + 1,
-          1,
-        )
-      : 60;
+  const currentDashboardMovementDays = Math.max(
+    Math.round(
+      (toStartOfDay(houseRange.endDate).getTime() - toStartOfDay(houseRange.startDate).getTime()) / (1000 * 60 * 60 * 24),
+    ) + 1,
+    1,
+  );
   const latestHistoryDate = toDateInputValue(moveToPreviousBusinessDay(new Date()));
   const selectedMaterialSku = selectedKey?.startsWith("material:") ? selectedKey.slice("material:".length) : null;
   const parsedSelectedGroupId = selectedKey?.startsWith("group:") ? Number(selectedKey.slice("group:".length)) : null;
@@ -2517,13 +2622,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     parsedSelectedGroupId !== null && parsedSelectedGroupId !== undefined && Number.isFinite(parsedSelectedGroupId)
       ? parsedSelectedGroupId
       : null;
-  const historyRequestRange =
-    viewMode === "houses"
-      ? {
-          startDate: houseRange.startDate,
-          endDate: latestHistoryDate,
-        }
-      : null;
+  const historyRequestRange = {
+    startDate: houseRange.startDate,
+    endDate: latestHistoryDate,
+  };
   const currentDashboardKey = dashboardCacheKey(normalizedSelectedCecos, currentDashboardMovementDays);
   const currentGroupDashboardKey = groupDashboardCacheKey(normalizedSelectedCecos, currentDashboardMovementDays);
   const data = allCecosExcluded
@@ -2687,7 +2789,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           return;
         }
         setHouseTypes(response.house_types);
-        setSelectedHouseTypeId((current) => current ?? response.house_types[0]?.id ?? null);
       } catch {
         if (!cancelled) {
           setHouseTypes([]);
@@ -2942,9 +3043,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       return;
     }
     setSelectedHouseTypeId((current) =>
-      current && houseTypes.some((houseType) => houseType.id === current) ? current : houseTypes[0].id,
+      current === null
+        ? storedHousePreferences?.hasSelectedHouseTypePreference
+          ? null
+          : houseTypes[0].id
+        : houseTypes.some((houseType) => houseType.id === current)
+          ? current
+          : houseTypes[0].id,
     );
-  }, [houseTypes]);
+  }, [houseTypes, storedHousePreferences?.hasSelectedHouseTypePreference]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -3091,7 +3198,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     const houseTypeId = selectedHouseTypeId;
     const cacheKey =
       sku && houseTypeId ? houseComparisonCacheKey(sku, houseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId) : null;
-    if (allCecosExcluded || !sku || !houseTypeId || !cacheKey || viewMode !== "houses") {
+    if (allCecosExcluded || !sku || !houseTypeId || !cacheKey) {
       setHouseComparisonError(null);
       setHouseComparisonLoading(false);
       return;
@@ -3155,7 +3262,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedMaterialSku, selectedProjectId, viewMode]);
+  }, [allCecosExcluded, currentHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedHouseTypeId, selectedMaterialSku, selectedProjectId]);
 
   useEffect(() => {
     const groupId = selectedGroupId;
@@ -3164,7 +3271,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       groupId && houseTypeId
         ? groupHouseComparisonCacheKey(groupId, houseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
         : null;
-    if (allCecosExcluded || !groupId || !houseTypeId || !cacheKey || viewMode !== "houses") {
+    if (allCecosExcluded || !groupId || !houseTypeId || !cacheKey) {
+      setHouseComparisonLoading(false);
       return;
     }
     let cancelled = false;
@@ -3216,7 +3324,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     return () => {
       cancelled = true;
     };
-  }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, selectedProjectId, viewMode]);
+  }, [allCecosExcluded, currentGroupHouseComparisonKey, houseRange.endDate, houseRange.startDate, refreshNonce, selectedGroupId, selectedHouseTypeId, selectedProjectId]);
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const isMaterialSearchPending = materialSearchInput !== deferredMaterialSearch;
@@ -3411,27 +3519,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     Reset CECO Filter
                   </button>
                 </div>
-                <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("houses")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      House View
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("stock")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      Stock View
-                    </button>
-                  </div>
-                </div>
                 {error ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
                 {historyError ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{historyError}</div> : null}
-                {houseComparisonError && viewMode === "houses" ? (
+                {houseComparisonError ? (
                   <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{houseComparisonError}</div>
                 ) : null}
               </div>
@@ -3478,27 +3568,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     </button>
                   ) : null}
                 </div>
-                <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
-                  <div className="grid grid-cols-2 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("houses")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "houses" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      House View
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setViewMode("stock")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${viewMode === "stock" ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"}`}
-                    >
-                      Stock View
-                    </button>
-                  </div>
-                </div>
                 {error ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
                 {historyError ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{historyError}</div> : null}
-                {houseComparisonError && viewMode === "houses" ? (
+                {houseComparisonError ? (
                   <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{houseComparisonError}</div>
                 ) : null}
               </div>
@@ -3546,8 +3618,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
                 <p className="text-xs leading-5 text-zinc-500">
                   {cecoFilterMode === "exclude"
-                    ? "Select CECOs to hide them from both stock and house views."
-                    : "Select the only CECOs that should remain visible in both stock and house views."}
+                    ? "Select CECOs to hide them from the dashboard."
+                    : "Select the only CECOs that should remain visible in the dashboard."}
                 </p>
 
                 {normalizedSelectedCecoCodes.length > 0 ? (
@@ -3603,7 +3675,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           selected={selectedRow}
           detail={selectedDetailLike}
           history={selectedHistoryLike}
-          viewMode={viewMode}
           houseTypes={houseTypes}
           projects={projectOptions}
           selectedHouseTypeId={selectedHouseTypeId}
