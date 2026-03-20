@@ -460,7 +460,7 @@ function getPurchaseOrderEstimate({
     detail.stock_on_hand <= minimumStock ? 0 : Math.ceil((detail.stock_on_hand - minimumStock) / rateUsed);
   const leadTimeDays = Math.max(Math.ceil(leadTimeReference.days), 0);
   const thresholdDate = addBusinessDays(today, businessDaysUntilThreshold);
-  const purchaseOrderDate = addBusinessDays(today, Math.max(businessDaysUntilThreshold - leadTimeDays, 0));
+  const purchaseOrderDate = addBusinessDays(thresholdDate, -leadTimeDays);
 
   return {
     bufferWeeks: normalizedBufferWeeks,
@@ -2506,7 +2506,16 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     : "—"
                 }
               />
-              <MetricRow label="Nueva OC" value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.purchaseOrderDate) : "—"} />
+              <MetricRow
+                label="Nueva OC"
+                value={
+                  purchaseOrderEstimate ? (
+                    <span className={getPurchaseOrderUrgencyClasses(purchaseOrderEstimate.purchaseOrderDate)}>
+                      {formatDate(purchaseOrderEstimate.purchaseOrderDate)}
+                    </span>
+                  ) : "—"
+                }
+              />
               <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
               <MetricRow
                 label="Cons. est./sem"
