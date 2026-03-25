@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
+from statistics import median
 from typing import Any, Iterable, Sequence
 
 from app.config import Settings
@@ -261,6 +262,7 @@ def get_material_procurement_details(
                 "pending_purchase_quantity": pending_qty,
                 "average_price": average_price,
                 "average_lead_time_days": lead_stats.get("average_lead_time_days"),
+                "median_lead_time_days": lead_stats.get("median_lead_time_days"),
                 "max_lead_time_days": lead_stats.get("max_lead_time_days"),
                 "lead_time_sample_count": lead_stats.get("lead_time_sample_count", 0),
                 "last_purchase_order_date": _serialize_datetime(po_date),
@@ -663,12 +665,23 @@ def _get_outgoing_movement_details_for_product(
             CONVERT(date, h.Fecha) AS MovementDate,
             RTRIM(LTRIM(h.CodiCC)) AS CecoCode,
             RTRIM(LTRIM(cc.DescCC)) AS CecoName,
+            sm.DescSub AS DescSub,
             CAST(h.NroInt AS NVARCHAR(50)) AS MovementInternalNumber,
             SUM(COALESCE(d.CantDespachada, 0)) AS Quantity,
             COUNT(*) AS LineCount
         FROM softland.iw_gsaen h
         INNER JOIN softland.iw_gmovi d ON h.Tipo = d.Tipo AND h.NroInt = d.NroInt
         LEFT JOIN softland.cwtccos cc ON RTRIM(LTRIM(cc.CodiCC)) = RTRIM(LTRIM(h.CodiCC))
+        LEFT JOIN (
+            SELECT
+                NroInt,
+                RTRIM(LTRIM(Tipo)) AS Tipo,
+                MAX(NULLIF(RTRIM(LTRIM(desc_sub)), '')) AS DescSub
+            FROM dbo.cr_solicitudes_materiales
+            GROUP BY
+                NroInt,
+                RTRIM(LTRIM(Tipo))
+        ) sm ON sm.NroInt = h.NroInt AND sm.Tipo = RTRIM(LTRIM(h.Tipo))
         WHERE
             h.Fecha >= ?
             AND h.Fecha <= ?
@@ -681,6 +694,7 @@ def _get_outgoing_movement_details_for_product(
             CONVERT(date, h.Fecha),
             RTRIM(LTRIM(h.CodiCC)),
             RTRIM(LTRIM(cc.DescCC)),
+            sm.DescSub,
             CAST(h.NroInt AS NVARCHAR(50))
         ORDER BY
             MovementDate DESC,
@@ -703,6 +717,7 @@ def _get_outgoing_movement_details_for_product(
                 "quantity": round(float(getattr(row, "Quantity", 0.0) or 0.0), 4),
                 "ceco": (getattr(row, "CecoCode", None) or "").strip() or None,
                 "ceco_name": (getattr(row, "CecoName", None) or "").strip() or None,
+                "desc_sub": (getattr(row, "DescSub", None) or "").strip() or None,
                 "movement_internal_number": str(getattr(row, "MovementInternalNumber", "")).strip() or None,
                 "line_count": int(getattr(row, "LineCount", 0) or 0),
             }
@@ -727,6 +742,7 @@ def _calculate_delivery_time_stats(cursor, product_code: str, *, limit: int) -> 
     if not samples:
         return {
             "average_lead_time_days": None,
+            "median_lead_time_days": None,
             "max_lead_time_days": None,
             "lead_time_sample_count": 0,
         }
@@ -734,11 +750,13 @@ def _calculate_delivery_time_stats(cursor, product_code: str, *, limit: int) -> 
     if not lead_time_days:
         return {
             "average_lead_time_days": None,
+            "median_lead_time_days": None,
             "max_lead_time_days": None,
             "lead_time_sample_count": 0,
         }
     return {
         "average_lead_time_days": round(sum(lead_time_days) / len(lead_time_days), 2),
+        "median_lead_time_days": round(float(median(lead_time_days)), 2),
         "max_lead_time_days": max(lead_time_days),
         "lead_time_sample_count": len(lead_time_days),
     }

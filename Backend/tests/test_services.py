@@ -40,7 +40,7 @@ from app.services.catalog import (
 )
 from app.services.dashboard import get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
-from app.services.erp import _get_lead_time_samples_for_product
+from app.services.erp import _calculate_delivery_time_stats, _get_lead_time_samples_for_product
 from app.services.material_groups import (
     create_material_study_group,
     get_material_dashboard_group_detail,
@@ -1331,6 +1331,7 @@ class ServiceLayerTests(unittest.TestCase):
             "pending_purchase_quantity": 48.0,
             "average_price": 2500.0,
             "average_lead_time_days": 9.5,
+            "median_lead_time_days": 9.0,
             "max_lead_time_days": 12.0,
             "lead_time_sample_count": 4,
             "average_daily_outgoing_30d": 2.5,
@@ -1689,6 +1690,7 @@ class MaterialStudyGroupTests(ServiceLayerTests):
                 "quantity": movement_history_by_sku[sku][-1]["quantity"],
                 "ceco": "CC-01",
                 "ceco_name": "Main",
+                "desc_sub": "T2" if sku == "INS-S" else None,
                 "movement_internal_number": f"MOV-{sku}",
                 "line_count": 1,
             }
@@ -1716,6 +1718,8 @@ class MaterialStudyGroupTests(ServiceLayerTests):
         self.assertEqual(history["movements"][1]["quantity"], 14.0)
         self.assertEqual(history["movement_details"][0]["sku"], "INS-L")
         self.assertEqual(history["movement_details"][0]["quantity"], 10.0)
+        self.assertIsNone(history["movement_details"][0]["desc_sub"])
+        self.assertEqual(history["movement_details"][1]["desc_sub"], "T2")
 
 
 class MaterialDashboardBusinessDayTests(unittest.TestCase):
@@ -1734,6 +1738,7 @@ class MaterialDashboardBusinessDayTests(unittest.TestCase):
             "pending_purchase_quantity": 15.0,
             "average_price": 2500.0,
             "average_lead_time_days": 4.0,
+            "median_lead_time_days": 4.0,
             "max_lead_time_days": 6.0,
             "lead_time_sample_count": 3,
             "last_purchase_order_date": "2026-03-01",
@@ -1764,6 +1769,28 @@ class MaterialDashboardBusinessDayTests(unittest.TestCase):
 
 
 class ErpLeadTimeSampleTests(unittest.TestCase):
+    def test_calculate_delivery_time_stats_includes_median(self) -> None:
+        with patch(
+            "app.services.erp._get_lead_time_samples_for_product",
+            return_value=[
+                {"lead_time_days": 3},
+                {"lead_time_days": 5},
+                {"lead_time_days": 11},
+                {"lead_time_days": 13},
+            ],
+        ):
+            stats = _calculate_delivery_time_stats(object(), "ERP-001", limit=20)
+
+        self.assertEqual(
+            stats,
+            {
+                "average_lead_time_days": 8.0,
+                "median_lead_time_days": 8.0,
+                "max_lead_time_days": 13,
+                "lead_time_sample_count": 4,
+            },
+        )
+
     def test_lead_time_sampling_scans_past_unusable_recent_orders(self) -> None:
         rows = [
             SimpleNamespace(

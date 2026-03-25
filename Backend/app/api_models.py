@@ -581,6 +581,7 @@ class MaterialDashboardDetailModel(BaseModel):
     pending_purchase_quantity: float | None
     average_price: float | None
     average_lead_time_days: float | None
+    median_lead_time_days: float | None
     max_lead_time_days: float | None
     lead_time_sample_count: int
     average_daily_outgoing_30d: float
@@ -639,6 +640,7 @@ class MaterialDashboardMovementDetailModel(BaseModel):
     quantity: float
     ceco: str | None
     ceco_name: str | None
+    desc_sub: str | None = None
     movement_internal_number: str | None
     line_count: int
 

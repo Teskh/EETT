@@ -1,6 +1,7 @@
 import { memo, startTransition, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor";
+import { MovementStationDistributionModal } from "../components/MovementStationDistributionModal";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import type {
@@ -221,9 +222,11 @@ type HouseRange = {
   endDate: string;
 };
 
+type LeadTimeMode = "worst" | "median" | "average";
+
 type LeadTimeReference = {
   days: number;
-  source: "max" | "average";
+  source: LeadTimeMode;
 };
 
 type PurchaseOrderEstimate = {
@@ -315,6 +318,7 @@ function getStoredHouseViewPreferences() {
     const parsed = JSON.parse(raw) as {
       selectedHouseTypeId?: number | null;
       selectedProjectId?: number | null;
+      leadTimeMode?: string;
       houseRange?: Partial<HouseRange> | null;
     };
     return {
@@ -327,6 +331,10 @@ function getStoredHouseViewPreferences() {
         typeof parsed.selectedProjectId === "number" && Number.isFinite(parsed.selectedProjectId)
           ? parsed.selectedProjectId
           : null,
+      leadTimeMode:
+        parsed.leadTimeMode === "average" || parsed.leadTimeMode === "median" || parsed.leadTimeMode === "worst"
+          ? parsed.leadTimeMode
+          : "worst",
       houseRange:
         parsed.houseRange?.startDate && parsed.houseRange?.endDate
           ? {
@@ -412,27 +420,58 @@ function getPurchaseOrderUrgencyClasses(value: string | null | undefined) {
   return "text-zinc-900 dark:text-white";
 }
 
-function getLeadTimeReference(detail: DashboardDetailLike | null): LeadTimeReference | null {
+function getLeadTimeReference(detail: DashboardDetailLike | null, mode: LeadTimeMode): LeadTimeReference | null {
   if (!detail) {
     return null;
   }
-  if (detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined && Number.isFinite(detail.max_lead_time_days)) {
-    return { days: detail.max_lead_time_days, source: "max" };
+  if (mode === "worst" && detail.max_lead_time_days !== null && detail.max_lead_time_days !== undefined && Number.isFinite(detail.max_lead_time_days)) {
+    return { days: detail.max_lead_time_days, source: "worst" };
   }
-  if (detail.average_lead_time_days !== null && detail.average_lead_time_days !== undefined && Number.isFinite(detail.average_lead_time_days)) {
+  if (mode === "median" && detail.median_lead_time_days !== null && detail.median_lead_time_days !== undefined && Number.isFinite(detail.median_lead_time_days)) {
+    return { days: detail.median_lead_time_days, source: "median" };
+  }
+  if (mode === "average" && detail.average_lead_time_days !== null && detail.average_lead_time_days !== undefined && Number.isFinite(detail.average_lead_time_days)) {
     return { days: detail.average_lead_time_days, source: "average" };
   }
   return null;
 }
 
+function getLeadTimeDigits(mode: LeadTimeMode) {
+  return mode === "worst" ? 0 : 1;
+}
+
+function getLeadTimeModeLabel(mode: LeadTimeMode) {
+  if (mode === "worst") {
+    return "Worst";
+  }
+  if (mode === "median") {
+    return "Median";
+  }
+  return "Average";
+}
+
+function getReorderDateForLeadTime(detail: DashboardDetailLike | null, leadTimeReference: LeadTimeReference | null) {
+  if (!detail || detail.days_of_stock_30d === null || detail.days_of_stock_30d === undefined || !leadTimeReference) {
+    return null;
+  }
+  const reorderInDays = Math.max(intOrZero(Math.round(detail.days_of_stock_30d - leadTimeReference.days)), 0);
+  return addBusinessDays(moveToNextBusinessDay(new Date()), reorderInDays).toISOString();
+}
+
+function intOrZero(value: number) {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function getPurchaseOrderEstimate({
   detail,
   summary,
+  leadTimeReference,
   isCustomSelection,
   bufferWeeks,
 }: {
   detail: DashboardDetailLike | null;
   summary: ReturnType<typeof getSeriesSummary>;
+  leadTimeReference: LeadTimeReference | null;
   isCustomSelection: boolean;
   bufferWeeks: number;
 }): PurchaseOrderEstimate | null {
@@ -440,7 +479,6 @@ function getPurchaseOrderEstimate({
     return null;
   }
 
-  const leadTimeReference = getLeadTimeReference(detail);
   if (!leadTimeReference) {
     return null;
   }
@@ -476,11 +514,13 @@ function getPurchaseOrderEstimate({
 
 function getEstimatedConsumptionPurchaseOrderEstimate({
   detail,
+  leadTimeReference,
   estimatedConsumptionPerWeek,
   isCustomSelection,
   bufferWeeks,
 }: {
   detail: DashboardDetailLike | null;
+  leadTimeReference: LeadTimeReference | null;
   estimatedConsumptionPerWeek: number | null | undefined;
   isCustomSelection: boolean;
   bufferWeeks: number;
@@ -489,7 +529,6 @@ function getEstimatedConsumptionPurchaseOrderEstimate({
     return null;
   }
 
-  const leadTimeReference = getLeadTimeReference(detail);
   if (!leadTimeReference) {
     return null;
   }
@@ -1316,12 +1355,16 @@ function MovementBreakdownList({
   loading,
   rangeStart,
   rangeEnd,
+  unitLabel,
 }: {
   movements: DashboardHistoryDetailLike[];
   loading: boolean;
   rangeStart: string | null;
   rangeEnd: string | null;
+  unitLabel?: string | null;
 }) {
+  const [stationModalOpen, setStationModalOpen] = useState(false);
+
   if (loading) {
     return <MovementBreakdownSkeleton />;
   }
@@ -1349,7 +1392,24 @@ function MovementBreakdownList({
         {movements.length ? (
           <>
             <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-              <div>Detalles del Movimiento</div>
+              <div className="flex items-center gap-2">
+                <span>Detalles del Movimiento</span>
+                {movements.length ? (
+                  <button
+                    type="button"
+                    onClick={() => setStationModalOpen(true)}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-600 transition-colors hover:border-amber-400/60 hover:text-amber-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300 dark:hover:text-amber-300"
+                    title="View desc_sub distribution"
+                    aria-label="View desc_sub distribution"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
+                      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" opacity="0.35" />
+                      <path d="M12 4a8 8 0 0 1 8 8h-8z" fill="currentColor" />
+                      <path d="M12 12l-4.9 6.3A8 8 0 0 1 4 12z" fill="currentColor" opacity="0.6" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
               <div className="text-left md:text-right">Cantidad</div>
             </div>
             <div className="flex-1 divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
@@ -1409,6 +1469,15 @@ function MovementBreakdownList({
           </div>
         )}
       </div>
+
+      <MovementStationDistributionModal
+        open={stationModalOpen}
+        movements={movements}
+        rangeStart={rangeStart}
+        rangeEnd={rangeEnd}
+        unitLabel={unitLabel}
+        onClose={() => setStationModalOpen(false)}
+      />
     </div>
   );
 }
@@ -1421,8 +1490,10 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   projects,
   selectedHouseTypeId,
   selectedProjectId,
+  leadTimeMode,
   onSelectHouseType,
   onSelectProject,
+  onLeadTimeModeChange,
   houseRange,
   onHouseRangeChange,
   houseComparison,
@@ -1442,8 +1513,10 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   projects: ProjectSummary[];
   selectedHouseTypeId: number | null;
   selectedProjectId: number | null;
+  leadTimeMode: LeadTimeMode;
   onSelectHouseType: (houseTypeId: number | null) => void;
   onSelectProject: (projectId: number | null) => void;
+  onLeadTimeModeChange: (mode: LeadTimeMode) => void;
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
   houseComparison: DashboardHouseComparisonLike | null;
@@ -1462,6 +1535,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const [hoveredPointIndex, setHoveredPointIndex] = useState<number | null>(null);
   const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
+  const [isEditingLeadTimeMode, setIsEditingLeadTimeMode] = useState(false);
   const selectedGroup = isGroupRow(selected) ? selected : null;
   const groupSelection = Boolean(selectedGroup);
 
@@ -1471,6 +1545,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     setDragCurrentIndex(null);
     setHoveredPointIndex(null);
     setIsEditingBufferWeeks(false);
+    setIsEditingLeadTimeMode(false);
   }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, selectedHouseTypeId, selectedProjectId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
 
   if (!selected) {
@@ -1552,16 +1627,19 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const isHouseBlockingLoad = !historyError && !houseComparisonError && Boolean(selectedHouseType) && (!detail || !history || !houseComparison);
   const isRefreshing = detailRefreshing || historyRefreshing;
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
-  const leadTimeReference = getLeadTimeReference(detail);
+  const leadTimeReference = getLeadTimeReference(detail, leadTimeMode);
+  const selectedReorderDateRecentRate = getReorderDateForLeadTime(detail, leadTimeReference);
   const procurementSummary = selectedHouseType ? houseStockSummary : stockSummary;
   const purchaseOrderEstimate = getPurchaseOrderEstimate({
     detail,
     summary: procurementSummary,
+    leadTimeReference,
     isCustomSelection,
     bufferWeeks,
   });
   const estimatedConsumptionPurchaseOrderEstimate = getEstimatedConsumptionPurchaseOrderEstimate({
     detail,
+    leadTimeReference,
     estimatedConsumptionPerWeek:
       selectedHouseType && projectComparisonInRange
         ? isCustomSelection
@@ -2439,6 +2517,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             loading={!history && !historyError}
             rangeStart={activeMovementRangeStart}
             rangeEnd={activeMovementRangeEnd}
+            unitLabel={selectedUnitLabel}
           />
         </div>
 
@@ -2448,15 +2527,41 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             <div className="space-y-3">
               <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
               <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
-              <MetricRow label="Reorden 30d" value={detail ? formatDate(detail.reorder_date_recent_rate) : detailLoading ? "..." : "—"} />
+              <MetricRow label="Reorden 30d" value={detail ? formatDate(selectedReorderDateRecentRate) : detailLoading ? "..." : "—"} />
               <MetricRow label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
               <MetricRow
                 label="Lead time"
                 value={
-                  !detail ? (detailLoading ? "..." : "—")
-                  : leadTimeReference
-                    ? `${formatNumber(leadTimeReference.days, leadTimeReference.source === "average" ? 1 : 0)} d`
-                    : "—"
+                  !detail ? (detailLoading ? "..." : "—") : isEditingLeadTimeMode ? (
+                    <select
+                      autoFocus
+                      value={leadTimeMode}
+                      onChange={(event) => onLeadTimeModeChange(event.target.value as LeadTimeMode)}
+                      onBlur={() => setIsEditingLeadTimeMode(false)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === "Escape") {
+                          setIsEditingLeadTimeMode(false);
+                        }
+                      }}
+                      className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
+                    >
+                      <option value="worst">Worst</option>
+                      <option value="median">Median</option>
+                      <option value="average">Average</option>
+                    </select>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingLeadTimeMode(true)}
+                      className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                      title="Click to choose the lead time metric used on this page"
+                    >
+                      {leadTimeReference ? `${formatNumber(leadTimeReference.days, getLeadTimeDigits(leadTimeReference.source))} d` : "—"}
+                      <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">
+                        {getLeadTimeModeLabel(leadTimeMode)}
+                      </span>
+                    </button>
+                  )
                 }
               />
               <MetricRow
@@ -2583,6 +2688,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
     () => storedHousePreferences?.selectedProjectId ?? null,
   );
+  const [leadTimeMode, setLeadTimeMode] = useState<LeadTimeMode>(() => storedHousePreferences?.leadTimeMode ?? "worst");
   const [houseRange, setHouseRange] = useState<HouseRange>(() => {
     return clampHouseRange(storedHousePreferences?.houseRange || getDefaultHouseRange());
   });
@@ -3071,10 +3177,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       JSON.stringify({
         selectedHouseTypeId,
         selectedProjectId,
+        leadTimeMode,
         houseRange,
       }),
     );
-  }, [houseRange, selectedHouseTypeId, selectedProjectId]);
+  }, [houseRange, leadTimeMode, selectedHouseTypeId, selectedProjectId]);
 
   useEffect(() => {
     if (!projectsBoard) {
@@ -3688,8 +3795,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           projects={projectOptions}
           selectedHouseTypeId={selectedHouseTypeId}
           selectedProjectId={selectedProjectId}
+          leadTimeMode={leadTimeMode}
           onSelectHouseType={setSelectedHouseTypeId}
           onSelectProject={setSelectedProjectId}
+          onLeadTimeModeChange={setLeadTimeMode}
           houseRange={houseRange}
           onHouseRangeChange={setHouseRange}
           houseComparison={selectedHouseComparisonLike}

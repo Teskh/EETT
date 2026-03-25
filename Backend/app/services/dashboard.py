@@ -20,7 +20,7 @@ from app.services.erp import (
 )
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 2
+MATERIAL_DASHBOARD_CACHE_VERSION = 4
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -295,6 +295,7 @@ def _build_material_dashboard_detail(
         "pending_purchase_quantity": _coerce_float(material.get("pending_purchase_quantity")),
         "average_price": _coerce_float(material.get("average_price")),
         "average_lead_time_days": _coerce_float(material.get("average_lead_time_days")),
+        "median_lead_time_days": _coerce_float(material.get("median_lead_time_days")),
         "max_lead_time_days": _coerce_float(material.get("max_lead_time_days")),
         "lead_time_sample_count": int(material.get("lead_time_sample_count") or 0),
         "average_daily_outgoing_30d": average_daily_outgoing_30d,

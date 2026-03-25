@@ -42,6 +42,7 @@ export type MaterialDashboardDetail = {
   pending_purchase_quantity: number | null;
   average_price: number | null;
   average_lead_time_days: number | null;
+  median_lead_time_days: number | null;
   max_lead_time_days: number | null;
   lead_time_sample_count: number;
   average_daily_outgoing_30d: number;
@@ -80,6 +81,7 @@ export type MaterialDashboardMovementDetail = {
   quantity: number;
   ceco: string | null;
   ceco_name: string | null;
+  desc_sub: string | null;
   movement_internal_number: string | null;
   line_count: number;
 };
@@ -198,6 +200,7 @@ export type MaterialDashboardGroupDetailData = {
   pending_purchase_quantity: number | null;
   average_price: number | null;
   average_lead_time_days: number | null;
+  median_lead_time_days: number | null;
   max_lead_time_days: number | null;
   lead_time_sample_count: number;
   average_daily_outgoing_30d: number;
@@ -212,6 +215,7 @@ export type MaterialDashboardGroupMovementDetail = {
   quantity: number;
   ceco: string | null;
   ceco_name: string | null;
+  desc_sub: string | null;
   movement_internal_number: string | null;
   line_count: number;
   sku: string;
