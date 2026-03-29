@@ -1,5 +1,6 @@
 import { memo, startTransition, useDeferredValue, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
+import { MaterialProjectUsageModal } from "../components/MaterialProjectUsageModal";
 import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor";
 import { MovementStationDistributionModal } from "../components/MovementStationDistributionModal";
 import { ApiError, api } from "../lib/api";
@@ -1213,7 +1214,7 @@ const MaterialResultsList = memo(function MaterialResultsList({
           >
             {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
             <div className="flex justify-between items-start gap-4 mb-2">
-              <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
+              <h4 className={`min-w-0 text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
                 {row.material_name}
               </h4>
               <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
@@ -1505,6 +1506,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   houseComparisonRefreshing,
   historyError,
   houseComparisonError,
+  onInspectProjectUsage,
 }: {
   selected: DashboardSelectionRow | null;
   detail: DashboardDetailLike | null;
@@ -1528,6 +1530,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   houseComparisonRefreshing: boolean;
   historyError: string | null;
   houseComparisonError: string | null;
+  onInspectProjectUsage: (() => void) | null;
 }) {
   const [selection, setSelection] = useState<ChartSelection | null>(null);
   const [dragAnchorIndex, setDragAnchorIndex] = useState<number | null>(null);
@@ -1651,6 +1654,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   });
   const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
   const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
+  const canInspectProjectUsage = Boolean(selectedProjectId && !groupSelection && onInspectProjectUsage);
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const actualConsumptionPerHouse = houseSummary?.averageConsumptionPerHouse ?? houseComparisonInRange?.material_per_house ?? null;
   const projectedConsumptionPerHouse = projectComparisonInRange?.predicted_quantity_per_house ?? null;
@@ -1788,7 +1792,20 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
       <div className="p-6 md:p-8 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-6">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
-          <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight">{selected.material_name}</h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight">{selected.material_name}</h2>
+            {canInspectProjectUsage ? (
+              <button
+                type="button"
+                onClick={() => onInspectProjectUsage?.()}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-accent-300"
+                title="View where this material is specified in the selected project"
+                aria-label={`View ${selected.material_name} usage in the selected project`}
+              >
+                <i className="ph-bold ph-info text-sm" />
+              </button>
+            ) : null}
+          </div>
           <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
             <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selectedBadge}</span>
             {selectedUnitLabel ? <span>&bull; {selectedUnitLabel}</span> : null}
@@ -2682,6 +2699,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [sort, setSort] = useState<SortState>({ key: "last_movement_date", direction: -1 });
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
+  const [projectUsageTarget, setProjectUsageTarget] = useState<{
+    projectId: number;
+    projectName: string;
+    material: MaterialDashboardListRow;
+  } | null>(null);
   const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
     () => storedHousePreferences?.selectedHouseTypeId ?? null,
   );
@@ -3536,6 +3558,18 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     }
   }
 
+  function handleOpenProjectUsage(row: MaterialDashboardListRow) {
+    if (!selectedProjectId) {
+      return;
+    }
+    const projectName = projectOptions.find((project) => project.id === selectedProjectId)?.name || "Selected project";
+    setProjectUsageTarget({
+      projectId: selectedProjectId,
+      projectName,
+      material: row,
+    });
+  }
+
   useEffect(() => {
     if (activeTab === "materials" && !selectedMaterialRow && rows[0]) {
       setSelectedKey(`material:${rows[0].sku}`);
@@ -3810,6 +3844,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           houseComparisonRefreshing={houseComparisonLoading && Boolean(selectedHouseComparisonLike)}
           historyError={historyError}
           houseComparisonError={houseComparisonError}
+          onInspectProjectUsage={selectedMaterialRow && selectedProjectId ? () => handleOpenProjectUsage(selectedMaterialRow) : null}
         />
       </main>
       {canEditGroups ? (
@@ -3818,6 +3853,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           groups={groupData?.groups || []}
           onClose={() => setGroupEditorOpen(false)}
           onChanged={handleGroupEditorChanged}
+        />
+      ) : null}
+      {projectUsageTarget ? (
+        <MaterialProjectUsageModal
+          open={projectUsageTarget !== null}
+          projectId={projectUsageTarget.projectId}
+          projectName={projectUsageTarget.projectName}
+          material={projectUsageTarget.material}
+          onClose={() => setProjectUsageTarget(null)}
         />
       ) : null}
     </div>

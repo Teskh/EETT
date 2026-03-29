@@ -38,6 +38,7 @@ from app.api_models import (
     MaterialDashboardGroupMovementResponse,
     MaterialDashboardHouseComparisonRequest,
     MaterialDashboardHouseComparisonResponse,
+    MaterialDashboardProjectUsageResponse,
     MaterialDashboardHouseTypesResponse,
     MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
@@ -72,6 +73,7 @@ from app.api_models import (
 )
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
+from app.models import Project
 from app.seed import seed_demo_data_if_empty
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
@@ -115,6 +117,7 @@ from app.services.dashboard import (
     get_material_dashboard_detail,
     get_material_dashboard_history,
     get_material_dashboard_project_comparison,
+    get_material_dashboard_project_usage,
     get_project_material_dashboard,
     get_recent_material_dashboard,
 )
@@ -2002,6 +2005,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if detail is None:
             raise HTTPException(status_code=404, detail="Material not found")
         return detail
+
+    @app.get("/api/v1/dashboard/materials/{sku}/project-usage", response_model=MaterialDashboardProjectUsageResponse)
+    def material_dashboard_project_usage_v1(
+        sku: str,
+        project_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        usage = get_material_dashboard_project_usage(
+            session,
+            project_id=project_id,
+            sku=sku,
+        )
+        if usage is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return usage
 
     @app.get("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
     def material_dashboard_house_comparison_v1(

@@ -10,7 +10,14 @@ from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
-from app.models import ErpMaterialCache, MaterialDashboardCacheEntry, Project, ProjectBomEntry, ProjectInstance
+from app.models import (
+    ErpMaterialCache,
+    MaterialDashboardCacheEntry,
+    Project,
+    ProjectBomEntry,
+    ProjectInstance,
+    ProjectMaterialCalculationSheet,
+)
 from app.services.erp import (
     get_cost_centers,
     get_material_movement_details,
@@ -141,6 +148,135 @@ def get_material_dashboard_project_comparison(
             "predicted_quantity_per_house": round(predicted_quantity_per_house, 4),
             "projected_total_material_quantity": round(predicted_quantity_per_house * max(int(total_house_starts), 0), 4),
         },
+    }
+
+
+def get_material_dashboard_project_usage(
+    session: Session,
+    *,
+    project_id: int,
+    sku: str,
+) -> dict | None:
+    normalized_sku = sku.strip().upper()
+    if not normalized_sku:
+        return None
+
+    project = session.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material_rule),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.subtype),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.category),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.component),
+            selectinload(Project.calculation_sheets).selectinload(ProjectMaterialCalculationSheet.cells),
+        )
+    )
+    if project is None:
+        return None
+
+    calculation_sheet_by_key = {
+        (sheet.instance_id, sheet.material_id): sheet
+        for sheet in project.calculation_sheets
+    }
+    items_by_key: dict[tuple[int, int], dict] = {}
+    material_name: str | None = None
+    material_unit: str | None = None
+
+    for entry in project.bom_entries:
+        if entry.material is None or entry.material.sku.strip().upper() != normalized_sku:
+            continue
+        if entry.instance is None or entry.material_rule is None:
+            continue
+
+        if material_name is None:
+            material_name = entry.material.name
+        if material_unit is None:
+            material_unit = entry.unit or entry.material_rule.unit or entry.material.unit
+
+        item_key = (entry.instance_id, entry.material_rule_id)
+        sheet = calculation_sheet_by_key.get((entry.instance_id, entry.material_id))
+        item = items_by_key.get(item_key)
+        if item is None:
+            item = {
+                "instance_id": entry.instance_id,
+                "instance_name": entry.instance.name,
+                "category_name": entry.instance.category.name if entry.instance.category else None,
+                "component_name": entry.instance.component.name if entry.instance.component else None,
+                "rule_id": entry.material_rule_id,
+                "material_id": entry.material_id,
+                "unit_qty_per_unit": round(float(entry.material_rule.unit_qty_per_unit), 4)
+                if entry.material_rule.unit_qty_per_unit is not None
+                else None,
+                "rule_notes": entry.material_rule.notes,
+                "total_quantity": 0.0,
+                "blank_quantity_count": 0,
+                "zero_quantity_count": 0,
+                "unit": entry.unit or entry.material_rule.unit or entry.material.unit,
+                "has_calculation_sheet": sheet is not None,
+                "calculation_sheet_cell_count": len(sheet.cells) if sheet is not None else 0,
+                "calculation_sheet_updated_at": sheet.updated_at.isoformat() if sheet is not None else None,
+                "breakdown": [],
+            }
+            items_by_key[item_key] = item
+
+        quantity = round(float(entry.quantity), 4) if entry.quantity is not None else None
+        assembly_quantity = round(float(entry.assembly_quantity), 4) if entry.assembly_quantity is not None else None
+        quantity_state = _dashboard_bom_value_state(entry.quantity)
+        assembly_quantity_state = _dashboard_bom_value_state(entry.assembly_quantity)
+
+        if quantity is None:
+            item["blank_quantity_count"] += 1
+        else:
+            item["total_quantity"] = round(float(item["total_quantity"]) + quantity, 4)
+            if quantity == 0:
+                item["zero_quantity_count"] += 1
+
+        item["breakdown"].append(
+            {
+                "subtype_id": entry.subtype_id,
+                "subtype_name": entry.subtype.name if entry.subtype else "General",
+                "quantity": quantity,
+                "quantity_state": quantity_state,
+                "assembly_quantity": assembly_quantity,
+                "assembly_quantity_state": assembly_quantity_state,
+                "unit": entry.unit or entry.material_rule.unit or entry.material.unit,
+                "calculation_mode": entry.calculation_mode.value,
+                "calculation_formula": entry.calculation_formula,
+                "calculation_explanation": _dashboard_bom_calculation_explanation(entry),
+            }
+        )
+
+    items = list(items_by_key.values())
+    for item in items:
+        item["breakdown"].sort(
+            key=lambda row: (
+                row["subtype_id"] is not None,
+                row["subtype_name"].lower(),
+            )
+        )
+
+    items.sort(
+        key=lambda item: (
+            (item["category_name"] or "").lower(),
+            item["instance_name"].lower(),
+            item["rule_id"],
+        )
+    )
+
+    return {
+        "project": {
+            "id": project.id,
+            "name": project.name,
+        },
+        "sku": normalized_sku,
+        "material_name": material_name,
+        "unit": material_unit,
+        "total_quantity": round(sum(float(item["total_quantity"]) for item in items), 4),
+        "item_count": len(items),
+        "items": items,
+        "generated_at": datetime.utcnow().isoformat(),
     }
 
 
@@ -587,3 +723,19 @@ def _coerce_float(value: object) -> float | None:
         return round(float(value), 2)
     except (TypeError, ValueError):
         return None
+
+
+def _dashboard_bom_value_state(value: float | None) -> str:
+    if value is None:
+        return "blank"
+    if value == 0:
+        return "zero"
+    return "value"
+
+
+def _dashboard_bom_calculation_explanation(entry: ProjectBomEntry) -> str | None:
+    if entry.calculation_mode.value == "auto" and entry.calculation_formula:
+        return f"Auto calculated from formula {entry.calculation_formula}"
+    if entry.calculation_mode.value == "manual":
+        return "Manually overridden quantity"
+    return None

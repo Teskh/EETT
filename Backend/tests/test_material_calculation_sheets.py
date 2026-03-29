@@ -51,14 +51,25 @@ class MaterialCalculationSheetTests(unittest.TestCase):
         self.engine.dispose()
         self.temp_dir.cleanup()
 
-    def _get_demo_material_target(self) -> tuple[int, int, int]:
+    def _get_demo_material_payload(self) -> dict[str, int | str]:
         response = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         door_section = next(section for section in payload["categories"] if section["name"] == "Doors")
         door_instance = next(instance for instance in door_section["instances"] if instance["name"] == "Door A")
         material = door_instance["materials"][0]
-        return door_instance["id"], material["rule_id"], material["material_id"]
+        return {
+            "instance_id": door_instance["id"],
+            "instance_name": door_instance["name"],
+            "rule_id": material["rule_id"],
+            "material_id": material["material_id"],
+            "sku": material["sku"],
+            "material_name": material["material_name"],
+        }
+
+    def _get_demo_material_target(self) -> tuple[int, int, int]:
+        payload = self._get_demo_material_payload()
+        return int(payload["instance_id"]), int(payload["rule_id"]), int(payload["material_id"])
 
     def test_material_calculation_sheet_round_trip_persists_only_non_empty_cells(self) -> None:
         instance_id, rule_id, material_id = self._get_demo_material_target()
@@ -179,3 +190,34 @@ class MaterialCalculationSheetTests(unittest.TestCase):
             ).all()
             self.assertEqual(sheets, [])
             self.assertEqual(cells, [])
+
+    def test_material_dashboard_project_usage_surfaces_bom_breakdown_and_sheet_metadata(self) -> None:
+        target = self._get_demo_material_payload()
+        save_response = self.client.put(
+            f"/api/v1/projects/2/instances/{target['instance_id']}/materials/{target['rule_id']}/calculation-sheet",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"cells": [{"row_index": 0, "column_index": 0, "raw_input": "12"}]},
+        )
+        self.assertEqual(save_response.status_code, 200)
+
+        usage_response = self.client.get(
+            f"/api/v1/dashboard/materials/{target['sku']}/project-usage?project_id=2",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(usage_response.status_code, 200)
+        payload = usage_response.json()
+
+        self.assertEqual(payload["project"]["id"], 2)
+        self.assertEqual(payload["sku"], target["sku"])
+        self.assertGreaterEqual(payload["item_count"], 1)
+
+        matching_item = next(
+            item
+            for item in payload["items"]
+            if item["instance_id"] == target["instance_id"] and item["rule_id"] == target["rule_id"]
+        )
+        self.assertEqual(matching_item["instance_name"], target["instance_name"])
+        self.assertTrue(matching_item["has_calculation_sheet"])
+        self.assertEqual(matching_item["calculation_sheet_cell_count"], 1)
+        self.assertGreaterEqual(len(matching_item["breakdown"]), 1)
+        self.assertIn(matching_item["breakdown"][0]["quantity_state"], {"blank", "zero", "value"})

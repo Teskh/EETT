@@ -22,6 +22,7 @@ import type {
   MaterialDashboardData,
   MaterialDashboardDetailData,
   MaterialDashboardMovementData,
+  MaterialDashboardProjectUsageData,
   MaterialStudyGroupListResponse,
   MaterialStudyGroupPayload,
   MaterialStudyGroupRow,
@@ -383,6 +384,12 @@ export const api = {
         refresh: Boolean(options.refresh),
       }),
     });
+  },
+  getMaterialDashboardProjectUsage(sku: string, projectId: number) {
+    const params = new URLSearchParams({ project_id: String(projectId) });
+    return request<MaterialDashboardProjectUsageData>(
+      `/api/v1/dashboard/materials/${encodeURIComponent(sku)}/project-usage?${params.toString()}`,
+    );
   },
   getActivityHistory() {
     return request<ActivityGroup[]>("/api/v1/activity");

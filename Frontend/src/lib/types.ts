@@ -141,6 +141,52 @@ export type MaterialDashboardHouseComparisonData = {
   generated_at: string;
 };
 
+export type MaterialDashboardProjectUsageBreakdownEntry = {
+  subtype_id: number | null;
+  subtype_name: string;
+  quantity: number | null;
+  quantity_state: string;
+  assembly_quantity: number | null;
+  assembly_quantity_state: string;
+  unit: string | null;
+  calculation_mode: string;
+  calculation_formula: string | null;
+  calculation_explanation: string | null;
+};
+
+export type MaterialDashboardProjectUsageItem = {
+  instance_id: number;
+  instance_name: string;
+  category_name: string | null;
+  component_name: string | null;
+  rule_id: number;
+  material_id: number;
+  unit_qty_per_unit: number | null;
+  rule_notes: string | null;
+  total_quantity: number;
+  blank_quantity_count: number;
+  zero_quantity_count: number;
+  unit: string | null;
+  has_calculation_sheet: boolean;
+  calculation_sheet_cell_count: number;
+  calculation_sheet_updated_at: string | null;
+  breakdown: MaterialDashboardProjectUsageBreakdownEntry[];
+};
+
+export type MaterialDashboardProjectUsageData = {
+  project: {
+    id: number;
+    name: string;
+  };
+  sku: string;
+  material_name: string | null;
+  unit: string | null;
+  total_quantity: number;
+  item_count: number;
+  items: MaterialDashboardProjectUsageItem[];
+  generated_at: string;
+};
+
 export type MaterialStudyGroupMember = {
   sku: string;
   material_name: string;

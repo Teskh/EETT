@@ -710,6 +710,54 @@ class MaterialDashboardProjectComparisonModel(BaseModel):
     projected_total_material_quantity: float
 
 
+class MaterialDashboardProjectUsageProjectModel(BaseModel):
+    id: int
+    name: str
+
+
+class MaterialDashboardProjectUsageBreakdownEntryModel(BaseModel):
+    subtype_id: int | None
+    subtype_name: str
+    quantity: float | None
+    quantity_state: str
+    assembly_quantity: float | None
+    assembly_quantity_state: str
+    unit: str | None
+    calculation_mode: str
+    calculation_formula: str | None
+    calculation_explanation: str | None
+
+
+class MaterialDashboardProjectUsageItemModel(BaseModel):
+    instance_id: int
+    instance_name: str
+    category_name: str | None
+    component_name: str | None
+    rule_id: int
+    material_id: int
+    unit_qty_per_unit: float | None
+    rule_notes: str | None
+    total_quantity: float
+    blank_quantity_count: int
+    zero_quantity_count: int
+    unit: str | None
+    has_calculation_sheet: bool
+    calculation_sheet_cell_count: int
+    calculation_sheet_updated_at: str | None
+    breakdown: list[MaterialDashboardProjectUsageBreakdownEntryModel] = Field(default_factory=list)
+
+
+class MaterialDashboardProjectUsageResponse(BaseModel):
+    project: MaterialDashboardProjectUsageProjectModel
+    sku: str
+    material_name: str | None
+    unit: str | None
+    total_quantity: float
+    item_count: int
+    items: list[MaterialDashboardProjectUsageItemModel] = Field(default_factory=list)
+    generated_at: str
+
+
 class MaterialDashboardHouseComparisonResponse(BaseModel):
     sku: str
     house_type_id: int
