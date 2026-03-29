@@ -296,6 +296,7 @@ class Material(Base):
 
     component_rules: Mapped[list["ComponentMaterialRule"]] = relationship(back_populates="material")
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="material")
+    calculation_sheets: Mapped[list["ProjectMaterialCalculationSheet"]] = relationship(back_populates="material")
     erp_cache_entries: Mapped[list["ErpMaterialCache"]] = relationship(back_populates="material")
 
 
@@ -434,6 +435,10 @@ class Project(Base):
     approvals: Mapped[list["ProjectApproval"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     export_jobs: Mapped[list["ProjectExportJob"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     export_settings: Mapped[list["InstanceExportSetting"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    calculation_sheets: Mapped[list["ProjectMaterialCalculationSheet"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
 
 
 class ProjectMembership(Base):
@@ -545,6 +550,10 @@ class ProjectInstance(Base):
         foreign_keys="ProjectInstanceOccurrenceTarget.target_instance_id",
     )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
+    calculation_sheets: Mapped[list["ProjectMaterialCalculationSheet"]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+    )
     comments: Mapped[list["ProjectComment"]] = relationship(back_populates="instance")
     export_settings: Mapped[list["InstanceExportSetting"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
 
@@ -721,6 +730,43 @@ class ProjectBomEntry(Base):
     material_rule: Mapped[ComponentMaterialRule] = relationship(back_populates="bom_entries")
     material: Mapped[Material] = relationship(back_populates="bom_entries")
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="bom_entries")
+
+
+class ProjectMaterialCalculationSheet(Base):
+    __tablename__ = "project_material_calculation_sheets"
+    __table_args__ = (UniqueConstraint("project_id", "instance_id", "material_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="calculation_sheets")
+    instance: Mapped[ProjectInstance] = relationship(back_populates="calculation_sheets")
+    material: Mapped[Material] = relationship(back_populates="calculation_sheets")
+    cells: Mapped[list["ProjectMaterialCalculationCell"]] = relationship(
+        back_populates="sheet",
+        cascade="all, delete-orphan",
+        order_by="ProjectMaterialCalculationCell.row_index, ProjectMaterialCalculationCell.column_index",
+    )
+
+
+class ProjectMaterialCalculationCell(Base):
+    __tablename__ = "project_material_calculation_cells"
+    __table_args__ = (UniqueConstraint("sheet_id", "row_index", "column_index"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sheet_id: Mapped[int] = mapped_column(
+        ForeignKey("project_material_calculation_sheets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    row_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    column_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_input: Mapped[str] = mapped_column(Text, nullable=False)
+
+    sheet: Mapped[ProjectMaterialCalculationSheet] = relationship(back_populates="cells")
 
 
 class ProjectAuxiliaryMaterialSelection(Base):

@@ -12,6 +12,7 @@ import type {
   CreateProjectRequest,
   LoginRequest,
   ManagedUser,
+  MaterialCalculationSheet,
   MaterialDashboardCecoResponse,
   MaterialDashboardHouseComparisonData,
   MaterialDashboardGroupDetailData,
@@ -28,6 +29,7 @@ import type {
   ProjectDetailData,
   ProjectsBoardData,
   SessionUser,
+  UpdateMaterialCalculationSheetRequest,
   UpdateMaterialOccurrenceRequest,
   UpdateProjectOccurrenceRequest,
   UpdateProjectSubtypeRequest,
@@ -460,6 +462,22 @@ export const api = {
   },
   updateMaterialOccurrence(projectId: number, instanceId: number, ruleId: number, payload: UpdateMaterialOccurrenceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  getMaterialCalculationSheet(projectId: number, instanceId: number, ruleId: number) {
+    return request<MaterialCalculationSheet>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}/calculation-sheet`);
+  },
+  updateMaterialCalculationSheet(
+    projectId: number,
+    instanceId: number,
+    ruleId: number,
+    payload: UpdateMaterialCalculationSheetRequest,
+    mutationBatchId?: string,
+  ) {
+    return request<MaterialCalculationSheet>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}/calculation-sheet`, {
       method: "PUT",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),

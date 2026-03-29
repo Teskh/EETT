@@ -1,5 +1,6 @@
 import { FormEvent, startTransition, useEffect, useRef, useState } from "react";
 
+import { MaterialCalculationSheetModal } from "../components/MaterialCalculationSheetModal";
 import { Modal } from "../components/Modal";
 import { ApiError, api } from "../lib/api";
 import type {
@@ -26,6 +27,12 @@ type ModalState =
   | { kind: "create"; categoryId: number }
   | { kind: "edit"; categoryId: number; instanceId: number }
   | null;
+
+type CalculationSheetState = {
+  instanceId: number;
+  instanceName: string;
+  material: InstanceMaterial;
+} | null;
 
 type InstanceFormModalProps = {
   open: boolean;
@@ -1034,10 +1041,12 @@ function UsageManager({
 function MaterialOccurrenceEditor({
   material,
   subtypeOptions,
+  onOpenCalculationSheet,
   onUpdateMaterial,
 }: {
   material: InstanceMaterial;
   subtypeOptions: FlatSubtype[];
+  onOpenCalculationSheet: () => void;
   onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
 }) {
   const [draftRows, setDraftRows] = useState<MaterialRowDraft[]>(() => buildDraftRows(material.bom_entries));
@@ -1161,11 +1170,22 @@ function MaterialOccurrenceEditor({
             </button>
           </label>
         </div>
-        <div className="text-right flex flex-col items-end shrink-0">
-          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
-          <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
-            {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
-          </span>
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenCalculationSheet}
+            aria-label={`Open calculation sheet for ${material.material_name}`}
+            title="Open calculation sheet"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200"
+          >
+            <i className="ph-bold ph-table" />
+          </button>
+          <div className="text-right flex flex-col items-end">
+            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
+            <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
+              {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
+            </span>
+          </div>
         </div>
         <div className="absolute right-3 bottom-1.5 min-w-14 text-right text-[10px] font-mono text-zinc-500 pointer-events-none">
           <span className={saving ? "opacity-100" : "opacity-0"}>Saving...</span>
@@ -1269,6 +1289,7 @@ function InstanceCard({
   targetOptions,
   onEdit,
   onDelete,
+  onOpenCalculationSheet,
   onCreateOccurrence,
   onUpdateOccurrence,
   onDeleteOccurrence,
@@ -1279,6 +1300,7 @@ function InstanceCard({
   targetOptions: TargetOption[];
   onEdit: () => void;
   onDelete: () => void;
+  onOpenCalculationSheet: (material: InstanceMaterial) => void;
   onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onDeleteOccurrence: (occurrenceId: number) => Promise<void>;
@@ -1442,6 +1464,7 @@ function InstanceCard({
                     key={`${instance.id}-${material.rule_id}`}
                     material={material}
                     subtypeOptions={subtypeOptions}
+                    onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
                     onUpdateMaterial={onUpdateMaterial}
                   />
                 ))
@@ -1464,6 +1487,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [categorySearch, setCategorySearch] = useState("");
   const [modalState, setModalState] = useState<ModalState>(null);
+  const [calculationSheetState, setCalculationSheetState] = useState<CalculationSheetState>(null);
   const [submitting, setSubmitting] = useState(false);
 
   async function loadProject() {
@@ -1796,6 +1820,13 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                       )}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
+                      onOpenCalculationSheet={(material) =>
+                        setCalculationSheetState({
+                          instanceId: instance.id,
+                          instanceName: instance.name,
+                          material,
+                        })
+                      }
                       onCreateOccurrence={(payload) => handleCreateOccurrence(instance.id, payload)}
                       onUpdateOccurrence={(occurrenceId, payload) => handleUpdateOccurrence(instance.id, occurrenceId, payload)}
                       onDeleteOccurrence={(occurrenceId) => handleDeleteOccurrence(instance.id, occurrenceId)}
@@ -1863,6 +1894,17 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
           submitting={submitting}
           onClose={() => setModalState(null)}
           onSubmit={modalState?.kind === "edit" ? handleUpdateInstance : handleCreateInstance}
+        />
+      ) : null}
+
+      {calculationSheetState ? (
+        <MaterialCalculationSheetModal
+          open={calculationSheetState !== null}
+          projectId={projectId}
+          instanceId={calculationSheetState.instanceId}
+          instanceName={calculationSheetState.instanceName}
+          material={calculationSheetState.material}
+          onClose={() => setCalculationSheetState(null)}
         />
       ) : null}
     </div>

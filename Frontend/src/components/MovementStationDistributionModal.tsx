@@ -17,7 +17,7 @@ type MovementStationDistributionModalProps = {
 const quantityFormatter = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 1 });
 const percentFormatter = new Intl.NumberFormat("es-CL", { style: "percent", maximumFractionDigits: 1 });
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const NO_STATION_LABEL = "No station";
+const NO_STATION_LABEL = "Sin estación";
 const STATION_COLORS = [
   "#f59e0b",
   "#fb7185",
@@ -105,19 +105,22 @@ export function MovementStationDistributionModal({
   return (
     <Modal
       open={open}
-      title="desc_sub Distribution"
-      kicker="Movement Stations"
+      title="Distribución por Estación"
+      kicker="Desglose de Movimientos"
       onClose={onClose}
       panelClassName="max-w-5xl"
     >
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
         <div className="rounded-2xl border border-black/10 bg-zinc-50/80 p-5 dark:border-white/10 dark:bg-white/[0.03]">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Uses the currently plotted period and any active drag selection from the movement chart.
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            {formatDate(rangeStart)} - {formatDate(rangeEnd)}
-          </p>
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Período</div>
+            <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-white">
+              {formatDate(rangeStart)} – {formatDate(rangeEnd)}
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">
+              Corresponde al período graficado y a la selección activa en el gráfico de movimientos.
+            </p>
+          </div>
 
           <div className="mt-6 flex items-center justify-center">
             <div className="relative h-[220px] w-[220px]">
@@ -147,7 +150,7 @@ export function MovementStationDistributionModal({
               </svg>
 
               <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Total Qty</div>
+                <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Cantidad Total</div>
                 <div className="mt-2 text-3xl font-bold text-zinc-900 dark:text-white">{formatQuantity(totalQuantity)}</div>
                 <div className="mt-1 text-xs text-zinc-500">{resolvedUnitLabel}</div>
               </div>
@@ -156,44 +159,51 @@ export function MovementStationDistributionModal({
 
           <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-500">
             <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{movements.length} movs.</span>
-            <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{assignedEntryCount} stations</span>
-            <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{entries.length} buckets</span>
+            <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{assignedEntryCount} estaciones</span>
+            <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{entries.length} grupos</span>
           </div>
 
           {unassignedEntry ? (
-            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-100">
-              {formatQuantity(unassignedEntry.quantity)} {resolvedUnitLabel} in this range has no `desc_sub` value.
+            <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
+              <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true">
+                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
+              <p className="text-xs text-amber-900 dark:text-amber-100">
+                <span className="font-semibold">{formatQuantity(unassignedEntry.quantity)} {resolvedUnitLabel}</span> sin estación asignada en este período.
+              </p>
             </div>
           ) : null}
         </div>
 
         <div className="overflow-hidden rounded-2xl border border-black/10 bg-white/70 dark:border-white/10 dark:bg-white/[0.03]">
           <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-black/5 bg-zinc-100/70 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.04]">
-            <div>Station</div>
-            <div className="text-right">Share</div>
-            <div className="text-right">Quantity</div>
+            <div>Estación</div>
+            <div className="text-right">Participación</div>
+            <div className="text-right">Cantidad</div>
           </div>
 
           <div className="max-h-[440px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
             {entries.length ? (
               entries.map((entry) => (
-                <div key={entry.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 px-4 py-3">
+                <div key={entry.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 px-4 py-3 transition-colors hover:bg-zinc-50/80 dark:hover:bg-white/[0.02]">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
-                      <span className="truncate text-sm font-semibold text-zinc-900 dark:text-white">{entry.label}</span>
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: entry.isUnassigned ? "rgb(161 161 170)" : entry.color }} />
+                      <span className={`truncate text-sm font-semibold ${entry.isUnassigned ? "text-zinc-400 dark:text-zinc-500" : "text-zinc-900 dark:text-white"}`}>
+                        {entry.label}
+                      </span>
                     </div>
-                    <div className="mt-2 h-2 rounded-full bg-zinc-200/90 dark:bg-zinc-800">
+                    <div className="mt-2 h-1.5 rounded-full bg-zinc-200/90 dark:bg-zinc-800">
                       <div
-                        className="h-full rounded-full"
+                        className="h-full rounded-full transition-all"
                         style={{
                           width: `${Math.max(entry.share * 100, entry.share > 0 ? 6 : 0)}%`,
-                          backgroundColor: entry.color,
+                          backgroundColor: entry.isUnassigned ? "rgb(161 161 170)" : entry.color,
                         }}
                       />
                     </div>
-                    <div className="mt-2 text-[11px] text-zinc-500">
-                      {entry.movementCount} movement{entry.movementCount === 1 ? "" : "s"}
+                    <div className="mt-1.5 text-[11px] text-zinc-500">
+                      {entry.movementCount} movimiento{entry.movementCount === 1 ? "" : "s"}
                     </div>
                   </div>
                   <div className="text-right text-sm font-semibold text-zinc-700 dark:text-zinc-200">{formatShare(entry.share)}</div>
@@ -204,7 +214,7 @@ export function MovementStationDistributionModal({
                 </div>
               ))
             ) : (
-              <div className="px-4 py-8 text-sm text-zinc-500">No movement quantities are available for the selected range.</div>
+              <div className="px-4 py-8 text-center text-sm text-zinc-500">Sin datos de movimiento para el período seleccionado.</div>
             )}
           </div>
         </div>

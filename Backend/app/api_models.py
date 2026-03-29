@@ -220,6 +220,16 @@ class MaterialOccurrenceUpdateRequest(BaseModel):
     entries: list[MaterialOccurrenceEntryInputModel] = Field(default_factory=list)
 
 
+class MaterialCalculationCellInputModel(BaseModel):
+    row_index: int
+    column_index: int
+    raw_input: str
+
+
+class MaterialCalculationSheetUpdateRequest(BaseModel):
+    cells: list[MaterialCalculationCellInputModel] = Field(default_factory=list)
+
+
 class ProjectSummaryModel(BaseModel):
     id: int
     name: str
@@ -301,6 +311,24 @@ class MaterialModel(BaseModel):
     applicability: MaterialApplicabilityModel
     mode: str
     bom_entries: list[BomEntryModel]
+
+
+class MaterialCalculationCellModel(BaseModel):
+    row_index: int
+    column_index: int
+    raw_input: str
+
+
+class MaterialCalculationSheetResponse(BaseModel):
+    project_id: int
+    instance_id: int
+    rule_id: int
+    material_id: int
+    material_name: str
+    sku: str
+    cell_count: int
+    updated_at: str | None
+    cells: list[MaterialCalculationCellModel] = Field(default_factory=list)
 
 
 class AttributeValueModel(BaseModel):

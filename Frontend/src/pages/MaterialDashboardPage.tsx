@@ -1399,8 +1399,8 @@ function MovementBreakdownList({
                     type="button"
                     onClick={() => setStationModalOpen(true)}
                     className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-600 transition-colors hover:border-amber-400/60 hover:text-amber-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300 dark:hover:text-amber-300"
-                    title="View desc_sub distribution"
-                    aria-label="View desc_sub distribution"
+                    title="Ver distribución por estación"
+                    aria-label="Ver distribución por estación"
                   >
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" aria-hidden="true">
                       <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.7" opacity="0.35" />

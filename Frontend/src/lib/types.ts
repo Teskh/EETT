@@ -501,6 +501,24 @@ export type InstanceMaterial = {
   bom_entries: BomEntry[];
 };
 
+export type MaterialCalculationCell = {
+  row_index: number;
+  column_index: number;
+  raw_input: string;
+};
+
+export type MaterialCalculationSheet = {
+  project_id: number;
+  instance_id: number;
+  rule_id: number;
+  material_id: number;
+  material_name: string;
+  sku: string;
+  cell_count: number;
+  updated_at: string | null;
+  cells: MaterialCalculationCell[];
+};
+
 export type SyncState = {
   status: string;
   is_outdated: boolean;
@@ -708,6 +726,10 @@ export type MaterialOccurrenceEntryInput = {
 export type UpdateMaterialOccurrenceRequest = {
   mode: string;
   entries: MaterialOccurrenceEntryInput[];
+};
+
+export type UpdateMaterialCalculationSheetRequest = {
+  cells: MaterialCalculationCell[];
 };
 
 export type MutationResult = {

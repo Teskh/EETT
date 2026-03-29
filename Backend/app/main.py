@@ -42,6 +42,8 @@ from app.api_models import (
     MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
+    MaterialCalculationSheetResponse,
+    MaterialCalculationSheetUpdateRequest,
     MaterialStudyGroupListResponse,
     MaterialStudyGroupModel,
     MaterialStudyGroupPayloadModel,
@@ -126,6 +128,7 @@ from app.services.material_groups import (
     get_material_dashboard_groups,
     update_material_study_group,
 )
+from app.services.material_calculation_sheets import get_material_calculation_sheet, replace_material_calculation_sheet
 from app.services.production_dashboard import (
     get_material_dashboard_house_start_comparison,
     get_material_dashboard_house_types,
@@ -1278,6 +1281,71 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not updated:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project.id, "instance_id": instance_id}
+
+    @app.get(
+        "/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}/calculation-sheet",
+        response_model=MaterialCalculationSheetResponse,
+    )
+    async def get_project_material_calculation_sheet_v1(
+        project_id: int,
+        instance_id: int,
+        rule_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        try:
+            sheet = get_material_calculation_sheet(
+                session,
+                project=project,
+                instance_id=instance_id,
+                rule_id=rule_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if sheet is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return sheet
+
+    @app.put(
+        "/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}/calculation-sheet",
+        response_model=MaterialCalculationSheetResponse,
+    )
+    async def update_project_material_calculation_sheet_v1(
+        project_id: int,
+        instance_id: int,
+        rule_id: int,
+        payload: MaterialCalculationSheetUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            sheet = replace_material_calculation_sheet(
+                session,
+                project=project,
+                instance_id=instance_id,
+                rule_id=rule_id,
+                cells=[
+                    {
+                        "row_index": row.row_index,
+                        "column_index": row.column_index,
+                        "raw_input": row.raw_input,
+                    }
+                    for row in payload.cells
+                ],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if sheet is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return sheet
 
     @app.get("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
     async def project_material_mode_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
