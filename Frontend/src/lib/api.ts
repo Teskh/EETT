@@ -14,6 +14,7 @@ import type {
   ManagedUser,
   MaterialCalculationSheet,
   MaterialDashboardCecoResponse,
+  MaterialDashboardEconomicMetricsResponse,
   MaterialDashboardHouseComparisonData,
   MaterialDashboardGroupDetailData,
   MaterialDashboardGroupHouseComparisonData,
@@ -265,6 +266,8 @@ export const api = {
           options.movementDays && Number.isFinite(options.movementDays)
             ? Math.max(Math.floor(options.movementDays), 1)
             : 60,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),
       }),
     });
@@ -289,6 +292,8 @@ export const api = {
           options.movementDays && Number.isFinite(options.movementDays)
             ? Math.max(Math.floor(options.movementDays), 1)
             : 60,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
       }),
     });
   },
@@ -374,6 +379,23 @@ export const api = {
     options: MaterialDashboardRequestOptions = {},
   ) {
     return request<MaterialDashboardHouseComparisonData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        house_type_id: houseTypeId,
+        project_id: options.projectId ?? null,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
+  getMaterialDashboardEconomicMetrics(
+    houseTypeId: number,
+    filters: MaterialDashboardFilterSelection = {},
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    return request<MaterialDashboardEconomicMetricsResponse>("/api/v1/dashboard/materials/economic-metrics", {
       method: "POST",
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),

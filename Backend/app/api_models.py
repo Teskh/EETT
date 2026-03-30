@@ -631,13 +631,13 @@ class MaterialDashboardFilterRequest(BaseModel):
     refresh: bool = False
 
 
-class MaterialDashboardListRequest(MaterialDashboardFilterRequest):
-    movement_days: int = Field(default=60, ge=1)
-
-
 class MaterialDashboardDateRangeRequest(MaterialDashboardFilterRequest):
     start_date: date | None = None
     end_date: date | None = None
+
+
+class MaterialDashboardListRequest(MaterialDashboardDateRangeRequest):
+    movement_days: int = Field(default=60, ge=1)
 
 
 class MaterialDashboardHouseComparisonRequest(MaterialDashboardDateRangeRequest):
@@ -708,6 +708,26 @@ class MaterialDashboardProjectComparisonModel(BaseModel):
     project_name: str
     predicted_quantity_per_house: float
     projected_total_material_quantity: float
+
+
+class MaterialDashboardEconomicMetricModel(BaseModel):
+    sku: str
+    material_per_house: float | None
+    predicted_quantity_per_house: float | None
+    consumption_delta_percent: float | None
+    consumption_cost_delta_per_house: float | None
+    average_price: float | None
+
+
+class MaterialDashboardEconomicMetricsResponse(BaseModel):
+    house_type_id: int
+    project_id: int | None = None
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    total_house_starts: int
+    metrics: list[MaterialDashboardEconomicMetricModel] = Field(default_factory=list)
+    generated_at: str
 
 
 class MaterialDashboardProjectUsageProjectModel(BaseModel):

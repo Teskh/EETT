@@ -38,7 +38,7 @@ from app.services.catalog import (
     search_material_candidates,
     update_attribute_definition,
 )
-from app.services.dashboard import get_material_dashboard_history, get_recent_material_dashboard
+from app.services.dashboard import get_material_dashboard_economic_metrics, get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import _calculate_delivery_time_stats, _get_lead_time_samples_for_product
 from app.services.material_groups import (
@@ -1456,6 +1456,54 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 403)
 
+    @patch("app.main.require_project_view")
+    @patch("app.main.get_material_dashboard_project_quantity_map")
+    @patch("app.main.get_material_dashboard_economic_metrics")
+    def test_material_dashboard_economic_metrics_api(
+        self,
+        economic_metrics_mock,
+        project_quantity_map_mock,
+        require_project_view_mock,
+    ) -> None:
+        economic_metrics_mock.return_value = {
+            "house_type_id": 3,
+            "project_id": 2,
+            "ceco_filters": [],
+            "range_start": "2026-03-01",
+            "range_end": "2026-03-12",
+            "total_house_starts": 9,
+            "metrics": [
+                {
+                    "sku": "ERP-001",
+                    "material_per_house": 5.0,
+                    "predicted_quantity_per_house": 4.0,
+                    "consumption_delta_percent": 25.0,
+                    "consumption_cost_delta_per_house": 2500.0,
+                    "average_price": 2500.0,
+                }
+            ],
+            "generated_at": "2026-03-12T12:07:00",
+        }
+        project_quantity_map_mock.return_value = (SimpleNamespace(id=2), {"ERP-001": 4.0})
+
+        response = self.client.post(
+            "/api/v1/dashboard/materials/economic-metrics",
+            json={"excluded_cecos": ["CC-02"], "house_type_id": 3, "project_id": 2, "start_date": "2026-03-01", "end_date": "2026-03-12"},
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["metrics"][0]["consumption_delta_percent"], 25.0)
+        require_project_view_mock.assert_called_once()
+        self.assertEqual(project_quantity_map_mock.call_args.kwargs["project_id"], 2)
+        self.assertEqual(economic_metrics_mock.call_args.kwargs["project_quantity_by_sku"], {"ERP-001": 4.0})
+
+        denied = self.client.post(
+            "/api/v1/dashboard/materials/economic-metrics",
+            json={"house_type_id": 3},
+            headers={"X-Spec-Sheets-User": "viewer"},
+        )
+        self.assertEqual(denied.status_code, 403)
+
     @patch("app.services.dashboard.get_recent_movement_materials")
     def test_material_dashboard_server_cache_reuses_recent_dashboard_payload(self, recent_movement_mock) -> None:
         recent_movement_mock.return_value = [
@@ -1520,6 +1568,91 @@ class ServiceLayerTests(unittest.TestCase):
             cached_entries = verification_session.scalars(select(MaterialDashboardCacheEntry)).all()
 
         self.assertEqual(result["materials"][0]["sku"], "ERP-001")
+        self.assertEqual(len(cached_entries), 1)
+
+    @patch("app.services.dashboard.get_average_prices_for_products")
+    @patch("app.services.dashboard.get_material_dashboard_house_start_summary")
+    @patch("app.services.dashboard.get_recent_material_dashboard")
+    def test_material_dashboard_economic_metrics_compute_and_cache(
+        self,
+        recent_dashboard_mock,
+        house_start_summary_mock,
+        average_prices_mock,
+    ) -> None:
+        recent_dashboard_mock.return_value = {
+            "materials": [
+                {
+                    "sku": "ERP-001",
+                    "material_name": "Steel Stud 90",
+                    "unit": "UN",
+                    "last_movement_date": "2026-03-10",
+                    "movement_quantity_60d": 45.0,
+                    "movement_count_60d": 6,
+                },
+                {
+                    "sku": "ERP-002",
+                    "material_name": "Track 90",
+                    "unit": "UN",
+                    "last_movement_date": "2026-03-09",
+                    "movement_quantity_60d": 9.0,
+                    "movement_count_60d": 3,
+                },
+            ],
+            "movement_window_days": 12,
+            "ceco_filters": ["CC-01"],
+            "generated_at": "2026-03-12T12:00:00",
+        }
+        house_start_summary_mock.return_value = {
+            "house_type_id": 3,
+            "house_type_name": "Casa Base",
+            "number_of_modules": 2,
+            "movement_days": 12,
+            "ceco_filters": ["CC-01"],
+            "range_start": "2026-03-01",
+            "range_end": "2026-03-12",
+            "total_house_starts": 9,
+            "latest_house_start_date": "2026-03-12",
+            "generated_at": "2026-03-12T12:05:00",
+        }
+        average_prices_mock.return_value = {
+            "ERP-001": 2500.0,
+            "ERP-002": 1500.0,
+        }
+
+        with self.session_factory() as session:
+            first = get_material_dashboard_economic_metrics(
+                self.settings,
+                session=session,
+                house_type_id=3,
+                project_id=2,
+                project_quantity_by_sku={"ERP-001": 4.0, "ERP-002": 1.0},
+                start_date=date(2026, 3, 1),
+                end_date=date(2026, 3, 12),
+                cost_centers=["CC-01"],
+            )
+            second = get_material_dashboard_economic_metrics(
+                self.settings,
+                session=session,
+                house_type_id=3,
+                project_id=2,
+                project_quantity_by_sku={"ERP-001": 4.0, "ERP-002": 1.0},
+                start_date=date(2026, 3, 1),
+                end_date=date(2026, 3, 12),
+                cost_centers=["CC-01"],
+            )
+            cached_entries = session.scalars(
+                select(MaterialDashboardCacheEntry).where(MaterialDashboardCacheEntry.cache_kind == "economics")
+            ).all()
+
+        metrics_by_sku = {row["sku"]: row for row in first["metrics"]}
+        self.assertEqual(first, second)
+        self.assertEqual(metrics_by_sku["ERP-001"]["material_per_house"], 5.0)
+        self.assertEqual(metrics_by_sku["ERP-001"]["consumption_delta_percent"], 25.0)
+        self.assertEqual(metrics_by_sku["ERP-001"]["consumption_cost_delta_per_house"], 2500.0)
+        self.assertEqual(metrics_by_sku["ERP-002"]["consumption_delta_percent"], 0.0)
+        self.assertEqual(recent_dashboard_mock.call_count, 1)
+        self.assertEqual(house_start_summary_mock.call_count, 1)
+        self.assertEqual(average_prices_mock.call_count, 1)
         self.assertEqual(len(cached_entries), 1)
 
     @patch("app.services.dashboard.get_material_movement_details")

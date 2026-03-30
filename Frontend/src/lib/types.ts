@@ -123,6 +123,26 @@ export type MaterialDashboardProjectComparison = {
   projected_total_material_quantity: number;
 };
 
+export type MaterialDashboardEconomicMetric = {
+  sku: string;
+  material_per_house: number | null;
+  predicted_quantity_per_house: number | null;
+  consumption_delta_percent: number | null;
+  consumption_cost_delta_per_house: number | null;
+  average_price: number | null;
+};
+
+export type MaterialDashboardEconomicMetricsResponse = {
+  house_type_id: number;
+  project_id: number | null;
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  total_house_starts: number;
+  metrics: MaterialDashboardEconomicMetric[];
+  generated_at: string;
+};
+
 export type MaterialDashboardHouseComparisonData = {
   sku: string;
   house_type_id: number;

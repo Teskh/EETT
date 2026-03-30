@@ -163,11 +163,18 @@ def get_recent_movement_materials(
     settings: Settings,
     *,
     days: int = 60,
+    start_day: date | None = None,
+    end_day: date | None = None,
     cost_centers: Sequence[str] | None = None,
     excluded_cost_centers: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    window_days = max(int(days), 1)
-    start_day = datetime.utcnow().date() - timedelta(days=window_days)
+    requested_end_day = end_day or datetime.utcnow().date()
+    requested_start_day = start_day
+    if requested_start_day is None:
+        window_days = max(int(days), 1)
+        requested_start_day = requested_end_day - timedelta(days=window_days - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_day must be on or before end_day")
     ceco_filters = _normalize_cost_centers(cost_centers)
     excluded_ceco_filters = _normalize_cost_centers(excluded_cost_centers)
 
@@ -176,13 +183,43 @@ def get_recent_movement_materials(
             movement_cursor = connection.cursor()
             return _fetch_recent_movement_materials(
                 movement_cursor,
-                start_day=start_day,
+                start_day=requested_start_day,
+                end_day=requested_end_day,
                 cost_centers=ceco_filters,
                 excluded_cost_centers=excluded_ceco_filters,
             )
     except Exception as exc:
         logger.warning("ERP recent movement material lookup failed: %s", exc)
         raise RuntimeError("Could not load ERP material movement data") from exc
+
+
+def get_average_prices_for_products(settings: Settings, product_codes: Sequence[str]) -> dict[str, float | None]:
+    normalized_codes = []
+    seen: set[str] = set()
+    for raw_code in product_codes:
+        code = str(raw_code or "").strip().upper()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        normalized_codes.append(code)
+    if not normalized_codes:
+        return {}
+
+    try:
+        with _open_connection(settings) as connection:
+            pricing_cursor = connection.cursor()
+            today_ddmmyyyy = datetime.utcnow().strftime("%d/%m/%Y")
+            prices: dict[str, float | None] = {}
+            for code in normalized_codes:
+                prices[code] = _safe_erp_lookup(
+                    lambda code=code: _get_average_prices_for_products_batch(pricing_cursor, [code], today_ddmmyyyy).get(code),
+                    default=None,
+                    label=f"average price for {code}",
+                )
+            return prices
+    except Exception as exc:
+        logger.warning("ERP average price lookup failed: %s", exc)
+        raise RuntimeError("Could not load ERP material pricing data") from exc
 
 
 def get_material_procurement_details(
@@ -381,10 +418,12 @@ def _fetch_recent_movement_materials(
     cursor,
     *,
     start_day: date,
+    end_day: date,
     cost_centers: Sequence[str],
     excluded_cost_centers: Sequence[str],
 ) -> list[dict[str, Any]]:
-    params: list[object] = [start_day.strftime("%Y%m%d")]
+    end_exclusive = end_day + timedelta(days=1)
+    params: list[object] = [start_day.strftime("%Y%m%d"), end_exclusive.strftime("%Y%m%d")]
     ceco_clause, ceco_params = _build_cost_center_clause(
         "RTRIM(LTRIM(h.CodiCC))",
         cost_centers=cost_centers,
@@ -406,6 +445,7 @@ def _fetch_recent_movement_materials(
         LEFT JOIN softland.iw_tprod p ON RTRIM(LTRIM(p.CodProd)) = RTRIM(LTRIM(d.CodProd))
         WHERE
             h.Fecha >= ?
+            AND h.Fecha < ?
             AND h.Tipo = 'S'
             AND RTRIM(LTRIM(h.Concepto)) = '07'
             AND RTRIM(LTRIM(h.Estado)) = 'V'

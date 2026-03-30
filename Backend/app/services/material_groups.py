@@ -91,6 +91,8 @@ def get_material_dashboard_groups(
     *,
     session: Session,
     movement_days: int = 60,
+    start_date: date | None = None,
+    end_date: date | None = None,
     cost_centers: list[str] | None = None,
     excluded_cost_centers: list[str] | None = None,
 ) -> dict:
@@ -99,10 +101,18 @@ def get_material_dashboard_groups(
         .options(selectinload(MaterialStudyGroup.members))
         .order_by(MaterialStudyGroup.name, MaterialStudyGroup.id)
     ).all()
-    movement_window_days = max(int(movement_days), 1)
+    requested_end_day = end_date or datetime.utcnow().date()
+    requested_start_day = start_date
+    if requested_start_day is None:
+        requested_start_day = requested_end_day - timedelta(days=max(int(movement_days), 1) - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_date must be on or before end_date")
+    movement_window_days = max((requested_end_day - requested_start_day).days + 1, 1)
     recent_materials = get_recent_movement_materials(
         settings,
         days=movement_window_days,
+        start_day=requested_start_day,
+        end_day=requested_end_day,
         cost_centers=_normalize_dashboard_cost_centers(cost_centers),
         excluded_cost_centers=_normalize_dashboard_cost_centers(excluded_cost_centers),
     )

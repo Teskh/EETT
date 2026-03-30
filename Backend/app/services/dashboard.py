@@ -20,11 +20,13 @@ from app.models import (
 )
 from app.services.erp import (
     get_cost_centers,
+    get_average_prices_for_products,
     get_material_movement_details,
     get_material_movement_history,
     get_material_procurement_details,
     get_recent_movement_materials,
 )
+from app.services.production_dashboard import get_material_dashboard_house_start_summary
 
 
 MATERIAL_DASHBOARD_CACHE_VERSION = 4
@@ -32,10 +34,12 @@ MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
 MATERIAL_DASHBOARD_CACHE_KIND_HISTORY = "history"
+MATERIAL_DASHBOARD_CACHE_KIND_ECONOMICS = "economics"
 MATERIAL_DASHBOARD_CACHE_TTL_CECOS = timedelta(hours=24)
 MATERIAL_DASHBOARD_CACHE_TTL_LIST = timedelta(minutes=30)
 MATERIAL_DASHBOARD_CACHE_TTL_DETAIL = timedelta(minutes=15)
 MATERIAL_DASHBOARD_CACHE_TTL_HISTORY = timedelta(hours=6)
+MATERIAL_DASHBOARD_CACHE_TTL_ECONOMICS = timedelta(minutes=30)
 MATERIAL_DASHBOARD_CACHE_KEY_MAX_LENGTH = 255
 
 
@@ -111,6 +115,30 @@ def get_project_material_dashboard(session: Session, project_id: int) -> dict | 
     }
 
 
+def get_material_dashboard_project_quantity_map(
+    session: Session,
+    *,
+    project_id: int,
+) -> tuple[Project | None, dict[str, float]]:
+    project = session.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .options(selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material))
+    )
+    if project is None:
+        return None, {}
+
+    quantity_by_sku: dict[str, float] = defaultdict(float)
+    for entry in project.bom_entries:
+        if entry.quantity is None or entry.material is None:
+            continue
+        sku = entry.material.sku.strip().upper()
+        if not sku:
+            continue
+        quantity_by_sku[sku] += float(entry.quantity)
+    return project, {sku: round(quantity, 4) for sku, quantity in quantity_by_sku.items()}
+
+
 def get_material_dashboard_project_comparison(
     session: Session,
     *,
@@ -123,22 +151,16 @@ def get_material_dashboard_project_comparison(
         for sku, factor in sku_factors.items()
         if str(sku).strip() and float(factor or 0.0) != 0.0
     }
-    project = session.scalar(
-        select(Project)
-        .where(Project.id == project_id)
-        .options(selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material))
-    )
+    project, project_quantity_by_sku = get_material_dashboard_project_quantity_map(session, project_id=project_id)
     if project is None:
         return None
 
     predicted_quantity_per_house = 0.0
-    for entry in project.bom_entries:
-        if entry.quantity is None or entry.material is None:
-            continue
-        factor = normalized_factors.get(entry.material.sku.strip().upper())
+    for sku, quantity in project_quantity_by_sku.items():
+        factor = normalized_factors.get(sku)
         if factor is None:
             continue
-        predicted_quantity_per_house += float(entry.quantity) * factor
+        predicted_quantity_per_house += quantity * factor
 
     return {
         "project": project,
@@ -285,24 +307,37 @@ def get_recent_material_dashboard(
     *,
     session: Session | None = None,
     movement_days: int = 60,
+    start_date: date | None = None,
+    end_date: date | None = None,
     cost_centers: list[str] | None = None,
     excluded_cost_centers: list[str] | None = None,
     force_refresh: bool = False,
 ) -> dict:
+    requested_end_day = end_date or datetime.utcnow().date()
+    requested_start_day = start_date
+    if requested_start_day is None:
+        requested_start_day = requested_end_day - timedelta(days=max(int(movement_days), 1) - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_date must be on or before end_date")
+    movement_window_days = max((requested_end_day - requested_start_day).days + 1, 1)
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
     normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
     cache_key = _dashboard_cache_key(
         {
             "cecos": normalized_cost_centers,
             "excluded_cecos": normalized_excluded_cost_centers,
-            "movement_days": max(int(movement_days), 1),
+            "movement_days": movement_window_days,
+            "start_date": requested_start_day.isoformat(),
+            "end_date": requested_end_day.isoformat(),
         }
     )
 
     def loader() -> dict:
         return _build_recent_material_dashboard(
             settings,
-            movement_days=max(int(movement_days), 1),
+            movement_days=movement_window_days,
+            start_date=requested_start_day,
+            end_date=requested_end_day,
             cost_centers=normalized_cost_centers,
             excluded_cost_centers=normalized_excluded_cost_centers,
         )
@@ -321,12 +356,16 @@ def _build_recent_material_dashboard(
     settings: Settings,
     *,
     movement_days: int,
+    start_date: date,
+    end_date: date,
     cost_centers: list[str],
     excluded_cost_centers: list[str],
 ) -> dict:
     rows = get_recent_movement_materials(
         settings,
         days=movement_days,
+        start_day=start_date,
+        end_day=end_date,
         cost_centers=cost_centers,
         excluded_cost_centers=excluded_cost_centers,
     )
@@ -348,6 +387,121 @@ def _build_recent_material_dashboard(
         "ceco_filters": list(cost_centers),
         "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def get_material_dashboard_economic_metrics(
+    settings: Settings,
+    *,
+    house_type_id: int,
+    project_id: int | None = None,
+    project_quantity_by_sku: dict[str, float] | None = None,
+    session: Session | None = None,
+    movement_days: int = 90,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    cost_centers: list[str] | None = None,
+    excluded_cost_centers: list[str] | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    requested_end_day = end_date or datetime.utcnow().date()
+    requested_start_day = start_date
+    if requested_start_day is None:
+        requested_start_day = requested_end_day - timedelta(days=max(int(movement_days), 1) - 1)
+    elif requested_start_day > requested_end_day:
+        raise ValueError("start_date must be on or before end_date")
+    movement_window_days = max((requested_end_day - requested_start_day).days + 1, 1)
+    normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
+    normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
+    normalized_project_quantities = {
+        str(sku).strip().upper(): round(float(quantity), 4)
+        for sku, quantity in (project_quantity_by_sku or {}).items()
+        if str(sku).strip()
+    }
+    cache_key = _dashboard_cache_key(
+        {
+            "cecos": normalized_cost_centers,
+            "excluded_cecos": normalized_excluded_cost_centers,
+            "house_type_id": int(house_type_id),
+            "project_id": project_id,
+            "movement_days": movement_window_days,
+            "start_date": requested_start_day.isoformat(),
+            "end_date": requested_end_day.isoformat(),
+        }
+    )
+
+    def loader() -> dict:
+        dashboard = get_recent_material_dashboard(
+            settings,
+            session=session,
+            movement_days=movement_window_days,
+            start_date=requested_start_day,
+            end_date=requested_end_day,
+            cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
+            force_refresh=force_refresh,
+        )
+        house_start_summary = get_material_dashboard_house_start_summary(
+            settings,
+            house_type_id=int(house_type_id),
+            cost_centers=normalized_cost_centers,
+            history_days=movement_window_days,
+            start_date=requested_start_day.isoformat(),
+            end_date=requested_end_day.isoformat(),
+        )
+        sku_codes = [str(row.get("sku") or "").strip().upper() for row in dashboard.get("materials", [])]
+        try:
+            prices_by_sku = get_average_prices_for_products(settings, sku_codes)
+        except RuntimeError:
+            prices_by_sku = {sku: None for sku in sku_codes}
+        total_house_starts = int(house_start_summary.get("total_house_starts") or 0)
+        metrics: list[dict] = []
+
+        for row in dashboard.get("materials", []):
+            sku = str(row.get("sku") or "").strip().upper()
+            movement_quantity = float(row.get("movement_quantity_60d") or 0.0)
+            material_per_house = round(movement_quantity / total_house_starts, 4) if total_house_starts > 0 else None
+            predicted_quantity_per_house = normalized_project_quantities.get(sku)
+            average_price = prices_by_sku.get(sku)
+            consumption_delta_percent = (
+                round(((material_per_house - predicted_quantity_per_house) / predicted_quantity_per_house) * 100, 4)
+                if material_per_house is not None and predicted_quantity_per_house not in (None, 0)
+                else None
+            )
+            consumption_cost_delta_per_house = (
+                round((material_per_house - predicted_quantity_per_house) * average_price, 4)
+                if material_per_house is not None and predicted_quantity_per_house is not None and average_price is not None
+                else None
+            )
+            metrics.append(
+                {
+                    "sku": sku,
+                    "material_per_house": material_per_house,
+                    "predicted_quantity_per_house": predicted_quantity_per_house,
+                    "consumption_delta_percent": consumption_delta_percent,
+                    "consumption_cost_delta_per_house": consumption_cost_delta_per_house,
+                    "average_price": average_price,
+                }
+            )
+
+        return {
+            "house_type_id": int(house_type_id),
+            "project_id": int(project_id) if project_id is not None else None,
+            "ceco_filters": list(normalized_cost_centers),
+            "range_start": house_start_summary.get("range_start"),
+            "range_end": house_start_summary.get("range_end"),
+            "total_house_starts": total_house_starts,
+            "metrics": metrics,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+    return _load_material_dashboard_cache(
+        session,
+        cache_kind=MATERIAL_DASHBOARD_CACHE_KIND_ECONOMICS,
+        cache_key=cache_key,
+        ttl=MATERIAL_DASHBOARD_CACHE_TTL_ECONOMICS,
+        loader=loader,
+        force_refresh=force_refresh,
+    )
 
 
 def get_material_dashboard_detail(

@@ -42,6 +42,37 @@ def get_material_dashboard_house_types(settings: Settings) -> dict:
     }
 
 
+def get_material_dashboard_house_start_summary(
+    settings: Settings,
+    *,
+    house_type_id: int,
+    cost_centers: list[str] | None = None,
+    history_days: int = 90,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
+    context = _load_house_start_context(
+        settings,
+        house_type_id=house_type_id,
+        history_days=history_days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    house_type = context["house_type"]
+    return {
+        "house_type_id": int(house_type["id"]),
+        "house_type_name": str(house_type["name"]),
+        "number_of_modules": int(house_type["number_of_modules"] or 0),
+        "movement_days": context["window_days"],
+        "ceco_filters": list(cost_centers or []),
+        "range_start": context["start_day"].isoformat(),
+        "range_end": context["end_day"].isoformat(),
+        "total_house_starts": context["total_house_starts"],
+        "latest_house_start_date": context["latest_house_start_date"],
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
 def get_material_dashboard_house_start_comparison(
     settings: Settings,
     *,
@@ -54,6 +85,77 @@ def get_material_dashboard_house_start_comparison(
     end_date: str | None = None,
 ) -> dict:
     normalized_sku = sku.strip().upper()
+    context = _load_house_start_context(
+        settings,
+        house_type_id=house_type_id,
+        history_days=history_days,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    house_type = context["house_type"]
+    end_day = context["end_day"]
+    start_day = context["start_day"]
+    window_days = context["window_days"]
+
+    movement_by_day = {
+        str(point.get("date")): round(float(point.get("quantity") or 0.0), 4)
+        for point in movements
+    }
+    house_starts_by_day = context["house_starts_by_day"]
+
+    points: list[dict] = []
+    cumulative_material = 0.0
+    cumulative_house_starts = 0
+    latest_house_start_date = context["latest_house_start_date"]
+    for offset in range(window_days):
+        current_day = start_day + timedelta(days=offset)
+        day_key = current_day.isoformat()
+        material_quantity = movement_by_day.get(day_key, 0.0)
+        house_starts = house_starts_by_day.get(day_key, 0)
+        cumulative_material += material_quantity
+        cumulative_house_starts += house_starts
+        points.append(
+            {
+                "date": day_key,
+                "material_quantity": round(material_quantity, 4),
+                "house_starts": house_starts,
+                "cumulative_material_quantity": round(cumulative_material, 4),
+                "cumulative_house_starts": cumulative_house_starts,
+                "material_per_house": round(cumulative_material / cumulative_house_starts, 4)
+                if cumulative_house_starts > 0
+                else None,
+            }
+        )
+
+    total_material_quantity = round(sum(point["material_quantity"] for point in points), 4)
+    total_house_starts = context["total_house_starts"]
+
+    return {
+        "sku": normalized_sku,
+        "house_type_id": int(house_type["id"]),
+        "house_type_name": str(house_type["name"]),
+        "number_of_modules": int(house_type["number_of_modules"] or 0),
+        "movement_days": window_days,
+        "ceco_filters": list(cost_centers or []),
+        "range_start": start_day.isoformat(),
+        "range_end": end_day.isoformat(),
+        "total_material_quantity": total_material_quantity,
+        "total_house_starts": total_house_starts,
+        "material_per_house": round(total_material_quantity / total_house_starts, 4) if total_house_starts > 0 else None,
+        "latest_house_start_date": latest_house_start_date,
+        "points": points,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def _load_house_start_context(
+    settings: Settings,
+    *,
+    house_type_id: int,
+    history_days: int = 90,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict:
     requested_start_day = _parse_house_comparison_date(start_date, field_name="start_date")
     requested_end_day = _parse_house_comparison_date(end_date, field_name="end_date")
     end_day = min(requested_end_day or datetime.utcnow().date(), datetime.utcnow().date())
@@ -142,60 +244,22 @@ def get_material_dashboard_house_start_comparison(
     except SQLAlchemyError as exc:
         raise RuntimeError(f"Production II comparison query failed: {exc.__class__.__name__}") from exc
 
-    movement_by_day = {
-        str(point.get("date")): round(float(point.get("quantity") or 0.0), 4)
-        for point in movements
-    }
     house_starts_by_day = {
         row["start_date"].isoformat(): int(row["house_starts"] or 0)
         for row in start_rows
         if row["start_date"] is not None
     }
-
-    points: list[dict] = []
-    cumulative_material = 0.0
-    cumulative_house_starts = 0
-    latest_house_start_date = None
-    for offset in range(window_days):
-        current_day = start_day + timedelta(days=offset)
-        day_key = current_day.isoformat()
-        material_quantity = movement_by_day.get(day_key, 0.0)
-        house_starts = house_starts_by_day.get(day_key, 0)
-        cumulative_material += material_quantity
-        cumulative_house_starts += house_starts
-        if house_starts > 0:
-            latest_house_start_date = day_key
-        points.append(
-            {
-                "date": day_key,
-                "material_quantity": round(material_quantity, 4),
-                "house_starts": house_starts,
-                "cumulative_material_quantity": round(cumulative_material, 4),
-                "cumulative_house_starts": cumulative_house_starts,
-                "material_per_house": round(cumulative_material / cumulative_house_starts, 4)
-                if cumulative_house_starts > 0
-                else None,
-            }
-        )
-
-    total_material_quantity = round(sum(point["material_quantity"] for point in points), 4)
-    total_house_starts = sum(point["house_starts"] for point in points)
+    latest_house_start_date = max((day for day, count in house_starts_by_day.items() if count > 0), default=None)
+    total_house_starts = sum(house_starts_by_day.values())
 
     return {
-        "sku": normalized_sku,
-        "house_type_id": int(house_type["id"]),
-        "house_type_name": str(house_type["name"]),
-        "number_of_modules": int(house_type["number_of_modules"] or 0),
-        "movement_days": window_days,
-        "ceco_filters": list(cost_centers or []),
-        "range_start": start_day.isoformat(),
-        "range_end": end_day.isoformat(),
-        "total_material_quantity": total_material_quantity,
-        "total_house_starts": total_house_starts,
-        "material_per_house": round(total_material_quantity / total_house_starts, 4) if total_house_starts > 0 else None,
+        "house_type": house_type,
+        "start_day": start_day,
+        "end_day": end_day,
+        "window_days": window_days,
+        "house_starts_by_day": house_starts_by_day,
         "latest_house_start_date": latest_house_start_date,
-        "points": points,
-        "generated_at": datetime.utcnow().isoformat(),
+        "total_house_starts": total_house_starts,
     }
 
 

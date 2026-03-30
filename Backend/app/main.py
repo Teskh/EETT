@@ -32,6 +32,7 @@ from app.api_models import (
     MaterialDashboardCecoResponse,
     MaterialDashboardDateRangeRequest,
     MaterialDashboardDetailResponse,
+    MaterialDashboardEconomicMetricsResponse,
     MaterialDashboardFilterRequest,
     MaterialDashboardGroupDetailResponse,
     MaterialDashboardGroupHouseComparisonResponse,
@@ -115,8 +116,10 @@ from app.services.collaboration import (
 from app.services.dashboard import (
     get_material_dashboard_cost_centers,
     get_material_dashboard_detail,
+    get_material_dashboard_economic_metrics,
     get_material_dashboard_history,
     get_material_dashboard_project_comparison,
+    get_material_dashboard_project_quantity_map,
     get_material_dashboard_project_usage,
     get_project_material_dashboard,
     get_recent_material_dashboard,
@@ -1606,15 +1609,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
         try:
             return get_recent_material_dashboard(
                 request.app.state.settings,
                 session=session,
                 movement_days=payload.movement_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
                 cost_centers=payload.cecos,
                 excluded_cost_centers=payload.excluded_cecos,
                 force_refresh=payload.refresh,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1676,14 +1685,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
         try:
             return get_material_dashboard_groups(
                 request.app.state.settings,
                 session=session,
                 movement_days=payload.movement_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
                 cost_centers=payload.cecos,
                 excluded_cost_centers=payload.excluded_cecos,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1957,6 +1972,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if history is None:
             raise HTTPException(status_code=404, detail="Material group not found")
         return history
+
+    @app.post("/api/v1/dashboard/materials/economic-metrics", response_model=MaterialDashboardEconomicMetricsResponse)
+    def material_dashboard_economic_metrics_v1_post(
+        payload: MaterialDashboardHouseComparisonRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        movement_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        project_quantity_by_sku: dict[str, float] = {}
+        if payload.project_id is not None:
+            project, project_quantity_by_sku = get_material_dashboard_project_quantity_map(
+                session,
+                project_id=payload.project_id,
+            )
+            if project is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            require_project_view(current_user, project)
+        try:
+            return get_material_dashboard_economic_metrics(
+                request.app.state.settings,
+                session=session,
+                house_type_id=payload.house_type_id,
+                project_id=payload.project_id,
+                project_quantity_by_sku=project_quantity_by_sku,
+                movement_days=movement_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/{sku}", response_model=MaterialDashboardDetailResponse)
     def material_dashboard_detail_v1(
