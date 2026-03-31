@@ -72,7 +72,7 @@ def update_material_study_group(
     group.study_unit = _normalize_required_text(study_unit, field_name="study_unit", max_length=50)
     group.description = _normalize_optional_text(description)
     normalized_members = _normalize_group_members(members)
-    group.members = [_build_group_member(member, index=index) for index, member in enumerate(normalized_members)]
+    _replace_group_members(group, normalized_members)
     _flush_group_mutation(session)
     return _serialize_group(group)
 
@@ -443,6 +443,25 @@ def _build_group_member(member: dict, *, index: int) -> MaterialStudyGroupMember
         factor_to_study_unit=member["factor_to_study_unit"],
         display_order=index,
     )
+
+
+def _replace_group_members(group: MaterialStudyGroup, members: list[dict]) -> None:
+    existing_members_by_sku = {member.sku: member for member in group.members}
+    next_members: list[MaterialStudyGroupMember] = []
+
+    for index, member_data in enumerate(members):
+        existing_member = existing_members_by_sku.get(member_data["sku"])
+        if existing_member is None:
+            next_members.append(_build_group_member(member_data, index=index))
+            continue
+
+        existing_member.material_name = member_data["material_name"]
+        existing_member.unit = member_data["unit"]
+        existing_member.factor_to_study_unit = member_data["factor_to_study_unit"]
+        existing_member.display_order = index
+        next_members.append(existing_member)
+
+    group.members = next_members
 
 
 def _normalize_group_members(members: list[dict]) -> list[dict]:

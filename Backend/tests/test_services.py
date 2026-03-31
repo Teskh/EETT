@@ -46,6 +46,7 @@ from app.services.material_groups import (
     get_material_dashboard_group_detail,
     get_material_dashboard_group_history,
     get_material_dashboard_groups,
+    update_material_study_group,
 )
 from app.services.projects import (
     _visible_project_subtype_rows,
@@ -1723,6 +1724,59 @@ class ServiceLayerTests(unittest.TestCase):
 
 
 class MaterialStudyGroupTests(ServiceLayerTests):
+    def test_update_group_reuses_existing_members_for_unchanged_skus(self) -> None:
+        with self.session_factory() as session:
+            created = create_material_study_group(
+                session,
+                name="Insulation",
+                description="Normalized in m2",
+                study_unit="m2",
+                members=[
+                    {"sku": "INS-S", "material_name": "Insulation Small", "unit": "roll", "factor_to_study_unit": 2},
+                    {"sku": "INS-L", "material_name": "Insulation Large", "unit": "roll", "factor_to_study_unit": 10},
+                ],
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            updated = update_material_study_group(
+                session,
+                created["group_id"],
+                name="Insulation",
+                description="Normalized in m2",
+                study_unit="m2",
+                members=[
+                    {
+                        "sku": "INS-L",
+                        "material_name": "Insulation Large Updated",
+                        "unit": "panel",
+                        "factor_to_study_unit": 12,
+                    },
+                    {
+                        "sku": "INS-XL",
+                        "material_name": "Insulation Extra Large",
+                        "unit": "panel",
+                        "factor_to_study_unit": 15,
+                    },
+                ],
+            )
+            session.commit()
+
+            persisted_group = session.scalar(select(MaterialStudyGroup).where(MaterialStudyGroup.id == created["group_id"]))
+
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated["member_count"], 2)
+        self.assertEqual([member["sku"] for member in updated["members"]], ["INS-L", "INS-XL"])
+        self.assertEqual(updated["members"][0]["material_name"], "Insulation Large Updated")
+        self.assertEqual(updated["members"][0]["unit"], "panel")
+        self.assertEqual(updated["members"][0]["factor_to_study_unit"], 12.0)
+        self.assertEqual(updated["members"][0]["display_order"], 0)
+        self.assertEqual(updated["members"][1]["display_order"], 1)
+        self.assertIsNotNone(persisted_group)
+        assert persisted_group is not None
+        self.assertEqual([member.sku for member in persisted_group.members], ["INS-L", "INS-XL"])
+
     @patch("app.services.material_groups.get_recent_movement_materials")
     def test_group_list_normalizes_recent_movement_metrics(self, recent_movement_mock) -> None:
         with self.session_factory() as session:

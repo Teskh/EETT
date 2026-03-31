@@ -49,6 +49,7 @@ const percentFormatter = new Intl.NumberFormat("es-CL", {
 });
 const DEFAULT_HOUSE_RANGE_DAYS = 90;
 const LIST_PAGE_SIZE = 50;
+const MAX_COLLAPSED_SELECTED_CECOS = 8;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const HOUSE_VIEW_PREFERENCES_KEY = "material-dashboard::house-view-preferences";
 const CECO_FILTER_PREFERENCES_KEY = "material-dashboard::ceco-filter-preferences";
@@ -105,6 +106,26 @@ function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function getAdaptiveDecimalPlaces(...values: Array<number | null | undefined>) {
+  let digits = 1;
+  for (const value of values) {
+    if (!isFiniteNumber(value)) {
+      continue;
+    }
+    const absolute = Math.abs(value);
+    if (absolute === 0) {
+      continue;
+    }
+    if (absolute < 0.1) {
+      return 3;
+    }
+    if (absolute < 1) {
+      digits = Math.max(digits, 2);
+    }
+  }
+  return digits;
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) {
     return "—";
@@ -114,6 +135,22 @@ function formatDate(value: string | null | undefined) {
     return value;
   }
   return date.toLocaleDateString("es-CL", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatCondensedDate(value: string | null | undefined) {
+  if (!value) {
+    return "—";
+  }
+  const date = parseDateValue(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const now = new Date();
+  return date.toLocaleDateString("es-CL", {
+    day: "2-digit",
+    month: "short",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 function isDateWithinRange(value: string, startDate: string | null | undefined, endDate: string | null | undefined) {
@@ -470,14 +507,6 @@ function getLeadTimeModeLabel(mode: LeadTimeMode) {
     return "Median";
   }
   return "Average";
-}
-
-function getReorderDateForLeadTime(detail: DashboardDetailLike | null, leadTimeReference: LeadTimeReference | null) {
-  if (!detail || detail.days_of_stock_30d === null || detail.days_of_stock_30d === undefined || !leadTimeReference) {
-    return null;
-  }
-  const reorderInDays = Math.max(intOrZero(Math.round(detail.days_of_stock_30d - leadTimeReference.days)), 0);
-  return addBusinessDays(moveToNextBusinessDay(new Date()), reorderInDays).toISOString();
 }
 
 function intOrZero(value: number) {
@@ -1066,6 +1095,33 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
+function MetricTabbedRow({
+  label,
+  values,
+}: {
+  label: string;
+  values: Array<{ label: string; value: React.ReactNode; valueClassName?: string }>;
+}) {
+  return (
+    <div className="group border-b border-black/5 py-2 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">{label}</div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {values.map((item) => (
+            <div
+              key={item.label}
+              className="min-w-[112px] rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-right shadow-sm dark:border-white/10 dark:bg-white/[0.04]"
+            >
+              <div className="text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">{item.label}</div>
+              <div className={`mt-1 text-sm font-semibold ${item.valueClassName ?? "text-zinc-900 dark:text-white"}`}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkeletonBlock({ className }: { className: string }) {
   return <div className={`animate-pulse rounded-full bg-zinc-200/85 dark:bg-white/10 ${className}`} />;
 }
@@ -1452,12 +1508,7 @@ function MovementBreakdownList({
   return (
     <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Movement Breakdown</h4>
-          <p className="mt-1 text-xs text-zinc-500">
-            {formatDate(rangeStart)} - {formatDate(rangeEnd)}
-          </p>
-        </div>
+        <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Movement Breakdown</h4>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
           <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(movements.length, 0)} movs.</span>
           <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(uniqueCecos, 0)} CECOs</span>
@@ -1707,7 +1758,6 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const isRefreshing = detailRefreshing || historyRefreshing;
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
   const leadTimeReference = getLeadTimeReference(detail, leadTimeMode);
-  const selectedReorderDateRecentRate = getReorderDateForLeadTime(detail, leadTimeReference);
   const procurementSummary = selectedHouseType ? houseStockSummary : stockSummary;
   const purchaseOrderEstimate = getPurchaseOrderEstimate({
     detail,
@@ -1734,6 +1784,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const actualConsumptionPerHouse = houseSummary?.averageConsumptionPerHouse ?? houseComparisonInRange?.material_per_house ?? null;
   const projectedConsumptionPerHouse = projectComparisonInRange?.predicted_quantity_per_house ?? null;
+  const houseMetricDigits = getAdaptiveDecimalPlaces(actualConsumptionPerHouse, projectedConsumptionPerHouse);
   const consumptionDeltaPercent =
     actualConsumptionPerHouse !== null && projectedConsumptionPerHouse && projectedConsumptionPerHouse !== 0
       ? ((actualConsumptionPerHouse - projectedConsumptionPerHouse) / projectedConsumptionPerHouse) * 100
@@ -1868,13 +1919,13 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
       <div className="p-6 md:p-8 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-6">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight">{selected.material_name}</h2>
+          <div className="flex min-w-0 items-start gap-3">
+            <h2 className="min-w-0 flex-1 break-words text-3xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
             {canInspectProjectUsage ? (
               <button
                 type="button"
                 onClick={() => onInspectProjectUsage?.()}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-accent-300"
+                className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-accent-300"
                 title="View where this material is specified in the selected project"
                 aria-label={`View ${selected.material_name} usage in the selected project`}
               >
@@ -1906,15 +1957,15 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               {selectedHouseType ? "Cons./House" : "Stock on Hand"}
             </div>
             <div className="flex items-center justify-end gap-2">
-              <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-                {selectedHouseType
-                  ? houseSummary
-                    ? formatNumber(houseSummary.averageConsumptionPerHouse)
-                    : houseComparisonInRange
-                      ? formatNumber(houseComparisonInRange.material_per_house)
-                      : houseComparisonLoading
-                        ? "..."
-                        : "—"
+                <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                  {selectedHouseType
+                    ? houseSummary
+                      ? formatNumber(houseSummary.averageConsumptionPerHouse, houseMetricDigits)
+                      : houseComparisonInRange
+                        ? formatNumber(houseComparisonInRange.material_per_house, houseMetricDigits)
+                        : houseComparisonLoading
+                          ? "..."
+                          : "—"
                   : detail
                     ? formatNumber(detail.stock_on_hand)
                     : detailLoading
@@ -1942,7 +1993,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
             <div className="text-right">
               <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proj./House</div>
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-                {formatNumber(projectComparisonInRange.predicted_quantity_per_house)}
+                {formatNumber(projectComparisonInRange.predicted_quantity_per_house, houseMetricDigits)}
               </div>
             </div>
           ) : null}
@@ -2046,17 +2097,6 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     90d
                   </button>
                 </div>
-              </div>
-              <div className="text-xs text-zinc-500 mt-1">
-                {selectedHouseType
-                  ? houseSummary
-                    ? `${formatDate(houseSummary.start.date)} - ${formatDate(houseSummary.end.date)}`
-                    : houseComparisonInRange
-                      ? `${formatDate(houseComparisonInRange.range_start)} - ${formatDate(houseComparisonInRange.range_end)}`
-                      : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`
-                  : stockSummary
-                    ? `${formatDate(stockSummary.start.date)} - ${formatDate(stockSummary.end.date)}`
-                    : `${formatDate(houseRange.startDate)} - ${formatDate(houseRange.endDate)}`}
               </div>
               {selectedHouseType ? (
                 <>
@@ -2618,10 +2658,8 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           <div>
             <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
             <div className="space-y-3">
-              <MetricRow label="Mov. 60d" value={formatNumber(selected.movement_quantity_60d)} />
+              <MetricRow label="Mov period" value={formatNumber(selected.movement_quantity_60d)} />
               <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
-              <MetricRow label="Reorden 30d" value={detail ? formatDate(selectedReorderDateRecentRate) : detailLoading ? "..." : "—"} />
-              <MetricRow label="Mov. 30d" value={detail ? formatNumber(detail.movement_quantity_30d) : detailLoading ? "..." : "—"} />
               <MetricRow
                 label="Lead time"
                 value={
@@ -2704,17 +2742,25 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     : "—"
                 }
               />
-              <MetricRow
-                label="Nueva OC"
-                value={
-                  purchaseOrderEstimate ? (
-                    <span className={getPurchaseOrderUrgencyClasses(purchaseOrderEstimate.purchaseOrderDate)}>
-                      {formatDate(purchaseOrderEstimate.purchaseOrderDate)}
-                    </span>
-                  ) : "—"
-                }
-              />
-              <MetricRow label="Llega al min." value={purchaseOrderEstimate ? formatDate(purchaseOrderEstimate.thresholdDate) : "—"} />
+              <div className="group border-b border-black/5 py-1.5 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
+                <div className="flex items-start justify-between">
+                  <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">Nueva OC</div>
+                  <div className="text-right">
+                    <div className="text-xs text-zinc-500">
+                      <span className="font-medium">historic:</span>{" "}
+                      <span className={getPurchaseOrderUrgencyClasses(purchaseOrderEstimate?.purchaseOrderDate)}>
+                        {formatCondensedDate(purchaseOrderEstimate?.purchaseOrderDate)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-zinc-500 mt-0.5">
+                      <span className="font-medium">estimated:</span>{" "}
+                      <span className={getPurchaseOrderUrgencyClasses(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}>
+                        {formatCondensedDate(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <MetricRow
                 label="Cons. est./sem"
                 value={
@@ -2726,20 +2772,6 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               <MetricRow
                 label="Min. est. calc."
                 value={estimatedConsumptionPurchaseOrderEstimate ? formatNumber(estimatedConsumptionPurchaseOrderEstimate.minimumExpectedStock) : "—"}
-              />
-              <MetricRow
-                label="Nueva OC est."
-                value={
-                  estimatedConsumptionPurchaseOrderEstimate ? (
-                    <span className={getPurchaseOrderUrgencyClasses(estimatedConsumptionPurchaseOrderEstimate.purchaseOrderDate)}>
-                      {formatDate(estimatedConsumptionPurchaseOrderEstimate.purchaseOrderDate)}
-                    </span>
-                  ) : "—"
-                }
-              />
-              <MetricRow
-                label="Llega min. est."
-                value={estimatedConsumptionPurchaseOrderEstimate ? formatDate(estimatedConsumptionPurchaseOrderEstimate.thresholdDate) : "—"}
               />
               <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
               <MetricRow label="Ult. OC" value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
@@ -2771,6 +2803,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [selectedCecos, setSelectedCecos] = useState<string[]>(storedCecoPreferences?.cecos ?? []);
   const [activeTab, setActiveTab] = useState<"materials" | "groups" | "cecos">("materials");
   const [cecoSearch, setCecoSearch] = useState("");
+  const [showAllSelectedCecos, setShowAllSelectedCecos] = useState(false);
   const [materialSearchInput, setMaterialSearchInput] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT_STATE);
@@ -2816,6 +2849,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const groupHouseComparisonRefreshNonceRef = useRef(0);
   const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
   const selectedCecoSet = useMemo(() => new Set(normalizedSelectedCecoCodes), [normalizedSelectedCecoCodes]);
+  const shouldCollapseSelectedCecos = normalizedSelectedCecoCodes.length > MAX_COLLAPSED_SELECTED_CECOS;
+  const visibleSelectedCecoCodes =
+    showAllSelectedCecos || !shouldCollapseSelectedCecos
+      ? normalizedSelectedCecoCodes
+      : normalizedSelectedCecoCodes.slice(0, MAX_COLLAPSED_SELECTED_CECOS);
   const cecoNameByCode = useMemo(
     () => new Map(cecos.map((ceco) => [ceco.code, ceco.name])),
     [cecos],
@@ -3798,6 +3836,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     setVisibleCecoCount(LIST_PAGE_SIZE);
   }, [cecoFilterMode, cecoSearch, cecos.length]);
 
+  useEffect(() => {
+    if (!shouldCollapseSelectedCecos && showAllSelectedCecos) {
+      setShowAllSelectedCecos(false);
+    }
+  }, [shouldCollapseSelectedCecos, showAllSelectedCecos]);
+
   return (
     <div className="absolute inset-0 top-16 flex flex-col xl:flex-row overflow-hidden bg-zinc-50 dark:bg-zinc-950/40 z-30">
       
@@ -4026,12 +4070,25 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 </p>
 
                 {normalizedSelectedCecoCodes.length > 0 ? (
-                  <div>
-                    <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 mb-2">
-                      {cecoFilterMode === "exclude" ? "Hidden" : "Included"}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                        {cecoFilterMode === "exclude" ? "Hidden" : "Included"}
+                      </div>
+                      {shouldCollapseSelectedCecos ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllSelectedCecos((current) => !current)}
+                          className="text-[11px] font-semibold text-accent-600 hover:text-accent-500 dark:text-accent-400 dark:hover:text-accent-300 transition-colors"
+                        >
+                          {showAllSelectedCecos
+                            ? "Collapse"
+                            : `Show all ${normalizedSelectedCecoCodes.length}`}
+                        </button>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {normalizedSelectedCecoCodes.map((code) => (
+                      {visibleSelectedCecoCodes.map((code) => (
                         <button
                           key={code}
                           type="button"
@@ -4048,6 +4105,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                           </svg>
                         </button>
                       ))}
+                      {!showAllSelectedCecos && shouldCollapseSelectedCecos ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllSelectedCecos(true)}
+                          className="rounded-lg border border-dashed border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-zinc-500 hover:text-zinc-700 hover:border-black/20 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:border-white/20 transition-colors"
+                        >
+                          +{normalizedSelectedCecoCodes.length - visibleSelectedCecoCodes.length} more
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
