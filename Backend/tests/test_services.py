@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import os
 import tempfile
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
@@ -1570,6 +1571,66 @@ class ServiceLayerTests(unittest.TestCase):
 
         self.assertEqual(result["materials"][0]["sku"], "ERP-001")
         self.assertEqual(len(cached_entries), 1)
+
+    @patch("app.services.dashboard.get_recent_movement_materials")
+    def test_material_dashboard_server_cache_returns_payload_when_cache_update_times_out(
+        self,
+        recent_movement_mock,
+    ) -> None:
+        recent_movement_mock.side_effect = [
+            [
+                {
+                    "sku": "ERP-001",
+                    "material_name": "Steel Stud 90",
+                    "unit": "UN",
+                    "last_movement_date": "2026-03-10",
+                    "movement_quantity_60d": 180.0,
+                    "movement_count_60d": 6,
+                }
+            ],
+            [
+                {
+                    "sku": "ERP-002",
+                    "material_name": "Track 90",
+                    "unit": "UN",
+                    "last_movement_date": "2026-03-11",
+                    "movement_quantity_60d": 90.0,
+                    "movement_count_60d": 4,
+                }
+            ],
+        ]
+
+        with self.session_factory() as seed_session:
+            get_recent_material_dashboard(self.settings, session=seed_session, cost_centers=["CC-01"])
+            entry = seed_session.scalar(
+                select(MaterialDashboardCacheEntry).where(MaterialDashboardCacheEntry.cache_kind == "list")
+            )
+            self.assertIsNotNone(entry)
+            entry.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+            seed_session.commit()
+
+        with self.session_factory() as session:
+            def flush_with_timeout(*args, **kwargs):
+                raise OperationalError(
+                    "UPDATE material_dashboard_cache_entries",
+                    {},
+                    Exception(
+                        'canceling statement due to statement timeout CONTEXT: while updating tuple (18,7) in relation "material_dashboard_cache_entries"'
+                    ),
+                )
+
+            session.flush = flush_with_timeout  # type: ignore[method-assign]
+            result = get_recent_material_dashboard(self.settings, session=session, cost_centers=["CC-01"])
+
+        with self.session_factory() as verification_session:
+            cached_entry = verification_session.scalar(
+                select(MaterialDashboardCacheEntry).where(MaterialDashboardCacheEntry.cache_kind == "list")
+            )
+
+        self.assertEqual(result["materials"][0]["sku"], "ERP-002")
+        self.assertEqual(recent_movement_mock.call_count, 2)
+        self.assertIsNotNone(cached_entry)
+        self.assertEqual(cached_entry.payload["materials"][0]["sku"], "ERP-001")
 
     @patch("app.services.dashboard.get_average_prices_for_products")
     @patch("app.services.dashboard.get_material_dashboard_house_start_summary")

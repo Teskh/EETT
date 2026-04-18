@@ -737,6 +737,9 @@ def _load_material_dashboard_cache(
         if _is_missing_material_dashboard_cache_table(exc):
             session.rollback()
             return loader()
+        if _is_material_dashboard_cache_timeout(exc):
+            session.rollback()
+            return loader()
         raise
     if entry is not None and not force_refresh and _cache_entry_is_fresh(entry, now):
         return _clone_cached_payload(entry.payload)
@@ -780,6 +783,9 @@ def _load_material_dashboard_cache(
         raise
     except (ProgrammingError, OperationalError) as exc:
         if _is_missing_material_dashboard_cache_table(exc):
+            session.rollback()
+            return _clone_cached_payload(payload)
+        if _is_material_dashboard_cache_timeout(exc):
             session.rollback()
             return _clone_cached_payload(payload)
         raise
@@ -841,6 +847,16 @@ def _is_missing_material_dashboard_cache_table(exc: Exception) -> bool:
         "does not exist" in message
         or "undefinedtable" in message
         or "no such table" in message
+    )
+
+
+def _is_material_dashboard_cache_timeout(exc: Exception) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return "material_dashboard_cache_entries" in message and (
+        "statement timeout" in message
+        or "querycanceled" in message
+        or "canceling statement due to statement timeout" in message
+        or "lock timeout" in message
     )
 
 
