@@ -69,6 +69,7 @@ export function App() {
   const [sessionLoading, setSessionLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [projectDetailTitle, setProjectDetailTitle] = useState("Project");
 
   useEffect(() => {
     const handlePopstate = () => {
@@ -107,6 +108,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    setProjectDetailTitle("Project");
+  }, [route]);
+
+  useEffect(() => {
     if (route.name === "home") {
       document.title = "Launcher | Spec Sheets";
     } else if (route.name === "login") {
@@ -120,13 +125,13 @@ export function App() {
     } else if (route.name === "projects") {
       document.title = "Projects | Spec Sheets";
     } else if (route.name === "project-detail") {
-      document.title = "Project | Spec Sheets";
+      document.title = `${projectDetailTitle} | Spec Sheets`;
     } else if (route.name === "users") {
       document.title = "User Editor | Spec Sheets";
     } else {
       document.title = "Spec Sheets";
     }
-  }, [route]);
+  }, [projectDetailTitle, route]);
 
   useEffect(() => {
     if (session && route.name === "login") {
@@ -225,8 +230,8 @@ export function App() {
 
   if (route.name === "project-detail") {
     return (
-      <AppShell title={`Project ${route.projectId}`} activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
-        <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} />
+      <AppShell title={projectDetailTitle} activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
       </AppShell>
     );
   }

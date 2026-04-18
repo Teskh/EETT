@@ -21,6 +21,7 @@ import type {
 type ProjectDetailPageProps = {
   projectId: number;
   onNavigate: (to: string) => void;
+  onTitleChange?: (title: string) => void;
 };
 
 type ModalState =
@@ -776,13 +777,34 @@ function getOccurrencePrimaryLabel(occurrence: UsageOccurrence) {
   return occurrence.context_label || occurrence.targets[0]?.instance_name || "Usage occurrence";
 }
 
-function renderOccurrenceSummary(occurrence: UsageOccurrence, index: number) {
-  const primaryLabel = getOccurrencePrimaryLabel(occurrence);
+function getIncomingOccurrencePrimaryLabel(instance: ProjectInstance, occurrence: UsageOccurrence, index: number) {
+  const matchingLink = instance.linked_accessories.find(
+    (link) =>
+      link.relationship_type === occurrence.relationship_type &&
+      (link.application_label || null) === (occurrence.context_label || null),
+  );
+
+  return matchingLink?.name || instance.linked_accessories[index]?.name || getOccurrencePrimaryLabel(occurrence);
+}
+
+function renderOccurrenceSummary(
+  occurrence: UsageOccurrence,
+  index: number,
+  options?: {
+    primaryLabel?: string;
+    secondaryLabel?: string | null;
+  },
+) {
+  const primaryLabel = options?.primaryLabel || getOccurrencePrimaryLabel(occurrence);
+  const secondaryLabel = options?.secondaryLabel?.trim() || null;
 
   return (
     <div key={`${occurrence.relationship_type}-${primaryLabel}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
       <div className="mb-2">
         <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</div>
+        {secondaryLabel && secondaryLabel !== primaryLabel ? (
+          <div className="text-xs text-zinc-500 dark:text-zinc-400">{secondaryLabel}</div>
+        ) : null}
         <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
       </div>
       {occurrence.attributes.length ? (
@@ -1307,9 +1329,7 @@ function InstanceCard({
   onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const iconClass = instance.type === "accessory" ? "ph-flask" : "ph-wall";
-  const typeLabel = instance.type === "accessory" ? "ACCESSORY" : "ITEM";
-  const badgeBg = instance.type === "accessory" ? "bg-white dark:bg-white/10 shadow-sm text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20" : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10";
+  const [materialsExpanded, setMaterialsExpanded] = useState(true);
   const syncColor = instance.sync_state.status === "up-to-date" ? "text-green-400" : "text-amber-400";
 
   return (
@@ -1318,52 +1338,42 @@ function InstanceCard({
         className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
       >
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
-            <i className={`ph-fill ${iconClass}`} />
-          </div>
-          <div>
-            <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2">
-              <span>{instance.name}</span>
-              <button
-                type="button"
-                aria-label={`Edit ${instance.name}`}
-                title="Edit instance"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-300 transition-colors hover:bg-zinc-100 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-white"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onEdit();
-                }}
-              >
-                <i className="ph-bold ph-pencil-simple" />
-              </button>
-              <button
-                type="button"
-                aria-label={`Delete ${instance.name}`}
-                title="Delete instance"
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 transition-colors hover:bg-red-200 dark:hover:bg-red-500/20"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDelete();
-                }}
-              >
-                <i className="ph-bold ph-trash" />
-              </button>
-              <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
-                {instance.short_name || instance.name}
-              </span>
-            </div>
+        <div className="min-w-0">
+          <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2 min-w-0">
+            <span className="truncate">{instance.name}</span>
+            <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle">
+              {instance.short_name || instance.name}
+            </span>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className={`px-2 py-1 ${badgeBg} text-[10px] font-bold uppercase tracking-widest border rounded`}>
-            {typeLabel}
-          </span>
-          <div
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 group-hover:bg-zinc-100 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
-          >
-            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto">
+            <button
+              type="button"
+              aria-label={`Edit ${instance.name}`}
+              title="Edit instance"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-300 transition-colors hover:bg-zinc-100 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-white"
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdit();
+              }}
+            >
+              <i className="ph-bold ph-pencil-simple" />
+            </button>
+            <button
+              type="button"
+              aria-label={`Delete ${instance.name}`}
+              title="Delete instance"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 transition-colors hover:bg-red-200 dark:hover:bg-red-500/20"
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete();
+              }}
+            >
+              <i className="ph-bold ph-trash" />
+            </button>
           </div>
+          <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"} text-zinc-600 dark:text-zinc-300`} />
         </div>
       </div>
 
@@ -1414,7 +1424,12 @@ function InstanceCard({
                     <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenced Here
                   </h6>
                   <div className="space-y-3">
-                    {instance.incoming_occurrences.map(renderOccurrenceSummary)}
+                    {instance.incoming_occurrences.map((occurrence, index) =>
+                      renderOccurrenceSummary(occurrence, index, {
+                        primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index),
+                        secondaryLabel: occurrence.context_label,
+                      }),
+                    )}
                   </div>
                 </div>
               ) : null}
@@ -1432,8 +1447,7 @@ function InstanceCard({
                 instance.attributes.map((group) => (
                   <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
                     <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                      <i className="ph-bold ph-list-dashes text-zinc-600" /> {group.name}{" "}
-                      <span className="text-[10px] font-mono text-zinc-600 ml-auto">{group.application_label || "Base"}</span>
+                      <i className="ph-bold ph-list-dashes text-zinc-600" /> {group.name}
                     </h5>
                     <table className="w-full text-left border-collapse text-sm">
                       <tbody className="divide-y divide-white/10">
@@ -1454,26 +1468,35 @@ function InstanceCard({
           </div>
 
           <div className="border-t border-black/10 dark:border-white/10 pt-6">
-            <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <i className="ph-bold ph-boxes text-zinc-600" /> Applicable Materials
-            </h6>
-            <div className="space-y-4">
-              {instance.materials.length ? (
-                instance.materials.map((material) => (
-                  <MaterialOccurrenceEditor
-                    key={`${instance.id}-${material.rule_id}`}
-                    material={material}
-                    subtypeOptions={subtypeOptions}
-                    onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
-                    onUpdateMaterial={onUpdateMaterial}
-                  />
-                ))
-              ) : (
-                <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
-                  No applicable materials resolved for this instance.
-                </div>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => setMaterialsExpanded((current) => !current)}
+              className="w-full flex items-center justify-between text-left mb-4"
+            >
+              <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                <i className="ph-bold ph-boxes text-zinc-600" /> Applicable Materials
+              </h6>
+              <i className={`ph-bold ${materialsExpanded ? "ph-caret-up" : "ph-caret-down"} text-zinc-600 dark:text-zinc-300`} />
+            </button>
+            {materialsExpanded ? (
+              <div className="space-y-4">
+                {instance.materials.length ? (
+                  instance.materials.map((material) => (
+                    <MaterialOccurrenceEditor
+                      key={`${instance.id}-${material.rule_id}`}
+                      material={material}
+                      subtypeOptions={subtypeOptions}
+                      onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
+                      onUpdateMaterial={onUpdateMaterial}
+                    />
+                  ))
+                ) : (
+                  <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
+                    No applicable materials resolved for this instance.
+                  </div>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -1481,7 +1504,7 @@ function InstanceCard({
   );
 }
 
-export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
+export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPageProps) {
   const [data, setData] = useState<ProjectDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1504,8 +1527,15 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
   }
 
   useEffect(() => {
+    onTitleChange?.("Project");
     void loadProject();
-  }, [projectId]);
+  }, [onTitleChange, projectId]);
+
+  useEffect(() => {
+    if (data?.project.name) {
+      onTitleChange?.(data.project.name);
+    }
+  }, [data?.project.name, onTitleChange]);
 
   const activeCategory =
     modalState && data
@@ -1728,27 +1758,6 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
         <div className="mb-4 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">{error}</div>
       ) : null}
 
-      <div className="liquid-glass rounded-2xl p-8 flex justify-between items-end relative overflow-hidden mb-6">
-        
-        <div className="relative z-10">
-          <p className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-            <i className="ph-bold ph-kanban text-accent-600 dark:text-accent-500" /> Project Viewer
-          </p>
-          <h1 className="text-4xl font-bold text-zinc-900 dark:text-white tracking-tighter mb-2">{data.project.name}</h1>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-2xl">{data.project.description || "No description provided."}</p>
-        </div>
-        <div className="relative z-10 flex items-center gap-4">
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] font-mono text-zinc-500 uppercase">Status</span>
-            <span className="px-2 py-1 bg-white dark:bg-white/10 shadow-sm text-zinc-900 dark:text-white rounded text-xs font-semibold">{data.project.status_label}</span>
-          </div>
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] font-mono text-zinc-500 uppercase">Instances</span>
-            <span className="font-mono text-xl font-bold text-accent-700 dark:text-accent-400">{data.project.instance_count}</span>
-          </div>
-        </div>
-      </div>
-
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         <div className="xl:col-span-3 space-y-6">
           <div className="liquid-glass rounded-2xl p-4 flex flex-col h-[60vh] sticky top-24">
@@ -1781,18 +1790,6 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                       {category.scope}
                     </span>
                   </h2>
-                  <div className="flex items-center gap-2 mt-2 flex-wrap">
-                    <span className="text-xs text-zinc-500 font-mono">Links:</span>
-                    {category.linked_categories.length ? (
-                      category.linked_categories.map((name) => (
-                        <span key={`${category.id}-${name}`} className="px-2 py-1 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
-                          {name}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-[10px] font-mono text-zinc-600">None</span>
-                    )}
-                  </div>
                 </div>
                 {category.available_components.length ? (
                   <button
@@ -1800,7 +1797,7 @@ export function ProjectDetailPage({ projectId }: ProjectDetailPageProps) {
                     className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded border border-black/10 dark:border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
                     onClick={() => setModalState({ kind: "create", categoryId: category.id })}
                   >
-                    <i className="ph-bold ph-plus" /> Add Instance
+                    <i className="ph-bold ph-plus" />
                   </button>
                 ) : (
                   <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">No reusable components exist</p>
