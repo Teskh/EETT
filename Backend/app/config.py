@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     production_database_statement_timeout_ms: int = 20000
     seed_demo_data: bool = True
     require_schema: bool = True
+    export_output_dir: Path = Field(default_factory=lambda: REPO_ROOT / "output" / "exports")
     session_secret: str = "spec-sheets-internal-session-secret"
     session_cookie_name: str = "spec_sheets_session"
     allow_trusted_user_header: bool = False

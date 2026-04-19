@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { Modal } from "../components/Modal";
 import { ApiError, api } from "../lib/api";
-import type { CreateProjectRequest, ProjectDetailData, ProjectsBoardData, ProjectSubtype, SessionUser } from "../lib/types";
+import type { CreateProjectRequest, ExportJob, ProjectDetailData, ProjectsBoardData, ProjectSubtype, SessionUser } from "../lib/types";
 
 type ProjectsPageProps = {
   onNavigate: (to: string) => void;
@@ -27,6 +27,15 @@ type SubtypeModalState = {
   projectId: number;
   projectName: string;
 } | null;
+
+const INLINE_EXPORT_KINDS = new Set([
+  "commercial_pdf",
+  "full_technical_pdf",
+  "total_materials_pdf",
+  "context_materials_pdf",
+  "detailed_material_pdf",
+  "assembly_kit_pdf",
+]);
 
 function SubtypeNodeEditor({
   subtype,
@@ -119,6 +128,22 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [subtypeProject, setSubtypeProject] = useState<ProjectDetailData | null>(null);
   const [subtypeLoading, setSubtypeLoading] = useState(false);
   const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
+  const [exportingJob, setExportingJob] = useState<{ projectId: number; kind: string } | null>(null);
+
+  function openExportArtifact(job: ExportJob) {
+    if (!job.artifact_uri) {
+      throw new Error("Export finished without an artifact.");
+    }
+    if (INLINE_EXPORT_KINDS.has(job.kind)) {
+      window.open(job.artifact_uri, "_blank", "noopener,noreferrer");
+      return;
+    }
+    window.location.assign(job.artifact_uri);
+  }
+
+  function isExporting(projectId: number, kind: string) {
+    return exportingJob?.projectId === projectId && exportingJob.kind === kind;
+  }
 
   async function loadProjects() {
     setLoading(true);
@@ -257,6 +282,24 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     }
   }
 
+  async function handleRequestExport(projectId: number, kind: string, payload: Record<string, unknown> = {}) {
+    setExportingJob({ projectId, kind });
+    setError(null);
+    try {
+      const job = await api.requestProjectExport(projectId, { kind, payload });
+      if (job.status !== "completed") {
+        const payloadError = typeof job.payload.error === "string" ? job.payload.error : null;
+        throw new Error(payloadError || "Export did not complete successfully.");
+      }
+      openExportArtifact(job);
+    } catch (err) {
+      const message = err instanceof ApiError || err instanceof Error ? err.message : "Could not export file.";
+      setError(message);
+    } finally {
+      setExportingJob(null);
+    }
+  }
+
   return (
     <div className="max-w-[1600px] mx-auto flex flex-col gap-6">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -369,6 +412,75 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             >
                               Subtypes
                             </button>
+                            <details className="relative">
+                              <summary
+                                className="list-none px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 cursor-pointer flex items-center gap-1.5"
+                                aria-label={`Export options for ${project.name}`}
+                              >
+                                <i className="ph-bold ph-file-arrow-down" />
+                                Export
+                                <i className="ph-bold ph-caret-down" />
+                              </summary>
+                              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-20 min-w-56 rounded-xl border border-black/10 dark:border-white/10 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-xl shadow-xl p-2">
+                                <button
+                                  type="button"
+                                  disabled={isExporting(project.id, "commercial_pdf")}
+                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                                  onClick={(event) => {
+                                    const details = event.currentTarget.closest("details");
+                                    if (details instanceof HTMLDetailsElement) {
+                                      details.open = false;
+                                    }
+                                    void handleRequestExport(project.id, "commercial_pdf");
+                                  }}
+                                >
+                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
+                                    {isExporting(project.id, "commercial_pdf") ? "Generating PDF..." : "Commercial PDF (.pdf)"}
+                                  </span>
+                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                    Opens the client-facing PDF in a new browser tab.
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isExporting(project.id, "full_technical_pdf")}
+                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                                  onClick={(event) => {
+                                    const details = event.currentTarget.closest("details");
+                                    if (details instanceof HTMLDetailsElement) {
+                                      details.open = false;
+                                    }
+                                    void handleRequestExport(project.id, "full_technical_pdf");
+                                  }}
+                                >
+                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
+                                    {isExporting(project.id, "full_technical_pdf") ? "Generating PDF..." : "Full Technical PDF (.pdf)"}
+                                  </span>
+                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                    Opens the technical PDF with full descriptions, installation notes, and materials.
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isExporting(project.id, "materials_workbook")}
+                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                                  onClick={(event) => {
+                                    const details = event.currentTarget.closest("details");
+                                    if (details instanceof HTMLDetailsElement) {
+                                      details.open = false;
+                                    }
+                                    void handleRequestExport(project.id, "materials_workbook", { group_by: "context" });
+                                  }}
+                                >
+                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
+                                    {isExporting(project.id, "materials_workbook") ? "Generating workbook..." : "Materials Workbook (.xlsx)"}
+                                  </span>
+                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                    Downloads the current materials export. PDF exports will open in-browser once added.
+                                  </span>
+                                </button>
+                              </div>
+                            </details>
                             <button 
                               className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
                               onClick={() => onNavigate(`/projects/${project.id}`)}

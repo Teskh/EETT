@@ -10,6 +10,7 @@ import type {
   CreateComponentRequest,
   CreateProjectInstanceRequest,
   CreateProjectRequest,
+  ExportJob,
   LoginRequest,
   ManagedUser,
   MaterialCalculationSheet,
@@ -257,6 +258,12 @@ export const api = {
   },
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");
+  },
+  requestProjectExport(projectId: number, payload: { kind: string; payload?: Record<string, unknown> }) {
+    return request<ExportJob>(`/api/v1/projects/${projectId}/exports`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   getMaterialDashboard(filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
     return request<MaterialDashboardData>("/api/v1/dashboard/materials", {

@@ -478,6 +478,17 @@ export type ProjectsBoardData = {
   status_labels: Record<string, string>;
 };
 
+export type ExportJob = {
+  id: number;
+  kind: string;
+  status: string;
+  requested_by: string | null;
+  artifact_uri: string | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  completed_at: string | null;
+};
+
 export type ProjectSubtype = {
   id: number;
   parent_id: number | null;

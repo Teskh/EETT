@@ -12,6 +12,7 @@ export default defineConfig(({ command }) => ({
     port: 5000,
     proxy: {
       "/api": "http://127.0.0.1:8000",
+      "/exports": "http://127.0.0.1:8000",
     },
   },
 }));

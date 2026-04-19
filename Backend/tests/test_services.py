@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime, timedelta, timezone
+import importlib.util
+from io import BytesIO
 import os
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from openpyxl import load_workbook
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
@@ -74,6 +77,7 @@ class ServiceLayerTests(unittest.TestCase):
             seed_demo_data=True,
             environment="test",
             allow_trusted_user_header=True,
+            export_output_dir=self.temp_dir.name,
         )
         self.engine = create_engine_for_url(self.settings.database_url)
         self.session_factory = sessionmaker(bind=self.engine, autoflush=False, expire_on_commit=False)
@@ -87,6 +91,7 @@ class ServiceLayerTests(unittest.TestCase):
                 require_schema=True,
                 environment="test",
                 allow_trusted_user_header=True,
+                export_output_dir=self.temp_dir.name,
             )
         )
         self.client = TestClient(self.app)
@@ -1068,6 +1073,83 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(decision.status_code, 200)
         self.assertEqual(decision.json()["status"], "approved")
+
+    def test_materials_workbook_export_generates_downloadable_artifact(self) -> None:
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"kind": "materials_workbook", "payload": {"group_by": "context"}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+        self.assertEqual(create_export.json()["kind"], "materials_workbook")
+        self.assertEqual(create_export.json()["status"], "completed")
+        artifact_uri = create_export.json()["artifact_uri"]
+        self.assertTrue(artifact_uri.startswith("/exports/"))
+
+        artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(artifact_response.status_code, 200)
+
+        workbook = load_workbook(filename=BytesIO(artifact_response.content))
+        self.assertEqual(workbook.sheetnames, ["Total Materials", "By Context", "Assembly Kit"])
+
+        totals = workbook["Total Materials"]
+        totals_by_sku = {
+            totals.cell(row=row_index, column=2).value: totals.cell(row=row_index, column=3).value
+            for row_index in range(2, totals.max_row + 1)
+            if totals.cell(row=row_index, column=2).value
+        }
+        self.assertEqual(totals_by_sku["MAT-001"], 24)
+        self.assertEqual(totals_by_sku["MAT-002"], 3)
+        self.assertAlmostEqual(float(totals_by_sku["MAT-003"]), 7.3, places=6)
+        self.assertAlmostEqual(float(totals_by_sku["MAT-005"]), 5.25, places=6)
+        self.assertIsNone(totals_by_sku["MAT-006"])
+
+        context_values = [cell for row in workbook["By Context"].iter_rows(values_only=True) for cell in row if cell]
+        self.assertIn("1.2. Windows", context_values)
+        self.assertIn("Living Window", "".join(str(value) for value in context_values))
+        self.assertIn("Laminated Glass Panel", context_values)
+
+        assembly_values = [cell for row in workbook["Assembly Kit"].iter_rows(values_only=True) for cell in row if cell]
+        self.assertIn("Anchor Screw 5x70", assembly_values)
+        self.assertIn("Smart Lock Kit", assembly_values)
+
+    @unittest.skipUnless(importlib.util.find_spec("reportlab"), "reportlab is not installed")
+    def test_commercial_pdf_export_generates_browser_viewable_artifact(self) -> None:
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"kind": "commercial_pdf", "payload": {}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+        self.assertEqual(create_export.json()["kind"], "commercial_pdf")
+        self.assertEqual(create_export.json()["status"], "completed")
+        artifact_uri = create_export.json()["artifact_uri"]
+        self.assertTrue(artifact_uri.endswith(".pdf"))
+
+        artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(artifact_response.status_code, 200)
+        self.assertEqual(artifact_response.headers.get("content-type"), "application/pdf")
+        self.assertIn("inline", artifact_response.headers.get("content-disposition", ""))
+        self.assertTrue(artifact_response.content.startswith(b"%PDF"))
+
+    @unittest.skipUnless(importlib.util.find_spec("reportlab"), "reportlab is not installed")
+    def test_full_technical_pdf_export_generates_browser_viewable_artifact(self) -> None:
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"kind": "full_technical_pdf", "payload": {}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+        self.assertEqual(create_export.json()["kind"], "full_technical_pdf")
+        self.assertEqual(create_export.json()["status"], "completed")
+        artifact_uri = create_export.json()["artifact_uri"]
+        self.assertTrue(artifact_uri.endswith(".pdf"))
+
+        artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(artifact_response.status_code, 200)
+        self.assertEqual(artifact_response.headers.get("content-type"), "application/pdf")
+        self.assertIn("inline", artifact_response.headers.get("content-disposition", ""))
+        self.assertTrue(artifact_response.content.startswith(b"%PDF"))
 
     def test_project_activity_groups_reuse_mutation_batch_id(self) -> None:
         detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})

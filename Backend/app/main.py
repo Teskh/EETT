@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from datetime import date
+import mimetypes
 from pathlib import Path
 from typing import Annotated, Any
 
+from sqlalchemy import select
 from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -76,7 +78,7 @@ from app.api_models import (
 )
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
-from app.models import Project
+from app.models import Project, ProjectExportJob
 from app.seed import seed_demo_data_if_empty
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
@@ -141,7 +143,7 @@ from app.services.production_dashboard import (
     get_material_dashboard_house_start_comparison,
     get_material_dashboard_house_types,
 )
-from app.services.exports import get_project_export_jobs, request_project_export
+from app.services.exports import execute_project_export, get_project_export_job_for_artifact, get_project_export_jobs, request_project_export, resolve_artifact_path
 from app.services.projects import (
     apply_catalog_value_to_instance_field,
     apply_instance_value_to_catalog_field,
@@ -189,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise RuntimeError(
                 "Database schema is missing. Run `alembic upgrade head` against the configured PostgreSQL database before starting the app."
             )
+        settings.export_output_dir.mkdir(parents=True, exist_ok=True)
         if settings.seed_demo_data:
             seed_demo_data_if_empty(session_factory)
         yield
@@ -320,6 +323,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/login", response_class=HTMLResponse)
     async def login_page() -> str:
         return serve_frontend_app(render_home_page())
+
+    @app.get("/exports/{artifact_name}", response_class=FileResponse)
+    async def download_export_artifact(
+        artifact_name: str,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        artifact_uri = f"/exports/{artifact_name}"
+        job = get_project_export_job_for_artifact(session, artifact_uri)
+        if job is None or job.project is None:
+            raise HTTPException(status_code=404, detail="Export artifact not found")
+        require_project_view(current_user, job.project)
+        try:
+            artifact_path = resolve_artifact_path(settings=request.app.state.settings, artifact_uri=artifact_uri)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Export artifact not found") from exc
+        if not artifact_path.is_file():
+            raise HTTPException(status_code=404, detail="Export artifact not found")
+        media_type = mimetypes.guess_type(artifact_path.name)[0] or "application/octet-stream"
+        is_pdf = media_type == "application/pdf"
+        return FileResponse(
+            artifact_path,
+            media_type=media_type,
+            filename=artifact_path.name,
+            content_disposition_type="inline" if is_pdf else "attachment",
+        )
 
     @app.get("/catalog", response_class=HTMLResponse)
     async def catalog(
@@ -1641,6 +1671,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/projects/{project_id}/exports", response_model=ExportJobModel)
     async def request_project_export_api(
+        request: Request,
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1657,6 +1688,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             export_kind=payload["kind"],
             payload=payload.get("payload"),
         )
+        latest_job = session.scalar(
+            select(ProjectExportJob)
+            .where(ProjectExportJob.project_id == project_id)
+            .order_by(ProjectExportJob.created_at.desc())
+        )
+        if latest_job is None:
+            raise HTTPException(status_code=500, detail="Export job could not be created")
+        execute_project_export(session, job=latest_job, settings=request.app.state.settings)
         return get_project_export_jobs(session, project_id)[0]
 
     @app.get("/api/v1/dashboard/projects/{project_id}/materials", response_model=DashboardResponse)
