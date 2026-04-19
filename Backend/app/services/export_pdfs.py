@@ -28,7 +28,7 @@ def build_commercial_pdf(project_data: dict[str, Any], output_path: Path) -> Non
     else:
         story.append(Paragraph("No commercial sections are currently available for this project.", styles["Normal"]))
 
-    doc.build(story, canvasmaker=_numbered_canvas_class())
+    doc.build(story)
 
 
 def build_full_technical_pdf(project_data: dict[str, Any], output_path: Path) -> None:
@@ -53,7 +53,7 @@ def build_full_technical_pdf(project_data: dict[str, Any], output_path: Path) ->
     else:
         story.append(Paragraph("No technical sections are currently available for this project.", styles["Normal"]))
 
-    doc.multiBuild(story, canvasmaker=_numbered_canvas_class())
+    doc.multiBuild(story)
 
 
 def _ensure_reportlab(message: str) -> None:
@@ -491,11 +491,18 @@ def _create_doc_template(output_path: Path, *, title: str):
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate
 
+    def draw_page_number(canvas, doc) -> None:
+        page_width, _ = doc.pagesize
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.drawRightString(page_width - doc.rightMargin, 30, str(canvas.getPageNumber()))
+        canvas.restoreState()
+
     class ExportDocTemplate(BaseDocTemplate):
         def __init__(self, filename: str, **kwargs: Any) -> None:
             super().__init__(filename, **kwargs)
             frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id="body")
-            self.addPageTemplates([PageTemplate(id="main", frames=[frame])])
+            self.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=draw_page_number)])
 
         def afterFlowable(self, flowable: Any) -> None:
             level = getattr(flowable, "_toc_level", None)
@@ -523,31 +530,3 @@ def _create_doc_template(output_path: Path, *, title: str):
         title=title,
         allowSplitting=1,
     )
-
-
-def _numbered_canvas_class():
-    from reportlab.pdfgen import canvas
-
-    class NumberedCanvas(canvas.Canvas):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, **kwargs)
-            self._saved_page_states: list[dict[str, Any]] = []
-
-        def showPage(self) -> None:
-            self._saved_page_states.append(dict(self.__dict__))
-            self._startPage()
-
-        def save(self) -> None:
-            page_count = len(self._saved_page_states)
-            for state in self._saved_page_states:
-                self.__dict__.update(state)
-                self._draw_page_number(page_count)
-                canvas.Canvas.showPage(self)
-            canvas.Canvas.save(self)
-
-        def _draw_page_number(self, page_count: int) -> None:
-            page_width, _ = self._pagesize
-            self.setFont("Helvetica", 8)
-            self.drawRightString(page_width - 72, 30, f"{self.getPageNumber()} de {page_count}")
-
-    return NumberedCanvas

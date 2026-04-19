@@ -130,7 +130,42 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
   const [exportingJob, setExportingJob] = useState<{ projectId: number; kind: string } | null>(null);
 
-  function openExportArtifact(job: ExportJob) {
+  function resolveDownloadFilename(job: ExportJob, contentDisposition: string | null) {
+    const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      return decodeURIComponent(utf8Match[1]);
+    }
+    const plainMatch = contentDisposition?.match(/filename="?([^"]+)"?/i);
+    if (plainMatch?.[1]) {
+      return plainMatch[1];
+    }
+    const pathParts = (job.artifact_uri || "").split("/");
+    return pathParts[pathParts.length - 1] || "export.bin";
+  }
+
+  async function downloadExportArtifact(job: ExportJob) {
+    if (!job.artifact_uri) {
+      throw new Error("Export finished without an artifact.");
+    }
+
+    const response = await fetch(job.artifact_uri, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error("Could not download export artifact.");
+    }
+
+    const blob = await response.blob();
+    const objectUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = resolveDownloadFilename(job, response.headers.get("content-disposition"));
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
+  }
+
+  async function openExportArtifact(job: ExportJob) {
     if (!job.artifact_uri) {
       throw new Error("Export finished without an artifact.");
     }
@@ -138,7 +173,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       window.open(job.artifact_uri, "_blank", "noopener,noreferrer");
       return;
     }
-    window.location.assign(job.artifact_uri);
+    await downloadExportArtifact(job);
   }
 
   function isExporting(projectId: number, kind: string) {
@@ -291,7 +326,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
         const payloadError = typeof job.payload.error === "string" ? job.payload.error : null;
         throw new Error(payloadError || "Export did not complete successfully.");
       }
-      openExportArtifact(job);
+      await openExportArtifact(job);
     } catch (err) {
       const message = err instanceof ApiError || err instanceof Error ? err.message : "Could not export file.";
       setError(message);
