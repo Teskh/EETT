@@ -67,6 +67,8 @@ from app.api_models import (
     PublicProjectListResponse,
     PublicProjectSkuResponse,
     SessionUserResponse,
+    SyncAttributeSchemaUpdateRequest,
+    SyncFieldApplyRequest,
     SyncPreviewResponse,
     UserCreateRequest,
     UserDirectoryResponse,
@@ -141,6 +143,8 @@ from app.services.production_dashboard import (
 )
 from app.services.exports import get_project_export_jobs, request_project_export
 from app.services.projects import (
+    apply_catalog_value_to_instance_field,
+    apply_instance_value_to_catalog_field,
     create_project,
     create_project_instance,
     create_project_instance_occurrence,
@@ -154,6 +158,7 @@ from app.services.projects import (
     get_project_view_data,
     get_project_with_details,
     get_projects_page_data,
+    reconcile_instance_base_attributes,
     refresh_instance_snapshot,
     replace_project_material_occurrence,
     set_project_material_mode,
@@ -1428,6 +1433,92 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         preview = refresh_instance_snapshot(
             session,
             instance_id=instance_id,
+            actor_user=current_user,
+            mutation_batch_id=mutation_batch_id,
+        )
+        if preview is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return preview
+
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-fields/apply-catalog", response_model=SyncPreviewResponse)
+    async def apply_catalog_value_to_instance_field_api(
+        project_id: int,
+        instance_id: int,
+        payload: SyncFieldApplyRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        if not any(item.id == instance_id for item in project.instances):
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        try:
+            preview = apply_catalog_value_to_instance_field(
+                session,
+                instance_id=instance_id,
+                field=payload.field,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if preview is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return preview
+
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-fields/apply-instance", response_model=SyncPreviewResponse)
+    async def apply_instance_value_to_catalog_field_api(
+        project_id: int,
+        instance_id: int,
+        payload: SyncFieldApplyRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        require_catalog_edit(current_user)
+        if not any(item.id == instance_id for item in project.instances):
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        try:
+            preview = apply_instance_value_to_catalog_field(
+                session,
+                instance_id=instance_id,
+                field=payload.field,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if preview is None:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return preview
+
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-attributes/reconcile", response_model=SyncPreviewResponse)
+    async def reconcile_instance_base_attributes_api(
+        project_id: int,
+        instance_id: int,
+        payload: SyncAttributeSchemaUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        if not any(item.id == instance_id for item in project.instances):
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        preview = reconcile_instance_base_attributes(
+            session,
+            instance_id=instance_id,
+            add_attribute_names=payload.add_attribute_names,
+            remove_attribute_names=payload.remove_attribute_names,
             actor_user=current_user,
             mutation_batch_id=mutation_batch_id,
         )

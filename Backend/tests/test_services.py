@@ -881,6 +881,8 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(preview_response.status_code, 200)
         self.assertTrue(preview_response.json()["is_outdated"])
+        self.assertIn("scalar_fields", preview_response.json())
+        self.assertIn("attribute_schema", preview_response.json())
 
         refresh_response = self.client.post(
             "/api/v1/projects/2/instances/4/refresh",

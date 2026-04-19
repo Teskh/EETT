@@ -593,6 +593,50 @@ export type SyncState = {
   notes: string | null;
 };
 
+export type SyncScalarField = {
+  field: string;
+  label: string;
+  status: string;
+  instance_value: string | null;
+  catalog_value: string | null;
+  snapshot_value: string | null;
+  can_apply_catalog: boolean;
+};
+
+export type SyncAttributeDefinition = {
+  name: string;
+  value_type: string | null;
+  options: string[];
+};
+
+export type SyncAttributeDifference = {
+  name: string;
+  status: string;
+  instance_definition: SyncAttributeDefinition | null;
+  catalog_definition: SyncAttributeDefinition | null;
+  snapshot_definition: SyncAttributeDefinition | null;
+  can_add: boolean;
+  can_remove: boolean;
+};
+
+export type SyncAttributeSchema = {
+  field: string;
+  label: string;
+  status: string;
+  differences: SyncAttributeDifference[];
+};
+
+export type InstanceSyncPreview = {
+  instance_id: number;
+  instance_name: string;
+  component_id: number;
+  component_name: string;
+  sync_status: string;
+  is_outdated: boolean;
+  scalar_fields: SyncScalarField[];
+  attribute_schema: SyncAttributeSchema;
+};
+
 export type AvailableComponent = {
   id: number;
   name: string;

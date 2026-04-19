@@ -470,10 +470,37 @@ class ProjectOccurrenceUpdateRequest(BaseModel):
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
 
 
-class SyncFieldChangeModel(BaseModel):
+class SyncScalarFieldModel(BaseModel):
     field: str
-    current: str | None
-    catalog: str | None
+    label: str
+    status: str
+    instance_value: str | None
+    catalog_value: str | None
+    snapshot_value: str | None
+    can_apply_catalog: bool = False
+
+
+class SyncAttributeDefinitionModel(BaseModel):
+    name: str
+    value_type: str | None = None
+    options: list[str] = Field(default_factory=list)
+
+
+class SyncAttributeDifferenceModel(BaseModel):
+    name: str
+    status: str
+    instance_definition: SyncAttributeDefinitionModel | None = None
+    catalog_definition: SyncAttributeDefinitionModel | None = None
+    snapshot_definition: SyncAttributeDefinitionModel | None = None
+    can_add: bool = False
+    can_remove: bool = False
+
+
+class SyncAttributeSchemaModel(BaseModel):
+    field: str
+    label: str
+    status: str
+    differences: list[SyncAttributeDifferenceModel] = Field(default_factory=list)
 
 
 class SyncPreviewResponse(BaseModel):
@@ -483,7 +510,17 @@ class SyncPreviewResponse(BaseModel):
     component_name: str
     sync_status: str
     is_outdated: bool
-    changes: list[SyncFieldChangeModel]
+    scalar_fields: list[SyncScalarFieldModel] = Field(default_factory=list)
+    attribute_schema: SyncAttributeSchemaModel
+
+
+class SyncFieldApplyRequest(BaseModel):
+    field: str
+
+
+class SyncAttributeSchemaUpdateRequest(BaseModel):
+    add_attribute_names: list[str] = Field(default_factory=list)
+    remove_attribute_names: list[str] = Field(default_factory=list)
 
 
 class MaterialModeResponse(BaseModel):

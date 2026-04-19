@@ -572,6 +572,7 @@ class ProjectInstanceSyncState(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     source_component_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     sync_notes: Mapped[str | None] = mapped_column(Text, default=None)
+    source_snapshot: Mapped[dict | None] = mapped_column(JSON, default=None)
 
     instance: Mapped[ProjectInstance] = relationship(back_populates="sync_state")
 

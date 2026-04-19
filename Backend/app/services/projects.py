@@ -45,6 +45,238 @@ STATUS_LABELS = {
 }
 
 SNAPSHOT_FIELDS = ("name", "short_name", "description", "short_description", "installation")
+SYNC_FIELD_LABELS = {
+    "name": "Name",
+    "short_name": "Short Name",
+    "description": "Description",
+    "short_description": "Short Description",
+    "installation": "Installation",
+    "attributes": "Base Attributes",
+}
+
+
+def _get_base_attribute_group(instance: ProjectInstance) -> ProjectInstanceAttributeGroup | None:
+    return next((group for group in instance.attribute_groups if not group.application_label), None)
+
+
+def _serialize_component_sync_attribute(definition: CatalogAttributeDefinition) -> dict:
+    return {
+        "name": definition.name,
+        "value_type": definition.value_type.value,
+        "options": [option.value for option in definition.options],
+    }
+
+
+def _serialize_instance_sync_attribute(value: ProjectInstanceAttributeValue) -> dict:
+    return {
+        "name": value.attribute_name,
+        "value_type": None,
+        "options": [],
+    }
+
+
+def _normalize_sync_attribute_definition(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        return None
+    options_raw = raw.get("options")
+    options = []
+    if isinstance(options_raw, list):
+        options = [str(option).strip() for option in options_raw if str(option).strip()]
+    value_type = raw.get("value_type")
+    return {
+        "name": name,
+        "value_type": str(value_type).strip() if value_type is not None and str(value_type).strip() else None,
+        "options": options,
+    }
+
+
+def _normalize_sync_scalar_value(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace("\r\n", "\n").replace("\r", "\n")
+    return value
+
+
+def _current_component_source_snapshot(component: CatalogComponent) -> dict:
+    return {
+        "fields": {field: getattr(component, field) for field in SNAPSHOT_FIELDS},
+        "base_attributes": [
+            _serialize_component_sync_attribute(definition)
+            for definition in _component_attribute_definitions(component, AttributeScope.BASE)
+        ],
+    }
+
+
+def _default_source_snapshot(instance: ProjectInstance) -> dict:
+    sync_state = instance.sync_state
+    if (
+        sync_state is not None
+        and sync_state.source_component_updated_at is not None
+        and sync_state.source_component_updated_at != instance.component.updated_at
+    ):
+        base_group = _get_base_attribute_group(instance)
+        return {
+            "fields": {field: getattr(instance, field) for field in SNAPSHOT_FIELDS},
+            "base_attributes": [
+                _serialize_instance_sync_attribute(value)
+                for value in (base_group.attribute_values if base_group else [])
+            ],
+        }
+    return _current_component_source_snapshot(instance.component)
+
+
+def _effective_source_snapshot(instance: ProjectInstance) -> dict:
+    raw_snapshot = instance.sync_state.source_snapshot if instance.sync_state and isinstance(instance.sync_state.source_snapshot, dict) else None
+    if raw_snapshot is None:
+        return _default_source_snapshot(instance)
+
+    raw_fields = raw_snapshot.get("fields") if isinstance(raw_snapshot.get("fields"), dict) else {}
+    raw_attributes = raw_snapshot.get("base_attributes") if isinstance(raw_snapshot.get("base_attributes"), list) else []
+    normalized_attributes = []
+    for item in raw_attributes:
+        normalized = _normalize_sync_attribute_definition(item)
+        if normalized is not None:
+            normalized_attributes.append(normalized)
+
+    return {
+        "fields": {field: raw_fields.get(field) for field in SNAPSHOT_FIELDS},
+        "base_attributes": normalized_attributes,
+    }
+
+
+def _store_source_snapshot(instance: ProjectInstance, snapshot: dict) -> None:
+    if instance.sync_state is None:
+        instance.sync_state = ProjectInstanceSyncState(instance=instance)
+    instance.sync_state.source_snapshot = {
+        "fields": {field: snapshot.get("fields", {}).get(field) for field in SNAPSHOT_FIELDS},
+        "base_attributes": [
+            normalized
+            for item in snapshot.get("base_attributes", [])
+            if (normalized := _normalize_sync_attribute_definition(item)) is not None
+        ],
+    }
+
+
+def _store_current_component_source_snapshot(instance: ProjectInstance) -> None:
+    _store_source_snapshot(instance, _current_component_source_snapshot(instance.component))
+
+
+def _build_scalar_sync_field(instance: ProjectInstance, field: str, snapshot_fields: dict[str, object]) -> dict:
+    instance_value = getattr(instance, field)
+    catalog_value = getattr(instance.component, field)
+    snapshot_value = snapshot_fields.get(field)
+    normalized_instance_value = _normalize_sync_scalar_value(instance_value)
+    normalized_catalog_value = _normalize_sync_scalar_value(catalog_value)
+    normalized_snapshot_value = _normalize_sync_scalar_value(snapshot_value)
+
+    if normalized_instance_value == normalized_catalog_value:
+        status = "in_sync"
+    elif normalized_snapshot_value == normalized_catalog_value:
+        status = "customized"
+    elif normalized_instance_value == normalized_snapshot_value:
+        status = "stale"
+    else:
+        status = "conflict"
+
+    return {
+        "field": field,
+        "label": SYNC_FIELD_LABELS[field],
+        "status": status,
+        "instance_value": instance_value,
+        "catalog_value": catalog_value,
+        "snapshot_value": snapshot_value,
+        "can_apply_catalog": normalized_instance_value != normalized_catalog_value,
+    }
+
+
+def _build_attribute_schema_sync(instance: ProjectInstance, snapshot: dict) -> dict:
+    base_group = _get_base_attribute_group(instance)
+    instance_definitions = {
+        value.attribute_name: _serialize_instance_sync_attribute(value)
+        for value in (base_group.attribute_values if base_group else [])
+    }
+    catalog_definitions = {
+        definition.name: _serialize_component_sync_attribute(definition)
+        for definition in _component_attribute_definitions(instance.component, AttributeScope.BASE)
+    }
+    snapshot_definitions = {
+        item["name"]: item
+        for item in snapshot.get("base_attributes", [])
+        if isinstance(item, dict) and item.get("name")
+    }
+
+    differences = []
+    for name in sorted(set(instance_definitions) | set(catalog_definitions)):
+        instance_definition = instance_definitions.get(name)
+        catalog_definition = catalog_definitions.get(name)
+        snapshot_definition = snapshot_definitions.get(name)
+        if instance_definition and catalog_definition:
+            continue
+        if catalog_definition and not instance_definition:
+            differences.append(
+                {
+                    "name": name,
+                    "status": "missing_in_instance",
+                    "instance_definition": None,
+                    "catalog_definition": catalog_definition,
+                    "snapshot_definition": snapshot_definition,
+                    "can_add": True,
+                    "can_remove": False,
+                }
+            )
+        elif instance_definition and not catalog_definition:
+            differences.append(
+                {
+                    "name": name,
+                    "status": "extra_in_instance",
+                    "instance_definition": instance_definition,
+                    "catalog_definition": None,
+                    "snapshot_definition": snapshot_definition,
+                    "can_add": False,
+                    "can_remove": True,
+                }
+            )
+
+    return {
+        "field": "attributes",
+        "label": SYNC_FIELD_LABELS["attributes"],
+        "status": "out_of_sync" if differences else "in_sync",
+        "differences": differences,
+    }
+
+
+def _build_instance_sync_preview(instance: ProjectInstance) -> dict:
+    snapshot = _effective_source_snapshot(instance)
+    scalar_fields = [
+        _build_scalar_sync_field(instance, field, snapshot.get("fields", {}))
+        for field in SNAPSHOT_FIELDS
+    ]
+    attribute_schema = _build_attribute_schema_sync(instance, snapshot)
+
+    statuses = [field["status"] for field in scalar_fields]
+    has_customized = any(status == "customized" for status in statuses)
+    has_outdated = any(status in {"stale", "conflict"} for status in statuses) or attribute_schema["status"] != "in_sync"
+    has_any_drift = has_customized or has_outdated
+
+    if has_outdated:
+        sync_status = SyncStatus.OUT_OF_SYNC.value
+    elif has_customized:
+        sync_status = SyncStatus.CUSTOMIZED.value
+    else:
+        sync_status = SyncStatus.UP_TO_DATE.value
+
+    return {
+        "instance_id": instance.id,
+        "instance_name": instance.name,
+        "component_id": instance.component_id,
+        "component_name": instance.component.name,
+        "sync_status": sync_status,
+        "is_outdated": has_any_drift,
+        "scalar_fields": scalar_fields,
+        "attribute_schema": attribute_schema,
+    }
 
 
 def get_projects_page_data(session: Session, user: User | None = None) -> dict:
@@ -314,6 +546,7 @@ def create_project_instance(
             last_synced_at=utcnow(),
             source_component_updated_at=component.updated_at,
             sync_notes="Snapshot created from catalog template.",
+            source_snapshot=_current_component_source_snapshot(component),
         )
     )
     if actor_user is not None:
@@ -392,9 +625,9 @@ def update_project_instance(
     if instance.sync_state is None:
         instance.sync_state = ProjectInstanceSyncState(instance=instance)
         session.add(instance.sync_state)
+    if instance.sync_state.source_snapshot is None:
+        _store_current_component_source_snapshot(instance)
     instance.sync_state.sync_status = SyncStatus.CUSTOMIZED
-    instance.sync_state.last_synced_at = utcnow()
-    instance.sync_state.source_component_updated_at = instance.component.updated_at
     instance.sync_state.sync_notes = "Project instance customized after snapshot creation."
     next_snapshot = _instance_snapshot(instance)
     activity_changes = _describe_instance_changes(previous_snapshot, next_snapshot)
@@ -993,44 +1226,7 @@ def get_instance_sync_preview(session: Session, instance_id: int) -> dict | None
     )
     if instance is None:
         return None
-
-    changes = []
-    for field in SNAPSHOT_FIELDS:
-        instance_value = getattr(instance, field)
-        component_value = getattr(instance.component, field)
-        if instance_value != component_value:
-            changes.append(
-                {
-                    "field": field,
-                    "current": instance_value,
-                    "catalog": component_value,
-                }
-            )
-
-    base_group = next((group for group in instance.attribute_groups if not group.application_label), None)
-    instance_attributes = [value.attribute_name for value in base_group.attribute_values] if base_group else []
-    component_attributes = [definition.name for definition in _component_attribute_definitions(instance.component, AttributeScope.BASE)]
-    if instance_attributes != component_attributes:
-        changes.append(
-            {
-                "field": "attributes",
-                "current": ", ".join(instance_attributes) if instance_attributes else None,
-                "catalog": ", ".join(component_attributes) if component_attributes else None,
-            }
-        )
-
-    sync_status = _effective_sync_status(instance).value
-    is_outdated = _is_instance_outdated(instance)
-
-    return {
-        "instance_id": instance.id,
-        "instance_name": instance.name,
-        "component_id": instance.component_id,
-        "component_name": instance.component.name,
-        "sync_status": sync_status,
-        "is_outdated": is_outdated or bool(changes),
-        "changes": changes,
-    }
+    return _build_instance_sync_preview(instance)
 
 
 def refresh_instance_snapshot(
@@ -1064,6 +1260,7 @@ def refresh_instance_snapshot(
     instance.sync_state.last_synced_at = utcnow()
     instance.sync_state.source_component_updated_at = instance.component.updated_at
     instance.sync_state.sync_notes = f"Refreshed manually by {actor_user.username if actor_user else 'system'}."
+    _store_current_component_source_snapshot(instance)
     if actor_user is not None:
         record_project_activity(
             session,
@@ -1085,10 +1282,253 @@ def refresh_instance_snapshot(
                 headline="Catalog values reapplied",
                 subject_name=instance.name,
                 notes=[f"Template: {instance.component.name}"],
-                changes=_describe_sync_preview_changes(previous_preview["changes"] if previous_preview else []),
+                changes=_describe_sync_preview_changes(previous_preview),
                 kind="instance",
             ),
         )
+    session.commit()
+    return get_instance_sync_preview(session, instance_id)
+
+
+def apply_catalog_value_to_instance_field(
+    session: Session,
+    *,
+    instance_id: int,
+    field: str,
+    actor_user: User | None,
+    mutation_batch_id: str | None = None,
+) -> dict | None:
+    if field not in SNAPSHOT_FIELDS:
+        raise ValueError("Unsupported sync field.")
+
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id)
+        .options(
+            selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
+    )
+    if instance is None:
+        return None
+
+    before_value = getattr(instance, field)
+    catalog_value = getattr(instance.component, field)
+    setattr(instance, field, catalog_value)
+
+    if instance.sync_state is None:
+        instance.sync_state = ProjectInstanceSyncState(instance=instance)
+        session.add(instance.sync_state)
+    snapshot = _effective_source_snapshot(instance)
+    snapshot["fields"][field] = catalog_value
+    _store_source_snapshot(instance, snapshot)
+    instance.sync_state.sync_status = SyncStatus.UP_TO_DATE
+    instance.sync_state.last_synced_at = utcnow()
+    instance.sync_state.source_component_updated_at = instance.component.updated_at
+    instance.sync_state.sync_notes = f"Synchronized {SYNC_FIELD_LABELS[field].lower()} from catalog."
+
+    if actor_user is not None and before_value != catalog_value:
+        record_project_activity(
+            session,
+            project=instance.project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Synchronized {SYNC_FIELD_LABELS[field]} for {instance.name}",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="synced",
+            title=f"Synchronized {SYNC_FIELD_LABELS[field]} for {instance.name}",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=build_activity_details(
+                headline="Catalog field applied",
+                subject_name=instance.name,
+                changes=[build_activity_change(SYNC_FIELD_LABELS[field], before_value, catalog_value)],
+                kind="instance",
+            ),
+        )
+
+    session.commit()
+    return get_instance_sync_preview(session, instance_id)
+
+
+def apply_instance_value_to_catalog_field(
+    session: Session,
+    *,
+    instance_id: int,
+    field: str,
+    actor_user: User | None,
+    mutation_batch_id: str | None = None,
+) -> dict | None:
+    if field not in SNAPSHOT_FIELDS:
+        raise ValueError("Unsupported sync field.")
+
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id)
+        .options(
+            selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
+    )
+    if instance is None:
+        return None
+
+    catalog_before_value = getattr(instance.component, field)
+    instance_value = getattr(instance, field)
+    setattr(instance.component, field, instance_value)
+    instance.component.updated_at = utcnow()
+
+    if instance.sync_state is None:
+        instance.sync_state = ProjectInstanceSyncState(instance=instance)
+        session.add(instance.sync_state)
+    snapshot = _effective_source_snapshot(instance)
+    snapshot["fields"][field] = instance_value
+    _store_source_snapshot(instance, snapshot)
+    instance.sync_state.sync_status = SyncStatus.UP_TO_DATE
+    instance.sync_state.last_synced_at = utcnow()
+    instance.sync_state.source_component_updated_at = instance.component.updated_at
+    instance.sync_state.sync_notes = f"Applied {SYNC_FIELD_LABELS[field].lower()} from instance to catalog."
+
+    if actor_user is not None and catalog_before_value != instance_value:
+        record_project_activity(
+            session,
+            project=instance.project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Applied {SYNC_FIELD_LABELS[field]} from {instance.name} to catalog",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="CatalogComponent",
+            entity_id=instance.component_id,
+            action="updated",
+            title=f"Applied {SYNC_FIELD_LABELS[field]} from {instance.name} to catalog",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=build_activity_details(
+                headline="Instance field applied to catalog",
+                subject_name=instance.component.name,
+                changes=[build_activity_change(SYNC_FIELD_LABELS[field], catalog_before_value, instance_value)],
+                kind="catalog_component",
+            ),
+        )
+
+    session.commit()
+    return get_instance_sync_preview(session, instance_id)
+
+
+def reconcile_instance_base_attributes(
+    session: Session,
+    *,
+    instance_id: int,
+    add_attribute_names: list[str],
+    remove_attribute_names: list[str],
+    actor_user: User | None,
+    mutation_batch_id: str | None = None,
+) -> dict | None:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id)
+        .options(
+            selectinload(ProjectInstance.component)
+            .selectinload(CatalogComponent.attribute_definitions)
+            .selectinload(CatalogAttributeDefinition.options),
+            selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.sync_state),
+        )
+    )
+    if instance is None:
+        return None
+
+    add_names = {name.strip() for name in add_attribute_names if name.strip()}
+    remove_names = {name.strip() for name in remove_attribute_names if name.strip()}
+    if not add_names and not remove_names:
+        return _build_instance_sync_preview(instance)
+
+    base_group = _get_base_attribute_group(instance)
+    if base_group is None:
+        base_group = ProjectInstanceAttributeGroup(
+            instance=instance,
+            name="Base Attributes",
+            application_label=None,
+            sort_order=1,
+        )
+        session.add(base_group)
+        session.flush()
+
+    existing_values = {value.attribute_name: value for value in base_group.attribute_values}
+    catalog_definitions = {
+        definition.name: definition
+        for definition in _component_attribute_definitions(instance.component, AttributeScope.BASE)
+    }
+
+    added = []
+    removed = []
+    for name in sorted(add_names):
+        if name in existing_values or name not in catalog_definitions:
+            continue
+        base_group.attribute_values.append(
+            ProjectInstanceAttributeValue(
+                attribute_name=name,
+                value=None,
+                sort_order=len(base_group.attribute_values) + 1,
+            )
+        )
+        added.append(name)
+
+    for value in list(base_group.attribute_values):
+        if value.attribute_name in remove_names and value.attribute_name not in catalog_definitions:
+            base_group.attribute_values.remove(value)
+            removed.append(value.attribute_name)
+
+    for index, value in enumerate(sorted(base_group.attribute_values, key=lambda item: item.attribute_name), start=1):
+        value.sort_order = index
+
+    if instance.sync_state is None:
+        instance.sync_state = ProjectInstanceSyncState(instance=instance)
+        session.add(instance.sync_state)
+    _store_current_component_source_snapshot(instance)
+    instance.sync_state.sync_status = SyncStatus.UP_TO_DATE
+    instance.sync_state.last_synced_at = utcnow()
+    instance.sync_state.source_component_updated_at = instance.component.updated_at
+    instance.sync_state.sync_notes = "Reconciled base attributes against catalog."
+
+    if actor_user is not None and (added or removed):
+        changes = [build_activity_change("Added attribute", None, name) for name in added] + [
+            build_activity_change("Removed attribute", name, None) for name in removed
+        ]
+        record_project_activity(
+            session,
+            project=instance.project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Reconciled attributes for {instance.name}",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectInstance",
+            entity_id=instance.id,
+            action="synced",
+            title=f"Reconciled attributes for {instance.name}",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=build_activity_details(
+                headline="Base attribute schema reconciled",
+                subject_name=instance.name,
+                changes=changes,
+                kind="instance",
+            ),
+        )
+
     session.commit()
     return get_instance_sync_preview(session, instance_id)
 
@@ -1591,16 +2031,29 @@ def _describe_material_quantity_changes(before: list[dict], after: list[dict]) -
     return changes
 
 
-def _describe_sync_preview_changes(changes: list[dict]) -> list[dict]:
+def _describe_sync_preview_changes(preview: dict | None) -> list[dict]:
     described: list[dict] = []
-    for change in changes:
-        field = change.get("field")
-        current = change.get("current")
-        catalog = change.get("catalog")
-        if field == "attributes":
-            described.append(build_activity_change("Attributes", current, catalog))
+    if not preview:
+        return described
+
+    for field in preview.get("scalar_fields", []):
+        if field.get("status") == "in_sync":
             continue
-        described.append(build_activity_change(INSTANCE_FIELD_LABELS.get(field, str(field).replace("_", " ").title()), current, catalog))
+        described.append(
+            build_activity_change(
+                field.get("label") or INSTANCE_FIELD_LABELS.get(field.get("field"), "Field"),
+                field.get("instance_value"),
+                field.get("catalog_value"),
+            )
+        )
+
+    attribute_schema = preview.get("attribute_schema") or {}
+    if attribute_schema.get("status") != "in_sync":
+        missing = sorted(item["name"] for item in attribute_schema.get("differences", []) if item.get("status") == "missing_in_instance")
+        extra = sorted(item["name"] for item in attribute_schema.get("differences", []) if item.get("status") == "extra_in_instance")
+        before = ", ".join(extra) if extra else None
+        after = ", ".join(missing) if missing else None
+        described.append(build_activity_change("Base Attributes", before, after))
     return described
 
 
@@ -1764,14 +2217,11 @@ def _apply_base_attribute_values(instance: ProjectInstance, attribute_values: di
 
 
 def _is_instance_outdated(instance: ProjectInstance) -> bool:
-    return bool(instance.sync_state and instance.sync_state.source_component_updated_at != instance.component.updated_at)
+    return _build_instance_sync_preview(instance)["is_outdated"]
 
 
 def _effective_sync_status(instance: ProjectInstance) -> SyncStatus:
-    base_status = instance.sync_state.sync_status if instance.sync_state else SyncStatus.UP_TO_DATE
-    if _is_instance_outdated(instance) and base_status == SyncStatus.UP_TO_DATE:
-        return SyncStatus.OUT_OF_SYNC
-    return base_status
+    return SyncStatus(_build_instance_sync_preview(instance)["sync_status"])
 
 
 def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:

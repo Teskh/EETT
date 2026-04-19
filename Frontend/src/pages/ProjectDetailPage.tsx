@@ -8,6 +8,7 @@ import type {
   AvailableComponent,
   BomEntry,
   EditableAttribute,
+  InstanceSyncPreview,
   InstanceMaterial,
   ProjectCategorySection,
   ProjectDetailData,
@@ -69,6 +70,11 @@ type TargetOption = {
   category_name: string;
   type: string;
 };
+type SyncFieldKey = "name" | "short_name" | "description" | "short_description" | "installation" | "attributes";
+type SyncModalState = {
+  instanceId: number;
+  field: SyncFieldKey;
+} | null;
 
 function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNode[] {
   const rootNodes: CategoryNode[] = [];
@@ -823,6 +829,273 @@ function renderOccurrenceSummary(
   );
 }
 
+function getScalarSyncField(preview: InstanceSyncPreview | null | undefined, field: SyncFieldKey) {
+  if (!preview || field === "attributes") {
+    return null;
+  }
+  return preview.scalar_fields.find((item) => item.field === field) || null;
+}
+
+function getSyncStatusMeta(status: string) {
+  switch (status) {
+    case "customized":
+      return {
+        label: "Custom",
+        className: "border-sky-200 text-sky-700 bg-sky-50 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-300",
+      };
+    case "stale":
+      return {
+        label: "Stale",
+        className: "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300",
+      };
+    case "conflict":
+      return {
+        label: "Conflict",
+        className: "border-red-200 text-red-700 bg-red-50 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300",
+      };
+    case "out_of_sync":
+      return {
+        label: "Schema",
+        className: "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300",
+      };
+    default:
+      return null;
+  }
+}
+
+function SyncIndicatorButton({
+  status,
+  onClick,
+  title,
+}: {
+  status: string | null | undefined;
+  onClick: () => void;
+  title: string;
+}) {
+  const meta = status ? getSyncStatusMeta(status) : null;
+  if (!meta) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest transition-colors hover:opacity-80 ${meta.className}`}
+    >
+      {meta.label}
+    </button>
+  );
+}
+
+function SyncValuePanel({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null;
+}) {
+  return (
+    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
+      <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">{label}</div>
+      <div className="text-sm text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap break-words">{value || "Empty"}</div>
+    </div>
+  );
+}
+
+function InstanceSyncModal({
+  open,
+  instance,
+  preview,
+  loading,
+  targetField,
+  syncing,
+  onClose,
+  onRefreshAll,
+  onApplyCatalogField,
+  onApplyInstanceField,
+  onAddAttributes,
+  onRemoveAttributes,
+}: {
+  open: boolean;
+  instance: ProjectInstance | null;
+  preview: InstanceSyncPreview | null;
+  loading: boolean;
+  targetField: SyncFieldKey | null;
+  syncing: boolean;
+  onClose: () => void;
+  onRefreshAll: () => Promise<void>;
+  onApplyCatalogField: (field: Exclude<SyncFieldKey, "attributes">) => Promise<void>;
+  onApplyInstanceField: (field: Exclude<SyncFieldKey, "attributes">) => Promise<void>;
+  onAddAttributes: (names: string[]) => Promise<void>;
+  onRemoveAttributes: (names: string[]) => Promise<void>;
+}) {
+  if (!open || !instance || !targetField) {
+    return null;
+  }
+
+  const scalarField = targetField === "attributes" ? null : getScalarSyncField(preview, targetField);
+  const attributeSchema = targetField === "attributes" ? preview?.attribute_schema ?? null : null;
+  const missingAttributes = attributeSchema?.differences.filter((item) => item.status === "missing_in_instance") || [];
+  const extraAttributes = attributeSchema?.differences.filter((item) => item.status === "extra_in_instance") || [];
+  const status = targetField === "attributes" ? attributeSchema?.status : scalarField?.status;
+  const statusMeta = status ? getSyncStatusMeta(status) : null;
+
+  return (
+    <Modal
+      open={open}
+      title={`${instance.name} Sync`}
+      kicker="Field Status"
+      onClose={onClose}
+      panelClassName="max-w-3xl"
+    >
+      {loading || !preview ? (
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading sync details...</div>
+      ) : targetField === "attributes" && attributeSchema ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{attributeSchema.label}</div>
+              <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                {attributeSchema.differences.length
+                  ? "Catalog and instance attribute rows differ."
+                  : "Instance base attributes match the catalog schema."}
+              </div>
+            </div>
+            {statusMeta ? <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-widest ${statusMeta.className}`}>{statusMeta.label}</span> : null}
+          </div>
+
+          {missingAttributes.length ? (
+            <div className="rounded-lg border border-black/10 dark:border-white/10 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Missing in Instance</div>
+                <button
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => void onAddAttributes(missingAttributes.map((item) => item.name))}
+                  className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold disabled:opacity-50"
+                >
+                  Add All
+                </button>
+              </div>
+              <div className="space-y-2">
+                {missingAttributes.map((item) => (
+                  <div key={`missing-${item.name}`} className="flex items-center justify-between gap-3 rounded-lg bg-zinc-50 dark:bg-white/5 p-3">
+                    <div>
+                      <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.name}</div>
+                      <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                        {item.catalog_definition?.value_type || "text"}
+                        {item.catalog_definition?.options.length ? ` • ${item.catalog_definition.options.join(", ")}` : ""}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={syncing}
+                      onClick={() => void onAddAttributes([item.name])}
+                      className="px-3 py-1.5 rounded bg-accent-500 hover:bg-accent-400 text-xs font-semibold text-zinc-950 disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {extraAttributes.length ? (
+            <div className="rounded-lg border border-black/10 dark:border-white/10 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Extra in Instance</div>
+                <button
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => void onRemoveAttributes(extraAttributes.map((item) => item.name))}
+                  className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
+                >
+                  Remove All
+                </button>
+              </div>
+              <div className="space-y-2">
+                {extraAttributes.map((item) => (
+                  <div key={`extra-${item.name}`} className="flex items-center justify-between gap-3 rounded-lg bg-zinc-50 dark:bg-white/5 p-3">
+                    <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.name}</div>
+                    <button
+                      type="button"
+                      disabled={syncing}
+                      onClick={() => void onRemoveAttributes([item.name])}
+                      className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!attributeSchema.differences.length ? (
+            <div className="rounded-lg border border-dashed border-black/10 dark:border-white/10 p-4 text-sm text-zinc-500 dark:text-zinc-400">
+              No schema differences detected.
+            </div>
+          ) : null}
+        </div>
+      ) : scalarField ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{scalarField.label}</div>
+              <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                Compare the catalog value against the current instance value.
+              </div>
+            </div>
+            {statusMeta ? <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-widest ${statusMeta.className}`}>{statusMeta.label}</span> : null}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <SyncValuePanel label="Catalog" value={scalarField.catalog_value} />
+            <SyncValuePanel label="Instance" value={scalarField.instance_value} />
+          </div>
+
+          {scalarField.can_apply_catalog ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                disabled={syncing}
+                onClick={() => void onApplyInstanceField(targetField)}
+                className="px-4 py-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-semibold disabled:opacity-50"
+              >
+                Apply Instance Value to Catalog
+              </button>
+              <button
+                type="button"
+                disabled={syncing}
+                onClick={() => void onApplyCatalogField(targetField)}
+                className="px-4 py-2 rounded bg-accent-500 hover:bg-accent-400 text-sm font-semibold text-zinc-950 disabled:opacity-50"
+              >
+                Apply Catalog Value
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">No sync details found for this field.</div>
+      )}
+
+      <div className="flex justify-end pt-5 mt-5 border-t border-black/10 dark:border-white/10">
+        <button
+          type="button"
+          disabled={syncing}
+          onClick={() => void onRefreshAll()}
+          className="px-4 py-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-semibold disabled:opacity-50"
+        >
+          Refresh All Tracked Fields
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function OccurrenceEditorCard({
   instance,
   occurrence,
@@ -1309,6 +1582,10 @@ function InstanceCard({
   instance,
   subtypeOptions,
   targetOptions,
+  syncPreview,
+  syncPreviewLoading,
+  onEnsureSyncPreview,
+  onOpenSyncModal,
   onEdit,
   onDelete,
   onOpenCalculationSheet,
@@ -1320,6 +1597,10 @@ function InstanceCard({
   instance: ProjectInstance;
   subtypeOptions: FlatSubtype[];
   targetOptions: TargetOption[];
+  syncPreview: InstanceSyncPreview | null;
+  syncPreviewLoading: boolean;
+  onEnsureSyncPreview: () => Promise<void>;
+  onOpenSyncModal: (field: SyncFieldKey) => void;
   onEdit: () => void;
   onDelete: () => void;
   onOpenCalculationSheet: (material: InstanceMaterial) => void;
@@ -1330,7 +1611,18 @@ function InstanceCard({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [materialsExpanded, setMaterialsExpanded] = useState(true);
-  const syncColor = instance.sync_state.status === "up-to-date" ? "text-green-400" : "text-amber-400";
+  const nameSync = getScalarSyncField(syncPreview, "name");
+  const shortNameSync = getScalarSyncField(syncPreview, "short_name");
+  const descriptionSync = getScalarSyncField(syncPreview, "description");
+  const shortDescriptionSync = getScalarSyncField(syncPreview, "short_description");
+  const installationSync = getScalarSyncField(syncPreview, "installation");
+  const attributeSchemaSync = syncPreview?.attribute_schema ?? null;
+
+  useEffect(() => {
+    if (expanded && !syncPreview && !syncPreviewLoading) {
+      void onEnsureSyncPreview();
+    }
+  }, [expanded, onEnsureSyncPreview, syncPreview, syncPreviewLoading]);
 
   return (
     <div className="border-b border-black/10 dark:border-white/10 last:border-0">
@@ -1341,9 +1633,19 @@ function InstanceCard({
         <div className="min-w-0">
           <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2 min-w-0">
             <span className="truncate">{instance.name}</span>
+            <SyncIndicatorButton
+              status={nameSync?.status}
+              title="View name sync details"
+              onClick={() => onOpenSyncModal("name")}
+            />
             <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle">
               {instance.short_name || instance.name}
             </span>
+            <SyncIndicatorButton
+              status={shortNameSync?.status}
+              title="View short name sync details"
+              onClick={() => onOpenSyncModal("short_name")}
+            />
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -1385,16 +1687,33 @@ function InstanceCard({
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-info text-zinc-600" /> Info
                 </h6>
-                <p className="text-sm text-zinc-800 dark:text-zinc-300 mb-2">{instance.description || "No description provided."}</p>
-                <p className="text-xs text-zinc-600 dark:text-zinc-400 mb-2">
-                  Short: {instance.short_description || "No short description."}
-                </p>
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Description</span>
+                    <SyncIndicatorButton
+                      status={descriptionSync?.status}
+                      title="View description sync details"
+                      onClick={() => onOpenSyncModal("description")}
+                    />
+                  </div>
+                  <p className="text-sm text-zinc-800 dark:text-zinc-300">{instance.description || "No description provided."}</p>
+                </div>
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Short Description</span>
+                    <SyncIndicatorButton
+                      status={shortDescriptionSync?.status}
+                      title="View short description sync details"
+                      onClick={() => onOpenSyncModal("short_description")}
+                    />
+                  </div>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                    {instance.short_description || "No short description."}
+                  </p>
+                </div>
                 <div className="flex items-center gap-4 text-xs font-mono">
                   <span className="text-zinc-600 dark:text-zinc-400">
                     Unit Amount: <strong className="text-zinc-900 dark:text-zinc-200">{instance.unit_amount ?? "-"}</strong>
-                  </span>
-                  <span className="text-zinc-600 dark:text-zinc-400">
-                    Sync: <strong className={syncColor}>{instance.sync_state.status}</strong>
                   </span>
                 </div>
               </div>
@@ -1437,12 +1756,27 @@ function InstanceCard({
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-wrench text-zinc-600" /> Installation
+                  <SyncIndicatorButton
+                    status={installationSync?.status}
+                    title="View installation sync details"
+                    onClick={() => onOpenSyncModal("installation")}
+                  />
                 </h6>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "No installation notes."}</p>
               </div>
             </div>
 
             <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                  <i className="ph-bold ph-list-dashes text-zinc-600" /> Attributes
+                </h5>
+                <SyncIndicatorButton
+                  status={attributeSchemaSync?.status}
+                  title="View attribute sync details"
+                  onClick={() => onOpenSyncModal("attributes")}
+                />
+              </div>
               {instance.attributes.length ? (
                 instance.attributes.map((group) => (
                   <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
@@ -1511,10 +1845,16 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
   const [categorySearch, setCategorySearch] = useState("");
   const [modalState, setModalState] = useState<ModalState>(null);
   const [calculationSheetState, setCalculationSheetState] = useState<CalculationSheetState>(null);
+  const [syncModalState, setSyncModalState] = useState<SyncModalState>(null);
+  const [syncPreviews, setSyncPreviews] = useState<Record<number, InstanceSyncPreview>>({});
+  const [syncPreviewLoading, setSyncPreviewLoading] = useState<Record<number, boolean>>({});
+  const [syncingInstanceId, setSyncingInstanceId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  async function loadProject() {
-    setLoading(true);
+  async function loadProject(showSpinner = true) {
+    if (showSpinner) {
+      setLoading(true);
+    }
     setError(null);
     try {
       setData(await api.getProject(projectId));
@@ -1522,12 +1862,35 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       const message = err instanceof ApiError ? err.message : "Could not load project.";
       setError(message);
     } finally {
-      setLoading(false);
+      if (showSpinner) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function ensureSyncPreview(instanceId: number, force = false) {
+    if (!force && syncPreviews[instanceId]) {
+      return syncPreviews[instanceId];
+    }
+    setSyncPreviewLoading((current) => ({ ...current, [instanceId]: true }));
+    try {
+      const preview = await api.getProjectInstanceSyncPreview(projectId, instanceId);
+      setSyncPreviews((current) => ({ ...current, [instanceId]: preview }));
+      return preview;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not load sync details.";
+      setError(message);
+      throw err;
+    } finally {
+      setSyncPreviewLoading((current) => ({ ...current, [instanceId]: false }));
     }
   }
 
   useEffect(() => {
     onTitleChange?.("Project");
+    setSyncPreviews({});
+    setSyncPreviewLoading({});
+    setSyncModalState(null);
     void loadProject();
   }, [onTitleChange, projectId]);
 
@@ -1546,6 +1909,10 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     modalState?.kind === "edit" && activeCategory
       ? activeCategory.instances.find((instance) => instance.id === modalState.instanceId)
       : undefined;
+
+  const activeSyncInstance = syncModalState && data
+    ? data.categories.flatMap((category) => category.instances).find((instance) => instance.id === syncModalState.instanceId) || null
+    : null;
 
   async function handleCreateInstance(payload: {
     component_id?: number;
@@ -1730,6 +2097,79 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     }
   }
 
+  async function openSyncModal(instanceId: number, field: SyncFieldKey) {
+    setSyncModalState({ instanceId, field });
+    try {
+      await ensureSyncPreview(instanceId);
+    } catch {
+      // Error state is already surfaced through the page banner.
+    }
+  }
+
+  async function refreshProjectAndSyncPreview(instanceId: number, nextPreview?: InstanceSyncPreview) {
+    if (nextPreview) {
+      setSyncPreviews((current) => ({ ...current, [instanceId]: nextPreview }));
+    }
+    await loadProject(false);
+    await ensureSyncPreview(instanceId, true);
+  }
+
+  async function handleRefreshSync(instanceId: number) {
+    setSyncingInstanceId(instanceId);
+    setError(null);
+    try {
+      const preview = await api.refreshProjectInstanceSync(projectId, instanceId);
+      await refreshProjectAndSyncPreview(instanceId, preview);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not refresh tracked fields.";
+      setError(message);
+    } finally {
+      setSyncingInstanceId(null);
+    }
+  }
+
+  async function handleApplyCatalogField(instanceId: number, field: Exclude<SyncFieldKey, "attributes">) {
+    setSyncingInstanceId(instanceId);
+    setError(null);
+    try {
+      const preview = await api.applyProjectInstanceCatalogField(projectId, instanceId, field);
+      await refreshProjectAndSyncPreview(instanceId, preview);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not apply catalog value.";
+      setError(message);
+    } finally {
+      setSyncingInstanceId(null);
+    }
+  }
+
+  async function handleApplyInstanceField(instanceId: number, field: Exclude<SyncFieldKey, "attributes">) {
+    setSyncingInstanceId(instanceId);
+    setError(null);
+    try {
+      const preview = await api.applyProjectInstanceFieldToCatalog(projectId, instanceId, field);
+      await refreshProjectAndSyncPreview(instanceId, preview);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not apply instance value to catalog.";
+      setError(message);
+    } finally {
+      setSyncingInstanceId(null);
+    }
+  }
+
+  async function handleReconcileAttributes(instanceId: number, payload: { add_attribute_names?: string[]; remove_attribute_names?: string[] }) {
+    setSyncingInstanceId(instanceId);
+    setError(null);
+    try {
+      const preview = await api.reconcileProjectInstanceAttributes(projectId, instanceId, payload);
+      await refreshProjectAndSyncPreview(instanceId, preview);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not reconcile attribute schema.";
+      setError(message);
+    } finally {
+      setSyncingInstanceId(null);
+    }
+  }
+
   if (loading) {
     return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading project...</div>;
   }
@@ -1815,6 +2255,10 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                           target.instance_id !== instance.id &&
                           (category.linked_category_ids.length === 0 || category.linked_category_ids.includes(target.category_id)),
                       )}
+                      syncPreview={syncPreviews[instance.id] || null}
+                      syncPreviewLoading={Boolean(syncPreviewLoading[instance.id])}
+                      onEnsureSyncPreview={() => ensureSyncPreview(instance.id)}
+                      onOpenSyncModal={(field) => void openSyncModal(instance.id, field)}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
                       onOpenCalculationSheet={(material) =>
@@ -1904,6 +2348,46 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           onClose={() => setCalculationSheetState(null)}
         />
       ) : null}
+
+      <InstanceSyncModal
+        open={syncModalState !== null}
+        instance={activeSyncInstance}
+        preview={syncModalState ? syncPreviews[syncModalState.instanceId] || null : null}
+        loading={Boolean(syncModalState && syncPreviewLoading[syncModalState.instanceId])}
+        targetField={syncModalState?.field || null}
+        syncing={Boolean(syncModalState && syncingInstanceId === syncModalState.instanceId)}
+        onClose={() => setSyncModalState(null)}
+        onRefreshAll={async () => {
+          if (!syncModalState) {
+            return;
+          }
+          await handleRefreshSync(syncModalState.instanceId);
+        }}
+        onApplyCatalogField={async (field) => {
+          if (!syncModalState) {
+            return;
+          }
+          await handleApplyCatalogField(syncModalState.instanceId, field);
+        }}
+        onApplyInstanceField={async (field) => {
+          if (!syncModalState) {
+            return;
+          }
+          await handleApplyInstanceField(syncModalState.instanceId, field);
+        }}
+        onAddAttributes={async (names) => {
+          if (!syncModalState) {
+            return;
+          }
+          await handleReconcileAttributes(syncModalState.instanceId, { add_attribute_names: names });
+        }}
+        onRemoveAttributes={async (names) => {
+          if (!syncModalState) {
+            return;
+          }
+          await handleReconcileAttributes(syncModalState.instanceId, { remove_attribute_names: names });
+        }}
+      />
     </div>
   );
 }

@@ -28,6 +28,7 @@ import type {
   MaterialStudyGroupPayload,
   MaterialStudyGroupRow,
   MutationResult,
+  InstanceSyncPreview,
   ProjectDetailData,
   ProjectsBoardData,
   SessionUser,
@@ -508,6 +509,41 @@ export const api = {
   ) {
     return request<MaterialCalculationSheet>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}/calculation-sheet`, {
       method: "PUT",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  getProjectInstanceSyncPreview(projectId: number, instanceId: number) {
+    return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-preview`);
+  },
+  refreshProjectInstanceSync(projectId: number, instanceId: number, mutationBatchId?: string) {
+    return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/refresh`, {
+      method: "POST",
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  applyProjectInstanceCatalogField(projectId: number, instanceId: number, field: string, mutationBatchId?: string) {
+    return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-fields/apply-catalog`, {
+      method: "POST",
+      body: JSON.stringify({ field }),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  applyProjectInstanceFieldToCatalog(projectId: number, instanceId: number, field: string, mutationBatchId?: string) {
+    return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-fields/apply-instance`, {
+      method: "POST",
+      body: JSON.stringify({ field }),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  reconcileProjectInstanceAttributes(
+    projectId: number,
+    instanceId: number,
+    payload: { add_attribute_names?: string[]; remove_attribute_names?: string[] },
+    mutationBatchId?: string,
+  ) {
+    return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-attributes/reconcile`, {
+      method: "POST",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),
     });
