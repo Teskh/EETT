@@ -64,15 +64,21 @@ def _ensure_reportlab(message: str) -> None:
 
 
 def _build_styles():
-    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 
     styles = getSampleStyleSheet()
 
+    primary_color = colors.HexColor("#0f172a") # slate-900
+    secondary_color = colors.HexColor("#334155") # slate-700
+    accent_color = colors.HexColor("#2563eb") # blue-600
+    text_color = colors.HexColor("#1e293b") # slate-800
+
     overrides = {
-        "Heading1": ParagraphStyle(name="Heading1", fontSize=25, spaceAfter=4, fontName="Courier", leading=28),
-        "Heading2": ParagraphStyle(name="Heading2", fontSize=10, spaceAfter=4, leading=12),
-        "Normal": ParagraphStyle(name="Normal", fontSize=8, spaceAfter=0, spaceBefore=0, leading=10),
+        "Heading1": ParagraphStyle(name="Heading1", fontSize=24, spaceAfter=6, fontName="Helvetica-Bold", textColor=primary_color, leading=28),
+        "Heading2": ParagraphStyle(name="Heading2", fontSize=10.5, spaceAfter=4, fontName="Helvetica-Bold", textColor=secondary_color, leading=14),
+        "Normal": ParagraphStyle(name="Normal", fontSize=8.5, spaceAfter=0, spaceBefore=0, fontName="Helvetica", textColor=text_color, leading=11.5),
     }
     for name, style in overrides.items():
         for attr, value in style.__dict__.items():
@@ -80,64 +86,73 @@ def _build_styles():
                 setattr(styles[name], attr, value)
 
     custom_styles = {
-        "ProjectName": ParagraphStyle(name="ProjectName", fontSize=25, fontName="Courier-Bold", spaceAfter=6, leading=28),
+        "ProjectName": ParagraphStyle(name="ProjectName", fontSize=16, fontName="Helvetica", textColor=secondary_color, spaceAfter=8, leading=20),
         "TableHeader": ParagraphStyle(
             name="TableHeader",
             parent=styles["Normal"],
-            fontSize=8,
-            alignment=TA_CENTER,
+            fontSize=8.5,
+            alignment=TA_LEFT,
             fontName="Helvetica-Bold",
+            textColor=primary_color,
         ),
         "CategoryHeadingStyle": ParagraphStyle(
             name="CategoryHeadingStyle",
             parent=styles["Heading2"],
-            fontSize=11,
+            fontSize=13,
             fontName="Helvetica-Bold",
-            spaceBefore=6,
-            spaceAfter=3,
-            leading=13,
+            textColor=accent_color,
+            spaceBefore=12,
+            spaceAfter=6,
+            leading=16,
         ),
         "InstanceHeadingStyle": ParagraphStyle(
             name="InstanceHeadingStyle",
             parent=styles["Heading2"],
-            fontSize=10,
+            fontSize=11,
             fontName="Helvetica-Bold",
-            spaceBefore=2,
-            spaceAfter=1,
-            leading=12,
+            textColor=primary_color,
+            spaceBefore=8,
+            spaceAfter=4,
+            leading=14,
         ),
         "AccessoryHeading": ParagraphStyle(
             name="AccessoryHeading",
             parent=styles["Normal"],
-            fontSize=8,
+            fontSize=8.5,
             fontName="Helvetica-Bold",
-            spaceBefore=2,
-            spaceAfter=1,
-            leading=10,
+            textColor=primary_color,
+            spaceBefore=6,
+            spaceAfter=2,
+            leading=11,
         ),
         "TocTitleStyle": ParagraphStyle(
             name="TocTitleStyle",
             parent=styles["Heading2"],
             fontName="Helvetica-Bold",
-            fontSize=10,
-            leading=12,
+            fontSize=14,
+            textColor=primary_color,
+            leading=16,
+            spaceAfter=12,
         ),
         "TOCLevel0": ParagraphStyle(
             name="TOCLevel0",
             parent=styles["Normal"],
             fontName="Helvetica-Bold",
-            fontSize=9,
-            leading=11,
+            fontSize=10,
+            textColor=primary_color,
+            leading=14,
             leftIndent=0,
             firstLineIndent=0,
+            spaceBefore=3,
             spaceAfter=2,
         ),
         "TOCLevel1": ParagraphStyle(
             name="TOCLevel1",
             parent=styles["Normal"],
             fontSize=9,
-            leading=11,
-            leftIndent=20,
+            textColor=secondary_color,
+            leading=12,
+            leftIndent=15,
             firstLineIndent=0,
             spaceAfter=1,
         ),
@@ -153,12 +168,12 @@ def _build_cover_story(*, project_name: str, styles, title: str) -> list[Any]:
     from reportlab.platypus import PageBreak, Paragraph, Spacer
 
     return [
-        Spacer(1, 1 * inch),
+        Spacer(1, 2 * inch),
         Paragraph(escape(title), styles["Heading1"]),
-        Spacer(1, 0.5 * inch),
+        Spacer(1, 0.1 * inch),
         Paragraph(escape(project_name), styles["ProjectName"]),
-        Spacer(1, 0.5 * inch),
-        Paragraph(datetime.now().strftime("%Y/%m/%d"), styles["Heading1"]),
+        Spacer(1, 0.4 * inch),
+        Paragraph(datetime.now().strftime("%Y-%m-%d"), styles["Normal"]),
         PageBreak(),
     ]
 
@@ -344,16 +359,14 @@ def _attribute_table(attributes: list[dict[str, Any]], styles, *, include_group:
     table.setStyle(
         TableStyle(
             [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f8fafc")),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("GRID", (0, 0), (-1, -1), 1, colors.black),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
             ]
         )
     )
@@ -396,16 +409,14 @@ def _materials_table(materials: list[dict[str, Any]], styles, available_width: f
     table = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1)
 
     style_commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f8fafc")),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 1, colors.black),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]
 
     current_row = 1
@@ -489,13 +500,15 @@ def _bookmark_name(prefix: str, text: str) -> str:
 
 def _create_doc_template(output_path: Path, *, title: str):
     from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
     from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate
 
     def draw_page_number(canvas, doc) -> None:
         page_width, _ = doc.pagesize
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
-        canvas.drawRightString(page_width - doc.rightMargin, 30, str(canvas.getPageNumber()))
+        canvas.setFillColor(colors.HexColor("#64748b"))
+        canvas.drawRightString(page_width - doc.rightMargin, 30, f"Page {canvas.getPageNumber()}")
         canvas.restoreState()
 
     class ExportDocTemplate(BaseDocTemplate):

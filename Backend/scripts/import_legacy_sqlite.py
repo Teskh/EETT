@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -11,15 +12,17 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = REPO_ROOT / "Backend"
+DEFAULT_LEGACY_MAIN_DB = Path(__file__).resolve().with_name("main.db")
+DEFAULT_LEGACY_PROJECTS_DB = Path(__file__).resolve().with_name("projects.db")
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import OperationalError
 
 from app.config import Settings
-from app.database import create_engine_for_url, create_session_factory, schema_is_ready
+from app.database import Base, create_engine_for_url, create_session_factory, schema_is_ready
 from app.models import (
     CatalogAttributeDefinition,
     CatalogAttributeOption,
@@ -34,6 +37,7 @@ from app.models import (
     MaterialRuleGroup,
     NotificationType,
     Project,
+    ProjectActivityGroup,
     ProjectActivityLog,
     ProjectApproval,
     ProjectAuxiliaryMaterialSelection,
@@ -63,14 +67,28 @@ from app.models.entities import (
     ProjectInstanceSyncState,
     MaterialMode,
 )
+from app.services.audit import build_activity_change, build_activity_details
+
+
+LEGACY_MATERIAL_PATTERN = re.compile(r"Material '(.+?)' \(SKU: .+?\)")
+LEGACY_UNIT_QTY_PATTERN = re.compile(r"Cantidad por unidad actualizada para '(.+?)'\.")
+LEGACY_TARGET_PATTERN = re.compile(r"^(Aplicado a .+?|Desvinculado de .+?)$", re.MULTILINE)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="One-time importer from legacy SQLite catalog/projects databases into the new Postgres schema."
     )
-    parser.add_argument("--main-db", required=True, help="Path to legacy main SQLite database.")
-    parser.add_argument("--projects-db", required=True, help="Path to legacy projects SQLite database.")
+    parser.add_argument(
+        "--main-db",
+        default=str(DEFAULT_LEGACY_MAIN_DB),
+        help=f"Path to legacy main SQLite database. Defaults to {DEFAULT_LEGACY_MAIN_DB}.",
+    )
+    parser.add_argument(
+        "--projects-db",
+        default=str(DEFAULT_LEGACY_PROJECTS_DB),
+        help=f"Path to legacy projects SQLite database. Defaults to {DEFAULT_LEGACY_PROJECTS_DB}.",
+    )
     parser.add_argument(
         "--database-url",
         default=None,
@@ -93,6 +111,14 @@ def connect_sqlite(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def sqlite_has_table(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
 
 
 def fetch_all(conn: sqlite3.Connection, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -205,6 +231,20 @@ def action_label(value: Any) -> str:
     return text.replace(" ", "_").replace("/", "_").lower()
 
 
+def quote_table_name(table) -> str:
+    if table.schema:
+        return f'"{table.schema}"."{table.name}"'
+    return f'"{table.name}"'
+
+
+def wipe_target_database(session: Session) -> None:
+    table_names = [quote_table_name(table) for table in Base.metadata.sorted_tables]
+    if not table_names:
+        return
+    session.execute(text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
+    session.flush()
+
+
 class LegacyImporter:
     def __init__(
         self,
@@ -234,6 +274,7 @@ class LegacyImporter:
         self.fallback_category_by_scope: dict[CategoryScope, CatalogCategory] = {}
         self.fallback_material_rule_by_key: dict[tuple[int, int], ComponentMaterialRule] = {}
         self.bom_entry_by_key: dict[tuple[int, int, int, int | None], ProjectBomEntry] = {}
+        self.activity_group_by_legacy_key: dict[tuple[int, int | None, str, str, str, str], ProjectActivityGroup] = {}
 
     def run(self) -> None:
         self.import_catalog()
@@ -886,13 +927,18 @@ class LegacyImporter:
         grouped_rows: dict[tuple[str | None, str | None], list[sqlite3.Row]] = defaultdict(list)
         for row in attribute_rows:
             group_key = normalize_text(row["group_id"])
-            application_label = normalize_text(row["application"])
-            grouped_rows[(group_key, application_label)].append(row)
+            raw_application = normalize_text(row["application"])
+            grouped_rows[(group_key, raw_application)].append(row)
 
         target_lookup = self.build_project_instance_name_lookup(instance.project_id, ComponentType.ITEM)
         group_index = 0
-        for (_, application_label), rows in grouped_rows.items():
+        for (_, raw_application), rows in grouped_rows.items():
             group_index += 1
+            application_label, target_instance = self.resolve_accessory_application(
+                project_id=instance.project_id,
+                raw_application=raw_application,
+                target_lookup=target_lookup,
+            )
             group_name = application_label or f"Imported usage {group_index}"
             group = self.session.scalar(
                 select(ProjectInstanceAttributeGroup).where(
@@ -938,7 +984,6 @@ class LegacyImporter:
             if application_label is None and len(grouped_rows) == 1:
                 continue
 
-            target_instance = target_lookup.get((application_label or "").casefold()) if application_label else None
             occurrence = self.session.scalar(
                 select(ProjectInstanceOccurrence).where(
                     ProjectInstanceOccurrence.source_instance_id == instance.id,
@@ -975,9 +1020,9 @@ class LegacyImporter:
                     )
                     self.stats["occurrence_targets"] += 1
                 self.import_legacy_link(parent_instance=target_instance, child_instance=instance, application_label=application_label)
-            elif application_label:
+            elif raw_application:
                 self.warnings.append(
-                    f"Could not match accessory application {application_label!r} to an item instance in project {instance.project.name!r}."
+                    f"Could not match accessory application {raw_application!r} to an item instance in project {instance.project.name!r}."
                 )
 
             for index, (name, value) in enumerate(sorted(occurrence_values.items()), start=1):
@@ -1016,6 +1061,26 @@ class LegacyImporter:
             key = row.name.casefold()
             lookup.setdefault(key, row)
         return lookup
+
+    def resolve_accessory_application(
+        self,
+        *,
+        project_id: int,
+        raw_application: str | None,
+        target_lookup: dict[str, ProjectInstance],
+    ) -> tuple[str | None, ProjectInstance | None]:
+        if raw_application is None:
+            return None, None
+
+        if raw_application.isdigit():
+            target_instance = self.instance_by_legacy_key.get(("item", int(raw_application)))
+            if target_instance is not None and target_instance.project_id == project_id:
+                return target_instance.name, target_instance
+
+        target_instance = target_lookup.get(raw_application.casefold())
+        if target_instance is not None:
+            return target_instance.name, target_instance
+        return raw_application, None
 
     def import_legacy_link(
         self,
@@ -1319,6 +1384,361 @@ class LegacyImporter:
                 )
                 self.stats["comment_notifications"] += 1
 
+    def normalize_legacy_activity_value(self, value: Any) -> str | None:
+        text = normalize_text(value)
+        if text is None:
+            return None
+        if text.casefold() in {"none", "null", "removed"}:
+            return None
+        return text
+
+    def prettify_legacy_field_name(self, value: Any) -> str:
+        text = normalize_text(value)
+        if not text:
+            return "Value"
+        aliases = {
+            "short_name": "Short name",
+            "short_description": "Short description",
+            "unit_qty_per_unit": "Quantity per unit",
+            "condition": "Condition",
+        }
+        lowered = text.casefold()
+        if lowered in aliases:
+            return aliases[lowered]
+        if "_" in text:
+            return text.replace("_", " ").strip().capitalize()
+        return text
+
+    def parse_legacy_detail_attributes(self, details: Any) -> list[tuple[str, str]]:
+        text = normalize_text(details)
+        if text is None:
+            return []
+        attributes: list[tuple[str, str]] = []
+        in_attributes = False
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Atributos"):
+                in_attributes = True
+                continue
+            if not in_attributes:
+                continue
+            if ":" not in stripped:
+                continue
+            name, value = stripped.split(":", 1)
+            attr_name = name.strip()
+            attr_value = value.strip()
+            if attr_name and attr_value:
+                attributes.append((attr_name, attr_value))
+        return attributes
+
+    def extract_legacy_target_note(self, details: Any) -> str | None:
+        text = normalize_text(details)
+        if text is None:
+            return None
+        match = LEGACY_TARGET_PATTERN.search(text)
+        if match is None:
+            return None
+        return match.group(1).strip()
+
+    def resolve_legacy_material_subject_name(
+        self,
+        *,
+        legacy_entity_id: int | None,
+        field_name: Any,
+        details: Any,
+    ) -> str | None:
+        if legacy_entity_id is not None:
+            rule = self.material_rule_by_legacy_id.get(legacy_entity_id)
+            if rule is not None and rule.material is not None:
+                return normalize_text(rule.material.name)
+
+        field_text = normalize_text(field_name)
+        if field_text:
+            for suffix in (" (Quantity)", " (Assembly Kit)"):
+                if field_text.endswith(suffix):
+                    return field_text[: -len(suffix)].strip() or None
+
+        detail_text = normalize_text(details)
+        if detail_text:
+            for pattern in (LEGACY_MATERIAL_PATTERN, LEGACY_UNIT_QTY_PATTERN):
+                match = pattern.search(detail_text)
+                if match is not None:
+                    return normalize_text(match.group(1))
+        return None
+
+    def resolve_legacy_instance_subject_name(self, *, instance_type: str, legacy_entity_id: int | None) -> str | None:
+        if legacy_entity_id is None:
+            return None
+        instance = self.instance_by_legacy_key.get((instance_type, legacy_entity_id))
+        if instance is None:
+            return None
+        return normalize_text(instance.name)
+
+    def resolve_changelog_scope(
+        self,
+        *,
+        entity_type: str,
+        legacy_entity_id: int | None,
+    ) -> tuple[str | None, int | None]:
+        if legacy_entity_id is None:
+            return None, None
+        if entity_type in {"ItemInstance", "ItemInstanceAttribute"}:
+            instance = self.instance_by_legacy_key.get(("item", legacy_entity_id))
+            return ("instance", instance.id) if instance is not None else (None, None)
+        if entity_type == "AccessoryInstance":
+            instance = self.instance_by_legacy_key.get(("accessory", legacy_entity_id))
+            return ("instance", instance.id) if instance is not None else (None, None)
+        if entity_type in {"MainMaterial", "MaterialQuantity"}:
+            rule = self.material_rule_by_legacy_id.get(legacy_entity_id)
+            if rule is not None and rule.material is not None:
+                return "material", rule.material.id
+        return None, None
+
+    def build_changelog_activity_payload(
+        self,
+        *,
+        row: sqlite3.Row,
+        entity_type: str,
+        legacy_entity_id: int | None,
+        legacy_entity_text: str | None,
+    ) -> tuple[str, str | None, str | None, dict[str, Any]]:
+        action_text = normalize_text(row["action"]) or "Legacy activity"
+        field_name = row["field_name"]
+        detail_text = normalize_text(row["details"])
+        notes: list[str] = []
+        changes: list[dict[str, Any]] = []
+        kind = "legacy"
+        subject_name: str | None = None
+        title = "Project activity"
+        headline = action_text
+
+        if entity_type == "MaterialQuantity":
+            kind = "material"
+            subject_name = self.resolve_legacy_material_subject_name(
+                legacy_entity_id=legacy_entity_id,
+                field_name=field_name,
+                details=detail_text,
+            )
+            is_assembly_kit = "kit" in action_text.casefold() or "assembly kit" in (normalize_text(field_name) or "").casefold()
+            change_label = "Assembly kit" if is_assembly_kit else "Quantity"
+            if "creación" in action_text.casefold() or action_text.casefold() == "create":
+                title = "Material quantities created"
+                headline = "Material quantity created" if not is_assembly_kit else "Assembly kit created"
+            elif "eliminación" in action_text.casefold() or action_text.casefold() == "delete":
+                title = "Material quantities removed"
+                headline = "Material quantity removed" if not is_assembly_kit else "Assembly kit removed"
+            else:
+                title = "Material quantities updated"
+                headline = "Material quantity updated" if not is_assembly_kit else "Assembly kit updated"
+            changes.append(
+                build_activity_change(
+                    change_label,
+                    self.normalize_legacy_activity_value(row["old_value"]),
+                    self.normalize_legacy_activity_value(row["new_value"]),
+                )
+            )
+        elif entity_type == "MainMaterial":
+            kind = "material"
+            subject_name = self.resolve_legacy_material_subject_name(
+                legacy_entity_id=legacy_entity_id,
+                field_name=field_name,
+                details=detail_text,
+            )
+            lowered_action = action_text.casefold()
+            if "condición" in lowered_action:
+                title = "Material conditions updated"
+                if "adición" in lowered_action:
+                    headline = "Material condition added"
+                elif "eliminación" in lowered_action:
+                    headline = "Material condition removed"
+                else:
+                    headline = "Material condition updated"
+                changes.append(
+                    build_activity_change(
+                        self.prettify_legacy_field_name(field_name),
+                        self.normalize_legacy_activity_value(row["old_value"]),
+                        self.normalize_legacy_activity_value(row["new_value"]),
+                    )
+                )
+            elif "cantidad unitaria" in lowered_action:
+                title = "Material unit quantities updated"
+                headline = "Material unit quantity updated"
+                changes.append(
+                    build_activity_change(
+                        self.prettify_legacy_field_name(field_name),
+                        self.normalize_legacy_activity_value(row["old_value"]),
+                        self.normalize_legacy_activity_value(row["new_value"]),
+                    )
+                )
+            elif "eliminación" in lowered_action:
+                title = "Materials removed"
+                headline = "Material removed"
+            else:
+                title = "Materials added"
+                headline = "Material added"
+        elif entity_type in {"ItemInstance", "ItemInstanceAttribute"}:
+            kind = "item"
+            subject_name = self.resolve_legacy_instance_subject_name(instance_type="item", legacy_entity_id=legacy_entity_id)
+            lowered_action = action_text.casefold()
+            if entity_type == "ItemInstanceAttribute":
+                title = "Item attributes updated"
+                headline = "Item attribute updated"
+                changes.append(
+                    build_activity_change(
+                        self.prettify_legacy_field_name(field_name),
+                        self.normalize_legacy_activity_value(row["old_value"]),
+                        self.normalize_legacy_activity_value(row["new_value"]),
+                    )
+                )
+            elif "creación" in lowered_action:
+                title = "Items created"
+                headline = "Item created"
+            elif "eliminación" in lowered_action:
+                title = "Items removed"
+                headline = "Item removed"
+            else:
+                title = "Items updated"
+                headline = "Item updated"
+                if field_name is not None or row["old_value"] is not None or row["new_value"] is not None:
+                    changes.append(
+                        build_activity_change(
+                            self.prettify_legacy_field_name(field_name),
+                            self.normalize_legacy_activity_value(row["old_value"]),
+                            self.normalize_legacy_activity_value(row["new_value"]),
+                        )
+                    )
+        elif entity_type == "AccessoryInstance":
+            kind = "accessory"
+            subject_name = self.resolve_legacy_instance_subject_name(instance_type="accessory", legacy_entity_id=legacy_entity_id)
+            lowered_action = action_text.casefold()
+            if "vinculación" in lowered_action:
+                title = "Accessory links updated"
+                headline = "Accessory linked"
+            elif "desvinculación" in lowered_action:
+                title = "Accessory links updated"
+                headline = "Accessory unlinked"
+            elif "creación" in lowered_action:
+                title = "Accessories created"
+                headline = "Accessory created"
+            elif "eliminación" in lowered_action:
+                title = "Accessories removed"
+                headline = "Accessory removed"
+            else:
+                title = "Accessories updated"
+                headline = "Accessory updated"
+                if field_name is not None or row["old_value"] is not None or row["new_value"] is not None:
+                    changes.append(
+                        build_activity_change(
+                            self.prettify_legacy_field_name(field_name),
+                            self.normalize_legacy_activity_value(row["old_value"]),
+                            self.normalize_legacy_activity_value(row["new_value"]),
+                        )
+                    )
+
+        target_note = self.extract_legacy_target_note(detail_text)
+        if target_note:
+            notes.append(target_note)
+
+        if not changes:
+            for attr_name, attr_value in self.parse_legacy_detail_attributes(detail_text):
+                if "desvincul" in action_text.casefold() or "eliminación" in action_text.casefold():
+                    changes.append(build_activity_change(attr_name, attr_value, None))
+                else:
+                    changes.append(build_activity_change(attr_name, None, attr_value))
+
+        details = build_activity_details(
+            headline=headline,
+            subject_name=subject_name,
+            notes=notes,
+            changes=changes,
+            kind=kind,
+        )
+        details.update(
+            {
+                "legacy_log_id": row["log_id"],
+                "legacy_field_name": normalize_text(row["field_name"]),
+                "legacy_old_value": normalize_text(row["old_value"]),
+                "legacy_new_value": normalize_text(row["new_value"]),
+                "legacy_details": detail_text,
+                "legacy_project_status": normalize_text(row["project_estado"]),
+                "legacy_entity_id": legacy_entity_text if legacy_entity_id is None else None,
+                "legacy_approved_by": normalize_text(row["approved_by"]),
+                "legacy_approved_date": normalize_text(row["approved_date"]),
+            }
+        )
+        return title, kind, subject_name, details
+
+    def get_or_create_legacy_activity_group(
+        self,
+        *,
+        project: Project,
+        actor: User | None,
+        created_at: datetime,
+        title: str,
+        scope_type: str | None,
+        scope_id: int | None,
+        entity_type: str,
+        entity_identity: str,
+        action: str,
+    ) -> ProjectActivityGroup:
+        cache_key = (
+            project.id,
+            actor.id if actor is not None else None,
+            created_at.isoformat(),
+            entity_type,
+            entity_identity,
+            action,
+        )
+        cached = self.activity_group_by_legacy_key.get(cache_key)
+        if cached is not None:
+            return cached
+
+        candidates = self.session.scalars(
+            select(ProjectActivityGroup).where(
+                ProjectActivityGroup.project_id == project.id,
+                ProjectActivityGroup.created_at == created_at,
+            )
+        ).all()
+        actor_id = actor.id if actor is not None else None
+        group = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.actor_user_id == actor_id
+                and candidate.title == title
+                and candidate.scope_type == scope_type
+                and candidate.scope_id == scope_id
+            ),
+            None,
+        )
+        if group is None:
+            group = ProjectActivityGroup(
+                project=project,
+                actor=actor,
+                title=title,
+                scope_type=scope_type,
+                scope_id=scope_id,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+            self.session.add(group)
+            self.session.flush()
+        else:
+            if group.updated_at < created_at:
+                group.updated_at = created_at
+            if not group.title and title:
+                group.title = title
+            if group.scope_type is None and scope_type is not None:
+                group.scope_type = scope_type
+            if group.scope_id is None and scope_id is not None:
+                group.scope_id = scope_id
+
+        self.activity_group_by_legacy_key[cache_key] = group
+        return group
+
     def import_changelog_row(self, row: sqlite3.Row) -> None:
         project = self.project_by_legacy_id.get(int(row["project_id"]))
         if project is None:
@@ -1330,38 +1750,76 @@ class LegacyImporter:
         entity_text = normalize_text(row["entity_id"])
         if entity_text and entity_text.isdigit():
             entity_id = int(entity_text)
-        details = {
-            "legacy_log_id": row["log_id"],
-            "legacy_field_name": normalize_text(row["field_name"]),
-            "legacy_old_value": normalize_text(row["old_value"]),
-            "legacy_new_value": normalize_text(row["new_value"]),
-            "legacy_details": normalize_text(row["details"]),
-            "legacy_project_status": normalize_text(row["project_estado"]),
-            "legacy_entity_id": entity_text if entity_id is None else None,
-            "legacy_approved_by": normalize_text(row["approved_by"]),
-            "legacy_approved_date": normalize_text(row["approved_date"]),
-        }
-        existing = self.session.scalar(
+        entity_type = normalize_text(row["entity_type"]) or "LegacyEntity"
+        action = action_label(row["action"])
+        title, _, _, details = self.build_changelog_activity_payload(
+            row=row,
+            entity_type=entity_type,
+            legacy_entity_id=entity_id,
+            legacy_entity_text=entity_text,
+        )
+        scope_type, scope_id = self.resolve_changelog_scope(entity_type=entity_type, legacy_entity_id=entity_id)
+        group = self.get_or_create_legacy_activity_group(
+            project=project,
+            actor=actor,
+            created_at=created_at,
+            title=title,
+            scope_type=scope_type,
+            scope_id=scope_id,
+            entity_type=entity_type,
+            entity_identity=entity_text or "",
+            action=action,
+        )
+
+        candidates = self.session.scalars(
             select(ProjectActivityLog).where(
                 ProjectActivityLog.project_id == project.id,
                 ProjectActivityLog.created_at == created_at,
-                ProjectActivityLog.entity_type == (normalize_text(row["entity_type"]) or "LegacyEntity"),
-                ProjectActivityLog.action == action_label(row["action"]),
             )
+        ).all()
+        existing = next(
+            (
+                candidate
+                for candidate in candidates
+                if isinstance(candidate.details, dict) and candidate.details.get("legacy_log_id") == row["log_id"]
+            ),
+            None,
         )
+        if existing is None:
+            existing = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.entity_type == entity_type
+                    and candidate.action == action
+                    and candidate.entity_id == entity_id
+                    and candidate.actor_user_id == (actor.id if actor is not None else None)
+                ),
+                None,
+            )
+
         if existing is None:
             self.session.add(
                 ProjectActivityLog(
                     project=project,
+                    group=group,
                     actor=actor,
-                    entity_type=normalize_text(row["entity_type"]) or "LegacyEntity",
+                    entity_type=entity_type,
                     entity_id=entity_id,
-                    action=action_label(row["action"]),
+                    action=action,
                     details=details,
                     created_at=created_at,
                 )
             )
             self.stats["activity_logs"] += 1
+        else:
+            existing.group = group
+            existing.actor = actor
+            existing.entity_type = entity_type
+            existing.entity_id = entity_id
+            existing.action = action
+            existing.details = details
+            existing.created_at = created_at
 
         approved_by = normalize_text(row["approved_by"])
         if approved_by:
@@ -1458,7 +1916,30 @@ def main() -> int:
     main_conn = connect_sqlite(args.main_db)
     projects_conn = connect_sqlite(args.projects_db)
     try:
+        if not sqlite_has_table(main_conn, "Categories"):
+            print(
+                "Legacy main SQLite database is missing the expected 'Categories' table.\n"
+                f"Path: {args.main_db}\n"
+                "Pass the correct file with --main-db.",
+                file=sys.stderr,
+            )
+            return 1
+        if not sqlite_has_table(projects_conn, "Projects"):
+            print(
+                "Legacy projects SQLite database is missing the expected 'Projects' table.\n"
+                f"Path: {args.projects_db}\n"
+                "Pass the correct file with --projects-db.",
+                file=sys.stderr,
+            )
+            return 1
+
         with session_factory() as session:
+            wipe_target_database(session)
+            if args.dry_run:
+                session.flush()
+            else:
+                session.commit()
+
             importer = LegacyImporter(
                 session=session,
                 main_conn=main_conn,

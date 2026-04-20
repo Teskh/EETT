@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import re
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -25,6 +26,7 @@ from app.services.audit import build_activity_details, build_audit_context, ensu
 from app.services.auth import can_view_project
 
 MENTION_PATTERN = re.compile(r"@([a-zA-Z0-9_.-]+)")
+LEGACY_SUBJECT_TOKEN_PATTERN = re.compile(r"[\w/-]{3,}", re.UNICODE)
 
 PROJECT_STATUS_LABELS = {
     ProjectStatus.TEMPLATE.value: "Template",
@@ -151,7 +153,7 @@ def get_project_activity(session: Session, project_id: int) -> list[dict]:
         select(ProjectActivityGroup)
         .where(ProjectActivityGroup.project_id == project_id)
         .options(
-            selectinload(ProjectActivityGroup.project),
+            selectinload(ProjectActivityGroup.project).selectinload(Project.instances),
             selectinload(ProjectActivityGroup.actor),
             selectinload(ProjectActivityGroup.events).selectinload(ProjectActivityLog.actor),
             selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.requested_by),
@@ -166,7 +168,7 @@ def get_activity_history(session: Session, user: User) -> list[dict]:
     groups = session.scalars(
         select(ProjectActivityGroup)
         .options(
-            selectinload(ProjectActivityGroup.project),
+            selectinload(ProjectActivityGroup.project).selectinload(Project.instances),
             selectinload(ProjectActivityGroup.actor),
             selectinload(ProjectActivityGroup.events).selectinload(ProjectActivityLog.actor),
             selectinload(ProjectActivityGroup.approvals).selectinload(ProjectApproval.requested_by),
@@ -339,7 +341,7 @@ def _build_comment_route(project_id: int, comment_id: int) -> str:
 
 
 def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
-    entries = [_serialize_activity_event(entry) for entry in sorted(group.events, key=lambda item: item.created_at)]
+    entries = [_serialize_activity_event(entry, project=group.project) for entry in sorted(group.events, key=lambda item: item.created_at)]
     return {
         "id": group.id,
         "title": group.title or _default_group_title(group),
@@ -463,15 +465,84 @@ def _default_group_title(group: ProjectActivityGroup) -> str:
     return "Project activity"
 
 
-def _serialize_activity_event(entry: ProjectActivityLog) -> dict:
+def _normalize_legacy_subject_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _legacy_subject_tokens(value: str) -> set[str]:
+    normalized = _normalize_legacy_subject_text(value)
+    return {token for token in LEGACY_SUBJECT_TOKEN_PATTERN.findall(normalized) if len(token) >= 3}
+
+
+def _legacy_subject_context(details_text: str) -> str:
+    lines: list[str] = []
+    for raw_line in details_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.casefold()
+        if lowered.startswith("materiales eliminados"):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _recover_legacy_subject_name(details: dict[str, Any], *, project: Project | None, kind: str) -> str | None:
+    if project is None:
+        return None
+    legacy_details = details.get("legacy_details")
+    if not isinstance(legacy_details, str) or not legacy_details.strip():
+        return None
+
+    candidate_type = kind.casefold()
+    context = _legacy_subject_context(legacy_details)
+    context_tokens = _legacy_subject_tokens(context)
+    if not context_tokens:
+        return None
+
+    best_name: str | None = None
+    best_score = 0
+    for instance in project.instances:
+        if instance.instance_type.value != candidate_type:
+            continue
+        name = (instance.name or "").strip()
+        if not name:
+            continue
+        name_tokens = _legacy_subject_tokens(name)
+        profile_tokens = _legacy_subject_tokens(
+            " ".join(
+                part
+                for part in (
+                    instance.name,
+                    instance.short_name,
+                    instance.description,
+                    instance.short_description,
+                    instance.installation,
+                )
+                if part
+            )
+        )
+        score = 4 * len(context_tokens & name_tokens) + len(context_tokens & profile_tokens)
+        if score > best_score:
+            best_score = score
+            best_name = name
+
+    return best_name if best_score >= 4 else None
+
+
+def _serialize_activity_event(entry: ProjectActivityLog, *, project: Project | None = None) -> dict:
     details = entry.details or {}
     notes = details.get("notes") if isinstance(details.get("notes"), list) else []
     changes = details.get("changes") if isinstance(details.get("changes"), list) else []
+    kind = str(details.get("kind") or entry.entity_type).lower()
+    subject_name = str(details.get("subject_name")).strip() if isinstance(details.get("subject_name"), str) else None
+    if subject_name is None and isinstance(details, dict):
+        subject_name = _recover_legacy_subject_name(details, project=project, kind=kind)
     return {
         "id": f"event-{entry.id}",
-        "kind": str(details.get("kind") or entry.entity_type).lower(),
+        "kind": kind,
         "headline": str(details.get("headline") or entry.action.replace("_", " ").strip()),
-        "subject_name": str(details.get("subject_name")).strip() if isinstance(details.get("subject_name"), str) else None,
+        "subject_name": subject_name,
         "notes": [str(note).strip() for note in notes if str(note).strip()],
         "changes": [
             {

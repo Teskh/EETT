@@ -22,10 +22,13 @@ from app.main import create_app
 from app.models import (
     CatalogCategory,
     CatalogComponent,
+    ComponentType,
     ComponentMaterialRule,
     MaterialDashboardCacheEntry,
     MaterialStudyGroup,
     Project,
+    ProjectActivityGroup,
+    ProjectActivityLog,
     ProjectBomEntry,
     ProjectInstance,
     ProjectSubtype,
@@ -42,6 +45,7 @@ from app.services.catalog import (
     search_material_candidates,
     update_attribute_definition,
 )
+from app.services.audit import build_activity_details
 from app.services.dashboard import get_material_dashboard_economic_metrics, get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import _calculate_delivery_time_stats, _get_lead_time_samples_for_product
@@ -1306,6 +1310,82 @@ class ServiceLayerTests(unittest.TestCase):
             changes_by_label.get(f"{first_row['subtype']} assembly quantity"),
             (str(first_row["assembly_quantity"]), str((first_row["assembly_quantity"] or 0) + 3)),
         )
+
+    def test_legacy_deleted_item_activity_recovers_subject_name_from_project_instances(self) -> None:
+        with self.session_factory() as session:
+            project = session.scalar(select(Project).where(Project.id == 2))
+            self.assertIsNotNone(project)
+            component = session.scalar(
+                select(CatalogComponent).where(CatalogComponent.component_type == ComponentType.ITEM).order_by(CatalogComponent.id)
+            )
+            self.assertIsNotNone(component)
+            assert project is not None
+            assert component is not None
+
+            session.add_all(
+                [
+                    ProjectInstance(
+                        project=project,
+                        component=component,
+                        category_id=component.category_id,
+                        instance_type=component.component_type,
+                        name="Bedroom Door",
+                        description="Interior MDF door with bottom undercut for bedrooms.",
+                        installation="Standard bedroom installation.",
+                    ),
+                    ProjectInstance(
+                        project=project,
+                        component=component,
+                        category_id=component.category_id,
+                        instance_type=component.component_type,
+                        name="Bathroom Door",
+                        description="Interior MDF door with vented lower grille for bathrooms and kitchens.",
+                        installation="Bathroom and kitchen installation with vented opening.",
+                    ),
+                ]
+            )
+
+            group = ProjectActivityGroup(
+                project=project,
+                title="Items removed",
+            )
+            session.add(group)
+            session.flush()
+
+            details = build_activity_details(
+                headline="Item removed",
+                kind="item",
+                changes=[
+                    {"label": "Color", "before": "Blanco", "after": None},
+                    {"label": "Recinto", "before": "Baño", "after": None},
+                ],
+            )
+            details["legacy_details"] = (
+                "Descripción: Interior MDF door with vented lower grille for bathrooms and kitchens.\n"
+                "Instalación: Bathroom and kitchen installation with vented opening.\n"
+                "Atributos eliminados:\n"
+                "  Recinto: Baño\n"
+                "Materiales eliminados:\n"
+                "  ADHESIVO DE CONTACTO AGOREX 60: Cantidad 0.03, Kit 0.0"
+            )
+            session.add(
+                ProjectActivityLog(
+                    project=project,
+                    group=group,
+                    entity_type="ItemInstance",
+                    action="legacy_deleted",
+                    details=details,
+                )
+            )
+            session.commit()
+
+        activity = self.client.get("/api/v1/projects/2/activity", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(activity.status_code, 200)
+        grouped = activity.json()
+
+        removed_group = next(group for group in grouped if group["title"] == "Items removed")
+        removed_entry = next(entry for entry in removed_group["entries"] if entry["headline"] == "Item removed")
+        self.assertEqual(removed_entry["subject_name"], "Bathroom Door")
 
     def test_v1_catalog_and_project_instance_requests_preserve_short_description(self) -> None:
         create_component_response = self.client.post(

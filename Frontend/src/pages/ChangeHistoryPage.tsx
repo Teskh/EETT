@@ -26,6 +26,22 @@ function renderValue(value: string | null) {
   return value && value.trim() ? value : "—";
 }
 
+function normalizeLabel(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/ies\b/g, "y")
+    .replace(/es\b/g, "")
+    .replace(/s\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isRedundantEntryHeadline(groupTitle: string, headline: string) {
+  const normalizedGroupTitle = normalizeLabel(groupTitle);
+  const normalizedHeadline = normalizeLabel(headline);
+  return Boolean(normalizedGroupTitle && normalizedHeadline && normalizedGroupTitle === normalizedHeadline);
+}
+
 function buildHaystack(group: ActivityGroup) {
   return [
     group.title,
@@ -65,23 +81,29 @@ function ChangeRow({ change }: { change: ActivityChange }) {
   );
 }
 
-function EntryCard({ entry }: { entry: ActivityEntry }) {
+function EntryCard({ entry, groupTitle }: { entry: ActivityEntry; groupTitle: string }) {
+  const promotedNote = entry.subject_name ? null : entry.notes[0] || null;
+  const entryLabel = entry.subject_name || promotedNote;
+  const showHeadline = !isRedundantEntryHeadline(groupTitle, entry.headline);
+  const visibleNotes = promotedNote ? entry.notes.slice(1) : entry.notes;
+
   return (
     <div className="py-2 first:pt-0 last:pb-0">
-      <div className="flex items-baseline gap-2">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          {entry.headline}
-        </h3>
-        {entry.subject_name && (
-          <span className="text-xs text-zinc-500 font-mono before:content-['/'] before:mr-2 before:text-zinc-300 dark:before:text-zinc-700">
-            {entry.subject_name}
-          </span>
-        )}
-      </div>
+      {entryLabel && (
+        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+          {entryLabel}
+        </div>
+      )}
 
-      {entry.notes.length > 0 && (
+      {showHeadline && (
+        <div className="text-xs text-zinc-500 font-mono mt-0.5">
+          {entry.headline}
+        </div>
+      )}
+
+      {visibleNotes.length > 0 && (
          <div className="mt-1 flex flex-wrap gap-1">
-           {entry.notes.map((note, i) => (
+           {visibleNotes.map((note, i) => (
              <span key={i} className="text-[11px] px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 rounded-sm">
                {note}
              </span>
@@ -127,7 +149,7 @@ function ActivityGroupRow({ group }: { group: ActivityGroup }) {
         
         <div className="space-y-3 divide-y divide-zinc-100 dark:divide-white/[0.02]">
           {group.entries.map((entry) => (
-            <EntryCard key={entry.id} entry={entry} />
+            <EntryCard key={entry.id} entry={entry} groupTitle={group.title} />
           ))}
         </div>
       </div>
