@@ -48,7 +48,11 @@ from app.services.catalog import (
 from app.services.audit import build_activity_details
 from app.services.dashboard import get_material_dashboard_economic_metrics, get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
-from app.services.erp import _calculate_delivery_time_stats, _get_lead_time_samples_for_product
+from app.services.erp import (
+    _calculate_delivery_time_stats,
+    _get_last_purchase_orders_for_products_batch,
+    _get_lead_time_samples_for_product,
+)
 from app.services.material_groups import (
     create_material_study_group,
     get_material_dashboard_group_detail,
@@ -1155,6 +1159,25 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIn("inline", artifact_response.headers.get("content-disposition", ""))
         self.assertTrue(artifact_response.content.startswith(b"%PDF"))
 
+    @unittest.skipUnless(importlib.util.find_spec("reportlab"), "reportlab is not installed")
+    def test_detailed_material_pdf_export_generates_browser_viewable_artifact(self) -> None:
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"kind": "detailed_material_pdf", "payload": {}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+        self.assertEqual(create_export.json()["kind"], "detailed_material_pdf")
+        self.assertEqual(create_export.json()["status"], "completed")
+        artifact_uri = create_export.json()["artifact_uri"]
+        self.assertTrue(artifact_uri.endswith(".pdf"))
+
+        artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(artifact_response.status_code, 200)
+        self.assertEqual(artifact_response.headers.get("content-type"), "application/pdf")
+        self.assertIn("inline", artifact_response.headers.get("content-disposition", ""))
+        self.assertTrue(artifact_response.content.startswith(b"%PDF"))
+
     def test_project_activity_groups_reuse_mutation_batch_id(self) -> None:
         detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
         self.assertEqual(detail.status_code, 200)
@@ -2181,6 +2204,37 @@ class MaterialDashboardBusinessDayTests(unittest.TestCase):
 
 
 class ErpLeadTimeSampleTests(unittest.TestCase):
+    def test_last_purchase_orders_keep_approved_and_pending_states_only(self) -> None:
+        row = SimpleNamespace(
+            CodProd="ERP-001",
+            fechaOC=date(2026, 4, 10),
+            numoc="OC-123",
+            FecFinalOC=None,
+            CodEstado="PE",
+            cantidadOrdenadaDetalle=10.0,
+            cantidadIngresadaMovim=4.0,
+            cantidadRecepcionNoInv=1.0,
+        )
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [row]
+
+        cursor = FakeCursor()
+
+        result = _get_last_purchase_orders_for_products_batch(cursor, ["ERP-001"])
+
+        self.assertIn("RTRIM(LTRIM(c.CodEstado)) IN (?,?)", cursor.sql)
+        self.assertEqual(cursor.params[-2:], ["AP", "PE"])
+        self.assertEqual(
+            result["ERP-001"],
+            (date(2026, 4, 10), "OC-123", 5.0, None, "PE"),
+        )
+
     def test_calculate_delivery_time_stats_includes_median(self) -> None:
         with patch(
             "app.services.erp._get_lead_time_samples_for_product",

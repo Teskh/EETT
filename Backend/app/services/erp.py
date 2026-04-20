@@ -11,6 +11,12 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 DEFAULT_STOCK_WAREHOUSE_CODES: tuple[str, ...] = ("001",)
+APPROVED_PURCHASE_ORDER_STATUS = "AP"
+PENDING_PURCHASE_ORDER_STATUS = "PE"
+VISIBLE_PURCHASE_ORDER_STATUSES: tuple[str, ...] = (
+    APPROVED_PURCHASE_ORDER_STATUS,
+    PENDING_PURCHASE_ORDER_STATUS,
+)
 
 
 def erp_search_available(settings: Settings) -> bool:
@@ -264,9 +270,12 @@ def get_material_procurement_details(
                 default=None,
                 label=f"stock for {normalized_sku}",
             )
-            po_date, po_number, pending_qty, estimated_delivery = _safe_erp_lookup(
-                lambda: _get_last_purchase_orders_for_products_batch(po_cursor, [normalized_sku]).get(normalized_sku, (None, None, None, None)),
-                default=(None, None, None, None),
+            po_date, po_number, pending_qty, estimated_delivery, po_status_code = _safe_erp_lookup(
+                lambda: _get_last_purchase_orders_for_products_batch(po_cursor, [normalized_sku]).get(
+                    normalized_sku,
+                    (None, None, None, None, None),
+                ),
+                default=(None, None, None, None, None),
                 label=f"purchase orders for {normalized_sku}",
             )
             average_price = _safe_erp_lookup(
@@ -305,6 +314,8 @@ def get_material_procurement_details(
                 "last_purchase_order_date": _serialize_datetime(po_date),
                 "last_purchase_order_number": po_number,
                 "last_purchase_order_estimated_delivery": _serialize_datetime(estimated_delivery),
+                "last_purchase_order_status_code": po_status_code,
+                "last_purchase_order_is_approved": po_status_code == APPROVED_PURCHASE_ORDER_STATUS if po_status_code else None,
                 "movement_quantity_30d": movement_quantity_30d,
             }
     except Exception as exc:
@@ -518,14 +529,15 @@ def _get_average_prices_for_products_batch(cursor, product_codes: Sequence[str],
 def _get_last_purchase_orders_for_products_batch(
     cursor,
     product_codes: Sequence[str],
-) -> dict[str, tuple[datetime | None, str | None, float | None, datetime | None]]:
+) -> dict[str, tuple[datetime | None, str | None, float | None, datetime | None, str | None]]:
     if not product_codes:
         return {}
 
-    results: dict[str, tuple[datetime | None, str | None, float | None, datetime | None]] = {
-        code: (None, None, None, None) for code in product_codes
+    results: dict[str, tuple[datetime | None, str | None, float | None, datetime | None, str | None]] = {
+        code: (None, None, None, None, None) for code in product_codes
     }
     placeholders = ",".join(["?"] * len(product_codes))
+    status_placeholders = ",".join(["?"] * len(VISIBLE_PURCHASE_ORDER_STATUSES))
     cursor.execute(
         f"""
         WITH RankedPOs AS (
@@ -533,6 +545,7 @@ def _get_last_purchase_orders_for_products_batch(
                 c.fechaOC,
                 c.numoc,
                 c.FecFinalOC,
+                RTRIM(LTRIM(c.CodEstado)) AS CodEstado,
                 c.NumInterOc AS OCNumInterOc,
                 d.NumLinea,
                 RTRIM(LTRIM(d.CodProd)) AS CodProd,
@@ -544,6 +557,7 @@ def _get_last_purchase_orders_for_products_batch(
             FROM softland.owordencom c
             INNER JOIN softland.owordendet d ON d.numinteroc = c.numinteroc
             WHERE RTRIM(LTRIM(d.codprod)) IN ({placeholders})
+              AND RTRIM(LTRIM(c.CodEstado)) IN ({status_placeholders})
         ),
         LastPOBase AS (
             SELECT * FROM RankedPOs WHERE rn = 1
@@ -553,6 +567,7 @@ def _get_last_purchase_orders_for_products_batch(
             lpo.fechaOC,
             lpo.numoc,
             lpo.FecFinalOC,
+            lpo.CodEstado,
             lpo.cantidadOrdenadaDetalle,
             COALESCE(SUM(b.ingresada), 0) AS cantidadIngresadaMovim,
             COALESCE(softland.ow_fdblRecepNoInvOC(lpo.OCNumInterOc, lpo.NumLinea, lpo.CodProd), 0) AS cantidadRecepcionNoInv
@@ -564,11 +579,12 @@ def _get_last_purchase_orders_for_products_batch(
             lpo.fechaOC,
             lpo.numoc,
             lpo.FecFinalOC,
+            lpo.CodEstado,
             lpo.cantidadOrdenadaDetalle,
             lpo.OCNumInterOc,
             lpo.NumLinea
         """,
-        list(product_codes),
+        [*product_codes, *VISIBLE_PURCHASE_ORDER_STATUSES],
     )
     for row in cursor.fetchall():
         code = (getattr(row, "CodProd", None) or "").strip().upper()
@@ -582,6 +598,7 @@ def _get_last_purchase_orders_for_products_batch(
             str(getattr(row, "numoc", "")).strip() or None,
             round(ordered - (entered_mov + entered_non_inv), 2),
             getattr(row, "FecFinalOC", None),
+            (getattr(row, "CodEstado", None) or "").strip() or None,
         )
     return results
 

@@ -497,6 +497,25 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                 </button>
                                 <button
                                   type="button"
+                                  disabled={isExporting(project.id, "detailed_material_pdf")}
+                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                                  onClick={(event) => {
+                                    const details = event.currentTarget.closest("details");
+                                    if (details instanceof HTMLDetailsElement) {
+                                      details.open = false;
+                                    }
+                                    void handleRequestExport(project.id, "detailed_material_pdf");
+                                  }}
+                                >
+                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
+                                    {isExporting(project.id, "detailed_material_pdf") ? "Generating PDF..." : "Detailed Materials PDF (.pdf)"}
+                                  </span>
+                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                    Opens the category-grouped materials PDF with stock, PO, and consumption detail.
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
                                   disabled={isExporting(project.id, "materials_workbook")}
                                   className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
                                   onClick={(event) => {
@@ -511,7 +530,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                     {isExporting(project.id, "materials_workbook") ? "Generating workbook..." : "Materials Workbook (.xlsx)"}
                                   </span>
                                   <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Downloads the current materials export. PDF exports will open in-browser once added.
+                                    Downloads the workbook through the browser download flow.
                                   </span>
                                 </button>
                               </div>

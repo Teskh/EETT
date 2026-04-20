@@ -44,6 +44,87 @@ def iter_material_context_rows(project_data: dict[str, Any]):
                     }
 
 
+def build_detailed_material_export_sections(project_data: dict[str, Any]) -> list[dict[str, Any]]:
+    materials_by_sku: dict[str, dict[str, Any]] = {}
+
+    for section in number_category_sections(project_data.get("categories", [])):
+        for instance in section.get("instances", []):
+            for material in instance.get("materials", []):
+                sku = str(material.get("sku") or "").strip().upper()
+                if not sku:
+                    continue
+
+                material_entry = materials_by_sku.setdefault(
+                    sku,
+                    {
+                        "material_name": material["material_name"],
+                        "sku": sku,
+                        "unit": material.get("unit") or "",
+                        "subtypes": {},
+                    },
+                )
+
+                for bom_entry in material.get("bom_entries", []):
+                    quantity_state = bom_entry.get("quantity_state")
+                    subtype_name = bom_entry.get("subtype") or "General"
+                    subtype_entry = material_entry["subtypes"].setdefault(
+                        subtype_name,
+                        {
+                            "subtype": subtype_name,
+                            "quantity_total": 0.0,
+                            "has_numeric_quantity": False,
+                            "has_blank_quantity": False,
+                        },
+                    )
+
+                    if quantity_state == "value" and bom_entry.get("quantity") is not None:
+                        subtype_entry["quantity_total"] += float(bom_entry["quantity"])
+                        subtype_entry["has_numeric_quantity"] = True
+                    elif quantity_state == "blank":
+                        subtype_entry["has_blank_quantity"] = True
+
+    aggregated_materials: list[dict[str, Any]] = []
+    for material_entry in materials_by_sku.values():
+        rows: list[dict[str, Any]] = []
+        for subtype_entry in sorted(
+            material_entry["subtypes"].values(),
+            key=lambda item: (item["subtype"] != "General", item["subtype"].lower()),
+        ):
+            if subtype_entry["has_numeric_quantity"]:
+                quantity = round(float(subtype_entry["quantity_total"]), 6)
+            elif subtype_entry["has_blank_quantity"]:
+                quantity = None
+            else:
+                continue
+            rows.append({"subtype": subtype_entry["subtype"], "quantity": quantity})
+
+        if rows:
+            aggregated_materials.append(
+                {
+                    "material_name": material_entry["material_name"],
+                    "sku": material_entry["sku"],
+                    "unit": material_entry["unit"],
+                    "rows": rows,
+                }
+            )
+
+    if not aggregated_materials:
+        return []
+
+    return [
+        {
+            "number": "",
+            "name": "All Materials",
+            "depth": 0,
+            "hide_header": True,
+            "materials": sorted(
+                aggregated_materials,
+                key=lambda item: (item["material_name"].lower(), item["sku"]),
+            ),
+        }
+    ]
+
+
 def build_commercial_export_sections(
     project: Project,
     project_data: dict[str, Any],
