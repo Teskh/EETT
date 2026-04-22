@@ -1121,6 +1121,97 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIn("Anchor Screw 5x70", assembly_values)
         self.assertIn("Smart Lock Kit", assembly_values)
 
+    def test_cost_model_workbook_export_requires_cost_model_permission(self) -> None:
+        denied = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"kind": "cost_model_workbook", "payload": {}},
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_cost_model_workbook_export_generates_restricted_formula_workbook(self) -> None:
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "ot"},
+            json={"kind": "cost_model_workbook", "payload": {}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+        self.assertEqual(create_export.json()["kind"], "cost_model_workbook")
+        self.assertEqual(create_export.json()["status"], "completed")
+        artifact_uri = create_export.json()["artifact_uri"]
+        self.assertTrue(artifact_uri.endswith(".xlsx"))
+
+        denied_artifact = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(denied_artifact.status_code, 403)
+
+        artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "ot"})
+        self.assertEqual(artifact_response.status_code, 200)
+
+        workbook = load_workbook(filename=BytesIO(artifact_response.content), data_only=False)
+        self.assertEqual(workbook.sheetnames, ["By Instance", "Total Materials"])
+
+        by_instance = workbook["By Instance"]
+        self.assertEqual(
+            [by_instance.cell(row=1, column=column_index).value for column_index in range(1, 10)],
+            ["Instance", "Category", "Subtype", "Material", "SKU", "Unit", "Quantity", "Unit Price", "Cost"],
+        )
+
+        auxiliary_rows = [
+            row
+            for row in by_instance.iter_rows(min_row=2, values_only=True)
+            if row[4] in {"AUX-001", "AUX-002"}
+        ]
+        self.assertEqual(len(auxiliary_rows), 2)
+        aux_by_sku = {row[4]: row for row in auxiliary_rows}
+        self.assertEqual(aux_by_sku["AUX-001"][0], "Auxiliary Materials")
+        self.assertEqual(aux_by_sku["AUX-001"][6], 1)
+        self.assertEqual(aux_by_sku["AUX-001"][7], 185000)
+        self.assertEqual(aux_by_sku["AUX-002"][7], 32000)
+
+        anchor_row_index = next(
+            row_index
+            for row_index in range(2, by_instance.max_row + 1)
+            if by_instance.cell(row=row_index, column=5).value == "MAT-001"
+        )
+        self.assertEqual(by_instance.cell(row=anchor_row_index, column=9).value, f'=IF(OR(G{anchor_row_index}="",H{anchor_row_index}=""),"",G{anchor_row_index}*H{anchor_row_index})')
+        by_instance_total_general_row = next(
+            row_index
+            for row_index in range(2, by_instance.max_row + 1)
+            if by_instance.cell(row=row_index, column=4).value == "Total General"
+        )
+        self.assertEqual(
+            by_instance.cell(row=by_instance_total_general_row, column=9).value,
+            f'=SUMIFS(I2:I{by_instance_total_general_row - 1},C2:C{by_instance_total_general_row - 1},"General")',
+        )
+
+        totals = workbook["Total Materials"]
+        self.assertEqual(
+            [totals.cell(row=1, column=column_index).value for column_index in range(1, 8)],
+            ["SKU", "Material", "Subtype", "Unit", "Quantity", "Unit Price", "Cost"],
+        )
+        total_anchor_row_index = next(
+            row_index
+            for row_index in range(2, totals.max_row + 1)
+            if totals.cell(row=row_index, column=1).value == "MAT-001"
+        )
+        self.assertIn("SUMIFS('By Instance'!$G:$G", totals.cell(row=total_anchor_row_index, column=5).value)
+        self.assertEqual(
+            totals.cell(row=total_anchor_row_index, column=6).value,
+            f'=IF(OR(E{total_anchor_row_index}="",E{total_anchor_row_index}=0,G{total_anchor_row_index}=""),"",G{total_anchor_row_index}/E{total_anchor_row_index})',
+        )
+        self.assertIn("SUMIFS('By Instance'!$I:$I", totals.cell(row=total_anchor_row_index, column=7).value)
+        total_labels = [totals.cell(row=row_index, column=3).value for row_index in range(2, totals.max_row + 1)]
+        self.assertIn("Total General", total_labels)
+        totals_total_general_row = next(
+            row_index
+            for row_index in range(2, totals.max_row + 1)
+            if totals.cell(row=row_index, column=3).value == "Total General"
+        )
+        self.assertEqual(
+            totals.cell(row=totals_total_general_row, column=7).value,
+            f'=SUMIFS(G2:G{totals_total_general_row - 1},C2:C{totals_total_general_row - 1},"General")',
+        )
+
     @unittest.skipUnless(importlib.util.find_spec("reportlab"), "reportlab is not installed")
     def test_commercial_pdf_export_generates_browser_viewable_artifact(self) -> None:
         create_export = self.client.post(

@@ -297,14 +297,12 @@ def create_project(
     session: Session,
     *,
     name: str,
-    description: str | None,
     status: str,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> Project:
     project = Project(
         name=name.strip(),
-        description=(description or "").strip() or None,
         status=ProjectStatus(status),
     )
     session.add(project)
@@ -339,7 +337,55 @@ def create_project(
                 headline="Project created",
                 subject_name=project.name,
                 notes=[f"Status: {project.status.value.replace('_', ' ')}"],
-                changes=[build_activity_change("Description", None, project.description)],
+                kind="project",
+            ),
+        )
+    session.commit()
+    session.refresh(project)
+    return project
+
+
+def update_project_status(
+    session: Session,
+    *,
+    project: Project,
+    status: str,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> Project:
+    next_status = ProjectStatus(status)
+    previous_status = project.status
+    if previous_status == next_status:
+        return project
+
+    project.status = next_status
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Updated status for {project.name}",
+                scope_type="project",
+                scope_id=project.id,
+            ),
+            entity_type="Project",
+            entity_id=project.id,
+            action="updated",
+            title=f"Updated status for {project.name}",
+            scope_type="project",
+            scope_id=project.id,
+            details=build_activity_details(
+                headline="Project status updated",
+                subject_name=project.name,
+                changes=[
+                    build_activity_change(
+                        "Status",
+                        STATUS_LABELS[previous_status.value],
+                        STATUS_LABELS[next_status.value],
+                    )
+                ],
                 kind="project",
             ),
         )
@@ -953,7 +999,6 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
             "name": project.name,
             "status": project.status.value,
             "status_label": STATUS_LABELS[project.status.value],
-            "description": project.description,
             "instance_count": len(project.instances),
             "material_mode": (project.material_mode.mode.value if project.material_mode else MaterialMode.GENERAL.value),
         },
@@ -1539,7 +1584,6 @@ def _serialize_project_summary(project: Project) -> dict:
         "name": project.name,
         "status": project.status.value,
         "status_label": STATUS_LABELS[project.status.value],
-        "description": project.description,
         "updated_at": project.updated_at.strftime("%Y-%m-%d %H:%M"),
         "instance_count": len(project.instances),
         "material_mode": (project.material_mode.mode.value if project.material_mode else MaterialMode.GENERAL.value),

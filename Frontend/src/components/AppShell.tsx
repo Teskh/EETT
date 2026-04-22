@@ -1,6 +1,7 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode } from "react";
 
 import type { SessionUser } from "../lib/types";
+import type { ThemeMode } from "../lib/theme";
 
 type NavKey = "home" | "catalog" | "dashboard" | "history" | "projects" | "users";
 
@@ -8,6 +9,8 @@ type AppShellProps = {
   title: string;
   activeNav: NavKey;
   currentUser: SessionUser;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
   onNavigate: (to: string) => void;
   onLogout: () => Promise<void>;
   children: ReactNode;
@@ -47,20 +50,13 @@ function NavButton({
   );
 }
 
-function ThemePicker() {
-  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
-
-  useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setIsDark(document.documentElement.classList.contains("dark"));
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
-  }, []);
+function ThemePicker({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; onThemeModeChange: (mode: ThemeMode) => void }) {
+  const isDark = themeMode === "dark";
 
   return (
     <button
-      onClick={() => document.documentElement.classList.toggle("dark")}
+      type="button"
+      onClick={() => onThemeModeChange(isDark ? "light" : "dark")}
       className="w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-50 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
     >
       <i className={`ph-bold ${isDark ? "ph-sun" : "ph-moon"} text-xl`} />
@@ -71,7 +67,7 @@ function ThemePicker() {
   );
 }
 
-export function AppShell({ title, activeNav, currentUser, onNavigate, onLogout, children }: AppShellProps) {
+export function AppShell({ title, activeNav, currentUser, themeMode, onThemeModeChange, onNavigate, onLogout, children }: AppShellProps) {
   const roleLabels = currentUser.roles.map((role) => role.toUpperCase()).join(" · ");
 
   return (
@@ -97,7 +93,7 @@ export function AppShell({ title, activeNav, currentUser, onNavigate, onLogout, 
             ) : null}
           </div>
           <div className="mt-auto w-full px-2 space-y-4">
-            <ThemePicker />
+            <ThemePicker themeMode={themeMode} onThemeModeChange={onThemeModeChange} />
           </div>
         </nav>
         <main className="flex-1 flex flex-col h-full relative">

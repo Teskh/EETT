@@ -169,8 +169,11 @@ class CatalogMaterialSearchResponse(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     name: str
-    description: str | None = None
     status: str = "template"
+
+
+class ProjectStatusUpdateRequest(BaseModel):
+    status: str
 
 
 class AttributeValueInputModel(BaseModel):
@@ -235,7 +238,6 @@ class ProjectSummaryModel(BaseModel):
     name: str
     status: str
     status_label: str
-    description: str | None
     updated_at: str
     instance_count: int
     material_mode: str
@@ -451,7 +453,6 @@ class ProjectDetailModel(BaseModel):
     name: str
     status: str
     status_label: str
-    description: str | None
     instance_count: int
     material_mode: str
 
@@ -938,7 +939,6 @@ class PublicProjectModel(BaseModel):
     id: int
     name: str
     status: str
-    description: str | None
 
 
 class PublicProjectListResponse(BaseModel):

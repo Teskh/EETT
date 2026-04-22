@@ -1,9 +1,25 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Spec Sheets</title>
+    <script>
+      (() => {
+        const lastThemeUserKey = "spec-sheets.theme.last-user";
+        const userThemeKeyPrefix = "spec-sheets.theme.user.";
+        const defaultTheme = "dark";
+
+        try {
+          const username = window.localStorage.getItem(lastThemeUserKey);
+          const storedTheme = username ? window.localStorage.getItem(`${userThemeKeyPrefix}${username}`) : null;
+          const theme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : defaultTheme;
+          document.documentElement.classList.toggle("dark", theme === "dark");
+        } catch {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -46,7 +62,7 @@
       };
     </script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <script type="module" crossorigin src="/static/app/assets/index-Be-tXfRm.js"></script>
+    <script type="module" crossorigin src="/static/app/assets/index-BilkCUnL.js"></script>
     <link rel="stylesheet" crossorigin href="/static/app/assets/index-AtT5VBGo.css">
   </head>
   <body>

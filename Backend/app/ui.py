@@ -334,14 +334,12 @@ def render_projects_page(data: dict) -> str:
             f"""
             <div class="bg-black/40 border border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3">
                 <div>
-                    <h3 class="text-sm font-bold text-white mb-1 group-hover:text-accent-400 transition-colors">{escape(project['name'])}</h3>
-                    <p class="text-xs text-zinc-500 line-clamp-2">{escape(project['description'] or 'No description.')}</p>
+                    <a class="text-sm font-bold text-white mb-1 group-hover:text-accent-400 transition-colors inline-flex" href="/projects/{project['id']}">{escape(project['name'])}</a>
                 </div>
                 <div class="flex items-center justify-between border-t border-white/5 pt-3 mt-auto">
                     <div class="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
                         <i class="ph-bold ph-stack"></i> {project['instance_count']} instances
                     </div>
-                    <a class="px-3 py-1 bg-white/5 hover:bg-white/10 text-white rounded text-[10px] font-semibold transition-colors border border-white/10" href="/projects/{project['id']}">Open Project</a>
                 </div>
             </div>
             """
@@ -377,7 +375,6 @@ def render_projects_page(data: dict) -> str:
                         <option value="execution">Execution Project</option>
                         <option value="finished">Finished Project</option>
                     </select>
-                    <textarea name="description" rows="2" placeholder="Description" class="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"></textarea>
                 </div>
                 <button type="submit" class="mt-2 px-4 py-2.5 bg-accent-500 hover:bg-accent-400 text-zinc-950 border border-transparent rounded-lg text-sm font-bold shadow-[0_0_15px_rgba(245,158,11,0.2)] transition-all flex justify-center items-center gap-2">
                     <i class="ph-bold ph-plus"></i> Create Project
@@ -477,7 +474,6 @@ def render_project_detail_page(data: dict) -> str:
                     <i class="ph-bold ph-kanban text-accent-500"></i> Project Viewer
                 </p>
                 <h1 class="text-4xl font-bold text-white tracking-tighter mb-2">{escape(project['name'])}</h1>
-                <p class="text-sm text-zinc-400 max-w-2xl">{escape(project['description'] or 'No description provided.')}</p>
             </div>
             <div class="relative z-10 flex items-center gap-4">
                 <div class="flex flex-col items-end">

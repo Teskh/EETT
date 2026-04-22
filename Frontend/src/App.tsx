@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { ApiError, api } from "./lib/api";
+import { applyTheme, getPreferredThemeForUser, persistThemeForUser, rememberThemeUser, type ThemeMode } from "./lib/theme";
 import type { SessionUser } from "./lib/types";
 import { CatalogPage } from "./pages/CatalogPage";
 import { ChangeHistoryPage } from "./pages/ChangeHistoryPage";
@@ -70,6 +71,9 @@ export function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [projectDetailTitle, setProjectDetailTitle] = useState("Project");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => (
+    document.documentElement.classList.contains("dark") ? "dark" : "light"
+  ));
 
   useEffect(() => {
     const handlePopstate = () => {
@@ -88,10 +92,27 @@ export function App() {
     setRoute(parseCurrentRoute());
   }
 
+  function applyThemeForUser(user: SessionUser) {
+    const preferredTheme = getPreferredThemeForUser(user.username);
+    rememberThemeUser(user.username);
+    applyTheme(preferredTheme);
+    setThemeMode(preferredTheme);
+  }
+
+  function handleThemeModeChange(nextThemeMode: ThemeMode) {
+    applyTheme(nextThemeMode);
+    setThemeMode(nextThemeMode);
+    if (session) {
+      persistThemeForUser(session.username, nextThemeMode);
+    }
+  }
+
   async function loadSession() {
     setSessionLoading(true);
     try {
-      setSession(await api.getSession());
+      const nextSession = await api.getSession();
+      setSession(nextSession);
+      applyThemeForUser(nextSession);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setSession(null);
@@ -145,6 +166,7 @@ export function App() {
     try {
       const user = await api.login({ username, password });
       setSession(user);
+      applyThemeForUser(user);
       const nextPath = route.name === "login" ? "/" : currentPath();
       navigate(nextPath === "/login" ? "/" : nextPath, true);
     } catch (err) {
@@ -182,7 +204,15 @@ export function App() {
 
   if (route.name === "home") {
     return (
-      <AppShell title="Launcher" activeNav="home" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title="Launcher"
+        activeNav="home"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         <HomePage onNavigate={navigate} currentUser={session} />
       </AppShell>
     );
@@ -190,7 +220,15 @@ export function App() {
 
   if (route.name === "projects") {
     return (
-      <AppShell title="Projects" activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title="Projects"
+        activeNav="projects"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         <ProjectsPage onNavigate={navigate} currentUser={session} />
       </AppShell>
     );
@@ -198,7 +236,15 @@ export function App() {
 
   if (route.name === "material-dashboard") {
     return (
-        <AppShell title="Material Dashboard" activeNav="dashboard" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+        <AppShell
+          title="Material Dashboard"
+          activeNav="dashboard"
+          currentUser={session}
+          themeMode={themeMode}
+          onThemeModeChange={handleThemeModeChange}
+          onNavigate={navigate}
+          onLogout={handleLogout}
+        >
         {session.permissions.material_dashboard ? (
           <MaterialDashboardPage canEditGroups={session.permissions.erp_admin} />
         ) : (
@@ -210,7 +256,15 @@ export function App() {
 
   if (route.name === "history") {
     return (
-      <AppShell title="Change History" activeNav="history" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title="Change History"
+        activeNav="history"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         <ChangeHistoryPage />
       </AppShell>
     );
@@ -218,7 +272,15 @@ export function App() {
 
   if (route.name === "catalog") {
     return (
-      <AppShell title="Database Editor" activeNav="catalog" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title="Database Editor"
+        activeNav="catalog"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         {session.permissions.catalog_edit ? (
           <CatalogPage categoryId={route.categoryId} onNavigate={navigate} />
         ) : (
@@ -230,7 +292,15 @@ export function App() {
 
   if (route.name === "project-detail") {
     return (
-      <AppShell title={projectDetailTitle} activeNav="projects" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title={projectDetailTitle}
+        activeNav="projects"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
       </AppShell>
     );
@@ -238,7 +308,15 @@ export function App() {
 
   if (route.name === "users") {
     return (
-      <AppShell title="User Editor" activeNav="users" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+      <AppShell
+        title="User Editor"
+        activeNav="users"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
         {session.permissions.user_admin ? (
           <UsersPage currentUsername={session.username} />
         ) : (
@@ -249,7 +327,15 @@ export function App() {
   }
 
   return (
-    <AppShell title="Spec Sheets" activeNav="home" currentUser={session} onNavigate={navigate} onLogout={handleLogout}>
+    <AppShell
+      title="Spec Sheets"
+      activeNav="home"
+      currentUser={session}
+      themeMode={themeMode}
+      onThemeModeChange={handleThemeModeChange}
+      onNavigate={navigate}
+      onLogout={handleLogout}
+    >
       <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">This route is not implemented yet.</div>
     </AppShell>
   );

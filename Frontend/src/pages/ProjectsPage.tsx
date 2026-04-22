@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { DragEvent, FormEvent, useEffect, useState } from "react";
 
 import { Modal } from "../components/Modal";
 import { ApiError, api } from "../lib/api";
@@ -19,7 +19,6 @@ const statusIcons: Record<string, string> = {
 
 const initialProjectForm: CreateProjectRequest = {
   name: "",
-  description: "",
   status: "template",
 };
 
@@ -124,11 +123,16 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<CreateProjectRequest>(initialProjectForm);
   const [saving, setSaving] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [subtypeModal, setSubtypeModal] = useState<SubtypeModalState>(null);
   const [subtypeProject, setSubtypeProject] = useState<ProjectDetailData | null>(null);
   const [subtypeLoading, setSubtypeLoading] = useState(false);
   const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
   const [exportingJob, setExportingJob] = useState<{ projectId: number; kind: string } | null>(null);
+  const [draggingProject, setDraggingProject] = useState<{ projectId: number; fromStatus: string } | null>(null);
+  const [dropTargetStatus, setDropTargetStatus] = useState<string | null>(null);
+  const [updatingProjectId, setUpdatingProjectId] = useState<number | null>(null);
+  const canChangeProjectStatus = currentUser.permissions.project_change_status;
 
   function resolveDownloadFilename(job: ExportJob, contentDisposition: string | null) {
     const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i);
@@ -178,6 +182,38 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
 
   function isExporting(projectId: number, kind: string) {
     return exportingJob?.projectId === projectId && exportingJob.kind === kind;
+  }
+
+  function moveProjectToStatus(boardData: ProjectsBoardData, projectId: number, targetStatus: string): ProjectsBoardData {
+    let movedProject: ProjectsBoardData["grouped_projects"][string][number] | null = null;
+    const groupedProjects = Object.fromEntries(
+      Object.entries(boardData.grouped_projects).map(([status, projects]) => [
+        status,
+        projects.filter((project) => {
+          if (project.id !== projectId) {
+            return true;
+          }
+          movedProject = {
+            ...project,
+            status: targetStatus,
+            status_label: boardData.status_labels[targetStatus] || project.status_label,
+          };
+          return false;
+        }),
+      ]),
+    );
+    if (!movedProject) {
+      return boardData;
+    }
+    return {
+      ...boardData,
+      grouped_projects: {
+        ...groupedProjects,
+        [targetStatus]: [...(groupedProjects[targetStatus] || []), movedProject].sort((left, right) =>
+          left.name.localeCompare(right.name),
+        ),
+      },
+    };
   }
 
   async function loadProjects() {
@@ -239,6 +275,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     try {
       const result = await api.createProject(form);
       setForm(initialProjectForm);
+      setCreateModalOpen(false);
       if (result.project_id) {
         onNavigate(`/projects/${result.project_id}`);
       } else {
@@ -335,69 +372,57 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     }
   }
 
+  function handleProjectDragStart(event: DragEvent<HTMLDivElement>, projectId: number, fromStatus: string) {
+    if (!canChangeProjectStatus) {
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(projectId));
+    setDraggingProject({ projectId, fromStatus });
+  }
+
+  async function handleProjectDrop(targetStatus: string) {
+    if (!canChangeProjectStatus || !draggingProject || !data) {
+      return;
+    }
+    if (draggingProject.fromStatus === targetStatus) {
+      setDraggingProject(null);
+      setDropTargetStatus(null);
+      return;
+    }
+
+    const previousData = data;
+    setUpdatingProjectId(draggingProject.projectId);
+    setError(null);
+    setData(moveProjectToStatus(previousData, draggingProject.projectId, targetStatus));
+    setDraggingProject(null);
+    setDropTargetStatus(null);
+
+    try {
+      await api.updateProjectStatus(draggingProject.projectId, { status: targetStatus });
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not update project status.";
+      setData(previousData);
+      setError(message);
+    } finally {
+      setUpdatingProjectId(null);
+    }
+  }
+
   return (
     <div className="max-w-[1600px] mx-auto flex flex-col gap-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="flex items-center justify-end">
         {currentUser.permissions.project_create ? (
-          <form className="liquid-glass rounded-2xl p-6 flex flex-col gap-4" onSubmit={handleCreateProject}>
-            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest flex items-center gap-2">
-              <i className="ph-bold ph-folder-plus text-zinc-500 dark:text-zinc-400" /> Create Project
-            </h2>
-            <div className="space-y-3">
-              <input
-                value={form.name}
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                required
-                placeholder="Project Name"
-                className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
-              />
-              <select
-                value={form.status}
-                onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
-                className="w-full bg-black/5 dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
-              >
-                <option value="template">Project Template</option>
-                <option value="execution">Execution Project</option>
-                <option value="finished">Finished Project</option>
-              </select>
-              <textarea
-                value={form.description || ""}
-                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                rows={2}
-                placeholder="Description"
-                className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={saving}
-              className="mt-2 px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-all flex justify-center items-center gap-2"
-            >
-              <i className="ph-bold ph-plus" /> {saving ? "Creating..." : "Create Project"}
-            </button>
-          </form>
-        ) : (
-          <div className="liquid-glass rounded-2xl p-6 flex flex-col gap-3 justify-center">
-            <h2 className="text-sm font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest flex items-center gap-2">
-              <i className="ph-bold ph-lock text-zinc-500 dark:text-zinc-400" /> Create Project
-            </h2>
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Your current role can browse projects, but project creation stays limited to editor-level users.
-            </p>
-          </div>
-        )}
-
-        <div className="md:col-span-2 liquid-glass rounded-2xl p-8 flex flex-col justify-center relative overflow-hidden group">
-          
-          <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
-            <i className="ph-bold ph-info text-accent-600 dark:text-accent-500 mr-1" /> Project Board
-          </p>
-          <h2 className="text-2xl font-bold text-zinc-900 dark:text-white tracking-tight mb-2">Project lifecycle preserved</h2>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xl leading-relaxed">
-            The legacy statuses remain explicit domain states. The viewer workspace keeps templates, execution
-            projects, and finished work together in one model while still allowing status-based browsing.
-          </p>
-        </div>
+          <button
+            type="button"
+            onClick={() => setCreateModalOpen(true)}
+            className="h-10 w-10 rounded-full border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/5 text-zinc-700 dark:text-zinc-200 hover:bg-white dark:hover:bg-white/10 hover:border-accent-500/40 transition-colors flex items-center justify-center"
+            aria-label="Create project"
+            title="Create project"
+          >
+            <i className="ph-bold ph-plus text-sm" />
+          </button>
+        ) : null}
       </div>
 
       {error ? (
@@ -411,7 +436,32 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
           {orderedStatuses.map((status) => {
             const projects = data.grouped_projects[status] || [];
             return (
-              <div key={status} className="liquid-glass rounded-2xl p-5 flex flex-col h-[700px]">
+              <div
+                key={status}
+                className={[
+                  "liquid-glass rounded-2xl p-5 flex flex-col h-[700px] transition-colors",
+                  canChangeProjectStatus && dropTargetStatus === status ? "ring-2 ring-accent-500/60 bg-accent-500/5" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragOver={(event) => {
+                  if (!canChangeProjectStatus || !draggingProject) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setDropTargetStatus(status);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  void handleProjectDrop(status);
+                }}
+                onDragLeave={() => {
+                  if (dropTargetStatus === status) {
+                    setDropTargetStatus(null);
+                  }
+                }}
+              >
                 <div className="flex items-center justify-between mb-6 border-b border-black/10 dark:border-white/10 pb-4">
                   <h2 className="text-sm font-bold text-zinc-900 dark:text-white uppercase tracking-widest flex items-center gap-2">
                     <i className={`ph-bold ${statusIcons[status]} text-zinc-500 dark:text-zinc-400`} /> {data.status_labels[status]}
@@ -425,13 +475,30 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                     projects.map((project) => (
                       <div
                         key={project.id}
-                        className="bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3"
+                        draggable={canChangeProjectStatus}
+                        onDragStart={(event) => handleProjectDragStart(event, project.id, status)}
+                        onDragEnd={() => {
+                          setDraggingProject(null);
+                          setDropTargetStatus(null);
+                        }}
+                        className={[
+                          "bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3",
+                          canChangeProjectStatus ? "cursor-grab active:cursor-grabbing" : "",
+                          draggingProject?.projectId === project.id || updatingProjectId === project.id ? "opacity-60" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                       >
                         <div>
-                          <h3 className="text-sm font-bold text-zinc-900 dark:text-white mb-1 group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors">
-                            {project.name}
+                          <h3 className="mb-1">
+                            <button
+                              type="button"
+                              onClick={() => onNavigate(`/projects/${project.id}`)}
+                              className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
+                            >
+                              {project.name}
+                            </button>
                           </h3>
-                          <p className="text-xs text-zinc-600 dark:text-zinc-500 line-clamp-2">{project.description || "No description."}</p>
                         </div>
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
@@ -533,14 +600,29 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                     Downloads the workbook through the browser download flow.
                                   </span>
                                 </button>
+                                {currentUser.permissions.cost_model_export ? (
+                                  <button
+                                    type="button"
+                                    disabled={isExporting(project.id, "cost_model_workbook")}
+                                    className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                                    onClick={(event) => {
+                                      const details = event.currentTarget.closest("details");
+                                      if (details instanceof HTMLDetailsElement) {
+                                        details.open = false;
+                                      }
+                                      void handleRequestExport(project.id, "cost_model_workbook");
+                                    }}
+                                  >
+                                    <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
+                                      {isExporting(project.id, "cost_model_workbook") ? "Generating workbook..." : "Cost Model Workbook (.xlsx)"}
+                                    </span>
+                                    <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+                                      Downloads the formula-based cost model workbook with instance subtotals and auxiliary items.
+                                    </span>
+                                  </button>
+                                ) : null}
                               </div>
                             </details>
-                            <button 
-                              className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10" 
-                              onClick={() => onNavigate(`/projects/${project.id}`)}
-                            >
-                              Open Project
-                            </button>
                           </div>
                         </div>
                       </div>
@@ -556,6 +638,50 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
           })}
         </div>
       ) : null}
+
+      <Modal
+        open={createModalOpen}
+        title="Create Project"
+        kicker="Project"
+        onClose={() => {
+          if (saving) {
+            return;
+          }
+          setCreateModalOpen(false);
+          setForm(initialProjectForm);
+        }}
+        panelClassName="max-w-lg"
+      >
+        <form className="flex flex-col gap-4" onSubmit={handleCreateProject}>
+          <div className="space-y-3">
+            <input
+              value={form.name}
+              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+              required
+              placeholder="Project Name"
+              className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
+            />
+            <select
+              value={form.status}
+              onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
+              className="w-full bg-black/5 dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            >
+              <option value="template">Project Template</option>
+              <option value="execution">Execution Project</option>
+              <option value="finished">Finished Project</option>
+            </select>
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saving}
+              className="px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-all flex justify-center items-center gap-2"
+            >
+              <i className="ph-bold ph-plus" /> {saving ? "Creating..." : "Create Project"}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         open={subtypeModal !== null}

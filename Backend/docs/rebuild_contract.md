@@ -4,6 +4,8 @@ This backend must treat [REFACTOR_GUIDE.md](/mnt/c/Code/Spec%20Sheets/legacy_ref
 
 1. Read the named guide section first.
 2. Use [LEGACY_REFERENCE_MAP.md](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/LEGACY_REFERENCE_MAP.md) to find the old implementation path.
+   Legacy repo root for this machine: `/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI`
+   Cost-model exporter: `/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI/projects/excel_cost_model.py`
 3. Inspect [main.sql](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/main.sql) and [projects.sql](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/projects.sql) when schema or behavior detail is unclear.
 4. Preserve the business semantics and workflow completeness, not the old dual-database design or hidden relationship encoding.
 

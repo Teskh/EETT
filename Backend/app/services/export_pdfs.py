@@ -76,6 +76,7 @@ def build_detailed_material_pdf(project_data: dict[str, Any], output_path: Path,
         bottomMargin=0.75 * inch,
         title=f"{project_data['project']['name']} - Detailed Materials PDF",
     )
+    doc.project_name = str(project_data["project"]["name"])
 
     styles = getSampleStyleSheet()
     styles.add(
@@ -145,8 +146,8 @@ def build_detailed_material_pdf(project_data: dict[str, Any], output_path: Path,
         story.append(Paragraph("No materials found for this project.", styles["DetailedNormal"]))
         doc.build(
             story,
-            onFirstPage=_draw_simple_page_number,
-            onLaterPages=_draw_simple_page_number,
+            onFirstPage=_draw_detailed_material_page_number,
+            onLaterPages=_draw_detailed_material_page_number,
         )
         return
 
@@ -374,8 +375,8 @@ def build_detailed_material_pdf(project_data: dict[str, Any], output_path: Path,
 
     doc.build(
         story,
-        onFirstPage=_draw_simple_page_number,
-        onLaterPages=_draw_simple_page_number,
+        onFirstPage=_draw_detailed_material_page_number,
+        onLaterPages=_draw_detailed_material_page_number,
     )
 
 
@@ -809,9 +810,9 @@ def _markup_text(value: Any) -> str:
 def _detailed_material_column_widths(available_width: float, *, has_any_subtypes: bool, show_prices: bool) -> list[float]:
     if has_any_subtypes:
         if show_prices:
-            ratios = [0.20, 0.07, 0.10, 0.04, 0.04, 0.05, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
+            ratios = [0.20, 0.07, 0.09, 0.04, 0.05, 0.05, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
         else:
-            ratios = [0.22, 0.08, 0.12, 0.04, 0.04, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
+            ratios = [0.22, 0.08, 0.11, 0.04, 0.05, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
     else:
         if show_prices:
             ratios = [0.23, 0.08, 0.05, 0.05, 0.055, 0.055, 0.05, 0.08, 0.05, 0.07, 0.06, 0.06]
@@ -825,6 +826,21 @@ def _draw_simple_page_number(canvas, doc) -> None:
     page_width, _ = doc.pagesize
     canvas.saveState()
     canvas.setFont("Helvetica", 8)
+    canvas.drawRightString(page_width - doc.rightMargin, 30, str(canvas.getPageNumber()))
+    canvas.restoreState()
+
+
+def _draw_detailed_material_page_number(canvas, doc) -> None:
+    page_width, page_height = doc.pagesize
+    project_name = getattr(doc, "project_name", "")
+
+    canvas.saveState()
+    if project_name and canvas.getPageNumber() > 1:
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColorRGB(0.42, 0.46, 0.5)
+        canvas.drawString(doc.leftMargin, page_height - 22, project_name)
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColorRGB(0, 0, 0)
     canvas.drawRightString(page_width - doc.rightMargin, 30, str(canvas.getPageNumber()))
     canvas.restoreState()
 

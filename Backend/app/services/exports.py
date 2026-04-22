@@ -97,6 +97,14 @@ def execute_project_export(
                     output_dir=settings.export_output_dir,
                     job_id=job.id,
                 )
+            case ExportKind.COST_MODEL_WORKBOOK:
+                artifact_uri = _build_cost_model_workbook_export(
+                    session,
+                    project_id=job.project_id,
+                    output_dir=settings.export_output_dir,
+                    job_id=job.id,
+                    settings=settings,
+                )
             case ExportKind.FULL_TECHNICAL_PDF:
                 artifact_uri = _build_full_technical_pdf_export(
                     session,
@@ -167,6 +175,31 @@ def _build_materials_workbook_export(
     artifact_name = f"{job_id}-{_slugify(project_name)}-materials.xlsx"
     artifact_path = output_dir / artifact_name
     build_materials_workbook(project_data, artifact_path)
+    return f"/exports/{artifact_name}"
+
+
+def _build_cost_model_workbook_export(
+    session: Session,
+    *,
+    project_id: int,
+    output_dir: Path,
+    job_id: int,
+    settings: Settings,
+) -> str:
+    from app.services.export_workbooks import build_cost_model_workbook
+
+    project_data = get_project_view_data(session, project_id)
+    if project_data is None:
+        raise ValueError("Project not found")
+
+    project_name = project_data["project"]["name"]
+    artifact_name = f"{job_id}-{_slugify(project_name)}-cost-model.xlsx"
+    artifact_path = output_dir / artifact_name
+    build_cost_model_workbook(
+        project_data,
+        artifact_path,
+        prices_by_sku=_load_cost_model_price_map(session, settings=settings, project_data=project_data),
+    )
     return f"/exports/{artifact_name}"
 
 
@@ -371,6 +404,60 @@ def _load_detailed_material_erp_details(
         return {}
 
     return details
+
+
+def _load_cost_model_price_map(
+    session: Session,
+    *,
+    settings: Settings,
+    project_data: dict[str, object],
+) -> dict[str, float | None]:
+    from app.services.erp import _get_average_prices_for_products_batch, _open_connection, erp_search_available
+
+    unique_skus: list[str] = []
+    seen_skus: set[str] = set()
+    for section in project_data.get("categories", []):
+        for instance in section.get("instances", []):
+            for material in instance.get("materials", []):
+                sku = str(material.get("sku") or "").strip().upper()
+                if not sku or sku in seen_skus:
+                    continue
+                seen_skus.add(sku)
+                unique_skus.append(sku)
+    for auxiliary in project_data.get("auxiliary_materials", []):
+        sku = str(auxiliary.get("code") or "").strip().upper()
+        if not sku or sku in seen_skus:
+            continue
+        seen_skus.add(sku)
+        unique_skus.append(sku)
+
+    if not unique_skus:
+        return {}
+
+    prices = {
+        cache.sku.strip().upper(): cache.average_price
+        for cache in session.scalars(select(ErpMaterialCache).order_by(ErpMaterialCache.sku)).all()
+        if cache.sku
+    }
+    price_map = {sku: prices.get(sku) for sku in unique_skus}
+
+    if not erp_search_available(settings):
+        return price_map
+
+    try:
+        with _open_connection(settings) as connection:
+            live_prices = _get_average_prices_for_products_batch(
+                connection.cursor(),
+                unique_skus,
+                datetime.utcnow().strftime("%d/%m/%Y"),
+            )
+    except Exception:
+        return price_map
+
+    for sku, value in live_prices.items():
+        if value is not None:
+            price_map[sku] = value
+    return price_map
 
 
 def _should_show_prices(user: User | None) -> bool:

@@ -58,6 +58,7 @@ from app.api_models import (
     NotificationModel,
     ProjectDetailResponse,
     ProjectCreateRequest,
+    ProjectStatusUpdateRequest,
     ProjectInstanceMutationResultModel,
     ProjectOccurrenceUpdateRequest,
     ProjectOccurrenceMutationResultModel,
@@ -87,9 +88,11 @@ from app.services.auth import (
     resolve_current_user,
     require_project_create,
     require_catalog_edit,
+    require_cost_model_export,
     require_material_dashboard_access,
     require_erp_admin,
     require_project_edit,
+    require_project_status_change,
     require_project_view,
     require_user_admin,
     serialize_session_user,
@@ -164,6 +167,7 @@ from app.services.projects import (
     refresh_instance_snapshot,
     replace_project_material_occurrence,
     set_project_material_mode,
+    update_project_status,
     update_project_instance_occurrence,
     update_project_subtype,
     update_project_instance,
@@ -336,6 +340,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if job is None or job.project is None:
             raise HTTPException(status_code=404, detail="Export artifact not found")
         require_project_view(current_user, job.project)
+        if job.export_kind.value == "cost_model_workbook":
+            require_cost_model_export(current_user)
         try:
             artifact_path = resolve_artifact_path(settings=request.app.state.settings, artifact_uri=artifact_uri)
         except ValueError as exc:
@@ -566,13 +572,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/projects")
     async def create_project_route(
         name: str = Form(...),
-        description: str | None = Form(default=None),
         status: str = Form("template"),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         require_project_create(current_user)
-        project = create_project(session, name=name, description=description, status=status, actor_user=current_user)
+        project = create_project(session, name=name, status=status, actor_user=current_user)
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
@@ -993,11 +998,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project = create_project(
             session,
             name=payload.name,
-            description=payload.description,
             status=payload.status,
             actor_user=current_user,
             mutation_batch_id=mutation_batch_id,
         )
+        return {"ok": True, "project_id": project.id}
+
+    @app.put("/api/v1/projects/{project_id}/status", response_model=MutationResultModel)
+    async def update_project_status_v1(
+        project_id: int,
+        payload: ProjectStatusUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_status_change(current_user, project)
+        try:
+            update_project_status(
+                session,
+                project=project,
+                status=payload.status,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "project_id": project.id}
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
@@ -1681,6 +1709,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_view(current_user, project)
+        if payload["kind"] == "cost_model_workbook":
+            require_cost_model_export(current_user)
         request_project_export(
             session,
             project=project,

@@ -241,17 +241,14 @@ def seed_demo_dataset(session: Session) -> None:
     project_template = Project(
         name="Casa Nogal Template",
         status=ProjectStatus.TEMPLATE,
-        description="Reference project template for detached single-family housing packages.",
     )
     execution_project = Project(
         name="Casa Robles - Block A",
         status=ProjectStatus.EXECUTION,
-        description="Execution project with subtype-specific BOM breakdown for the current block.",
     )
     finished_project = Project(
         name="Casa Alerce - Delivered",
         status=ProjectStatus.FINISHED,
-        description="Closed project kept for export and historical reference.",
     )
     session.add_all([project_template, execution_project, finished_project])
     session.flush()

@@ -33,6 +33,7 @@ import type {
   ProjectDetailData,
   ProjectsBoardData,
   SessionUser,
+  UpdateProjectStatusRequest,
   UpdateMaterialCalculationSheetRequest,
   UpdateMaterialOccurrenceRequest,
   UpdateProjectOccurrenceRequest,
@@ -427,6 +428,13 @@ export const api = {
   createProject(payload: CreateProjectRequest, mutationBatchId?: string) {
     return request<MutationResult>("/api/v1/projects", {
       method: "POST",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  updateProjectStatus(projectId: number, payload: UpdateProjectStatusRequest, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/status`, {
+      method: "PUT",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),
     });

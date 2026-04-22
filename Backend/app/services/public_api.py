@@ -17,7 +17,6 @@ def list_public_projects(session: Session) -> list[dict]:
             "id": project.id,
             "name": project.name,
             "status": project.status.value,
-            "description": project.description,
         }
         for project in projects
     ]

@@ -44,6 +44,27 @@ def iter_material_context_rows(project_data: dict[str, Any]):
                     }
 
 
+def iter_cost_model_rows(project_data: dict[str, Any]):
+    for section in number_category_sections(project_data.get("categories", [])):
+        category_label = f"{section['number']}. {section['name']}"
+        for instance in section.get("instances", []):
+            instance_label = instance.get("short_name") or instance["name"]
+            for material in instance.get("materials", []):
+                for bom_entry in material.get("bom_entries", []):
+                    yield {
+                        "category_label": category_label,
+                        "instance_name": instance["name"],
+                        "instance_label": instance_label,
+                        "material_name": material["material_name"],
+                        "sku": material["sku"],
+                        "unit": material.get("unit") or "",
+                        "subtype": bom_entry.get("subtype") or "General",
+                        "subtype_id": bom_entry.get("subtype_id"),
+                        "quantity": bom_entry.get("quantity"),
+                        "quantity_state": bom_entry.get("quantity_state"),
+                    }
+
+
 def build_detailed_material_export_sections(project_data: dict[str, Any]) -> list[dict[str, Any]]:
     materials_by_sku: dict[str, dict[str, Any]] = {}
 

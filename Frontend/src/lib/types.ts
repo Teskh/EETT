@@ -467,7 +467,6 @@ export type ProjectSummary = {
   name: string;
   status: string;
   status_label: string;
-  description: string | null;
   updated_at: string;
   instance_count: number;
   material_mode: string;
@@ -708,7 +707,6 @@ export type ProjectDetailData = {
     name: string;
     status: string;
     status_label: string;
-    description: string | null;
     instance_count: number;
     material_mode: string;
   };
@@ -791,7 +789,10 @@ export type UpdateComponentRequest = {
 
 export type CreateProjectRequest = {
   name: string;
-  description?: string | null;
+  status: string;
+};
+
+export type UpdateProjectStatusRequest = {
   status: string;
 };
 

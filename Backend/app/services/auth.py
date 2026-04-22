@@ -256,6 +256,11 @@ def require_erp_admin(user: User) -> None:
         raise HTTPException(status_code=403, detail="ERP/admin permission required")
 
 
+def require_cost_model_export(user: User) -> None:
+    if not can_use_cost_model_export(user):
+        raise HTTPException(status_code=403, detail="Cost model export permission required")
+
+
 def require_user_admin(user: User) -> None:
     if not can_manage_users(user):
         raise HTTPException(status_code=403, detail="User administration permission required")
@@ -269,6 +274,11 @@ def require_project_view(user: User, project: Project) -> None:
 def require_project_edit(user: User, project: Project) -> None:
     if not can_edit_project(user, project):
         raise HTTPException(status_code=403, detail="Project edit permission required")
+
+
+def require_project_status_change(user: User, project: Project) -> None:
+    if not can_change_project_status(user, project):
+        raise HTTPException(status_code=403, detail="Project status change permission required")
 
 
 def build_permission_payload(user: User, project: Project | None = None) -> dict:

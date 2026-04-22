@@ -6,6 +6,18 @@ Use this file during the rebuild when intended behavior is unclear.
 
 `C:\Mess\CODE REPO\Testgrounds\2025.03.04 SPGXI`
 
+WSL path on this machine:
+
+`/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI`
+
+Cost-model export script:
+
+`C:\Mess\CODE REPO\Testgrounds\2025.03.04 SPGXI\projects\excel_cost_model.py`
+
+WSL equivalent:
+
+`/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI/projects/excel_cost_model.py`
+
 This repo is the legacy behavior reference.
 Use it to understand workflow intent, UX, and output contents.
 Do not copy its implementation patterns blindly.
