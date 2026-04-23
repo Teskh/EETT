@@ -715,6 +715,90 @@ export type ProjectDetailData = {
   auxiliary_materials: AuxiliaryMaterialSelection[];
 };
 
+export type CostModelAdjustment = {
+  id: number;
+  subtype_id: number | null;
+  adjusted_quantity: number;
+  source_kind: string;
+  source_note: string | null;
+  source_house_type_id: number | null;
+  source_range_start: string | null;
+  source_range_end: string | null;
+  source_sample_houses: number | null;
+  source_total_consumption: number | null;
+  updated_at: string | null;
+  created_by: string | null;
+};
+
+export type CostModelSubtypeEntry = {
+  subtype_id: number | null;
+  subtype_name: string;
+  estimated_quantity: number | null;
+};
+
+export type CostModelInstanceEntry = {
+  instance_id: number | null;
+  instance_name: string | null;
+  category_label: string | null;
+  subtype_id: number | null;
+  subtype_name: string;
+  quantity: number | null;
+  quantity_state: string;
+};
+
+export type CostModelRow = {
+  material_id: number | null;
+  sku: string;
+  material_name: string;
+  unit: string;
+  price: number | null;
+  estimated_total_quantity: number | null;
+  subtypes: CostModelSubtypeEntry[];
+  instances: CostModelInstanceEntry[];
+  adjustments: CostModelAdjustment[];
+  is_auxiliary: boolean;
+};
+
+export type CostModelFlatSubtype = {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  depth: number;
+};
+
+export type CostModelView = {
+  project: {
+    id: number;
+    name: string;
+    status: string;
+    status_label: string;
+    instance_count: number;
+    material_mode: string;
+  };
+  material_mode: string;
+  subtypes: ProjectSubtype[];
+  flat_subtypes: CostModelFlatSubtype[];
+  rows: CostModelRow[];
+};
+
+export type CostModelAdjustmentUpsertRequest = {
+  material_id: number;
+  subtype_id?: number | null;
+  adjusted_quantity: number;
+  source_kind?: string;
+  source_note?: string | null;
+  source_house_type_id?: number | null;
+  source_range_start?: string | null;
+  source_range_end?: string | null;
+  source_sample_houses?: number | null;
+  source_total_consumption?: number | null;
+};
+
+export type CostModelAdjustmentDeleteRequest = {
+  material_id: number;
+  subtype_id?: number | null;
+};
+
 export type Approval = {
   id: number;
   status: string;

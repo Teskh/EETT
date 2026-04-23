@@ -954,5 +954,27 @@ class CatalogResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class CostModelAdjustmentUpsertRequest(BaseModel):
+    material_id: int
+    subtype_id: int | None = None
+    adjusted_quantity: float
+    source_kind: str = "manual"
+    source_note: str | None = None
+    source_house_type_id: int | None = None
+    source_range_start: date | None = None
+    source_range_end: date | None = None
+    source_sample_houses: int | None = None
+    source_total_consumption: float | None = None
+
+
+class CostModelAdjustmentDeleteRequest(BaseModel):
+    material_id: int
+    subtype_id: int | None = None
+
+
+class CostModelViewResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
 ProjectSubtypeModel.model_rebuild()
 CommentModel.model_rebuild()

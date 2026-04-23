@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Enum as SqlEnum,
     Float,
@@ -438,6 +439,10 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    cost_model_adjustments: Mapped[list["ProjectCostModelAdjustment"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
 
 
 class ProjectMembership(Base):
@@ -781,6 +786,54 @@ class ProjectAuxiliaryMaterialSelection(Base):
     project: Mapped[Project] = relationship(back_populates="auxiliary_materials")
     auxiliary_material: Mapped[AuxiliaryMaterial] = relationship(back_populates="project_selections")
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="auxiliary_materials")
+
+
+class ProjectCostModelAdjustment(Base):
+    __tablename__ = "project_cost_model_adjustments"
+    __table_args__ = (
+        Index(
+            "uq_project_cost_model_adjustments_general",
+            "project_id",
+            "material_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NULL"),
+        ),
+        Index(
+            "uq_project_cost_model_adjustments_subtype",
+            "project_id",
+            "material_id",
+            "subtype_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False)
+    subtype_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None
+    )
+    adjusted_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
+    source_note: Mapped[str | None] = mapped_column(Text, default=None)
+    source_house_type_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    source_range_start: Mapped[date | None] = mapped_column(Date, default=None)
+    source_range_end: Mapped[date | None] = mapped_column(Date, default=None)
+    source_sample_houses: Mapped[int | None] = mapped_column(Integer, default=None)
+    source_total_consumption: Mapped[float | None] = mapped_column(Float, default=None)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+    project: Mapped[Project] = relationship(back_populates="cost_model_adjustments")
+    material: Mapped[Material] = relationship()
+    subtype: Mapped[ProjectSubtype | None] = relationship()
+    created_by: Mapped[User | None] = relationship()
 
 
 class ProjectComment(Base):

@@ -53,8 +53,10 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
                 for bom_entry in material.get("bom_entries", []):
                     yield {
                         "category_label": category_label,
+                        "instance_id": instance.get("id"),
                         "instance_name": instance["name"],
                         "instance_label": instance_label,
+                        "material_id": material.get("material_id"),
                         "material_name": material["material_name"],
                         "sku": material["sku"],
                         "unit": material.get("unit") or "",

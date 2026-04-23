@@ -6,6 +6,7 @@ import { applyTheme, getPreferredThemeForUser, persistThemeForUser, rememberThem
 import type { SessionUser } from "./lib/types";
 import { CatalogPage } from "./pages/CatalogPage";
 import { ChangeHistoryPage } from "./pages/ChangeHistoryPage";
+import { CostModelPage } from "./pages/CostModelPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
 import { MaterialDashboardPage } from "./pages/MaterialDashboardPage";
@@ -21,6 +22,7 @@ type Route =
   | { name: "history" }
   | { name: "projects" }
   | { name: "project-detail"; projectId: number }
+  | { name: "project-cost-model"; projectId: number }
   | { name: "users" }
   | { name: "not-found" };
 
@@ -48,6 +50,10 @@ function parseCurrentRoute(): Route {
   }
   if (pathname === "/users") {
     return { name: "users" };
+  }
+  const projectCostModelMatch = pathname.match(/^\/projects\/(\d+)\/cost-model$/);
+  if (projectCostModelMatch) {
+    return { name: "project-cost-model", projectId: Number(projectCostModelMatch[1]) };
   }
   const projectMatch = pathname.match(/^\/projects\/(\d+)$/);
   if (projectMatch) {
@@ -147,6 +153,8 @@ export function App() {
       document.title = "Projects | Spec Sheets";
     } else if (route.name === "project-detail") {
       document.title = `${projectDetailTitle} | Spec Sheets`;
+    } else if (route.name === "project-cost-model") {
+      document.title = `${projectDetailTitle} — Cost Model | Spec Sheets`;
     } else if (route.name === "users") {
       document.title = "User Editor | Spec Sheets";
     } else {
@@ -302,6 +310,27 @@ export function App() {
         onLogout={handleLogout}
       >
         <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
+      </AppShell>
+    );
+  }
+
+  if (route.name === "project-cost-model") {
+    return (
+      <AppShell
+        title={`${projectDetailTitle} — Cost Model`}
+        activeNav="projects"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
+        <CostModelPage
+          projectId={route.projectId}
+          onNavigate={navigate}
+          onTitleChange={setProjectDetailTitle}
+          currentUser={session}
+        />
       </AppShell>
     );
   }

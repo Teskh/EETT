@@ -4,6 +4,9 @@ import type {
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
   CatalogPageData,
+  CostModelAdjustmentDeleteRequest,
+  CostModelAdjustmentUpsertRequest,
+  CostModelView,
   CreateProjectSubtypeRequest,
   CreateUserRequest,
   CreateCategoryRequest,
@@ -548,6 +551,23 @@ export const api = {
     return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-fields/apply-instance`, {
       method: "POST",
       body: JSON.stringify({ field }),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  getCostModel(projectId: number) {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model`);
+  },
+  upsertCostModelAdjustment(projectId: number, payload: CostModelAdjustmentUpsertRequest, mutationBatchId?: string) {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  deleteCostModelAdjustment(projectId: number, payload: CostModelAdjustmentDeleteRequest, mutationBatchId?: string) {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments`, {
+      method: "DELETE",
+      body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),
     });
   },

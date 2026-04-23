@@ -24,6 +24,7 @@ from app.models import (
     CatalogComponent,
     ComponentType,
     ComponentMaterialRule,
+    ErpMaterialCache,
     MaterialDashboardCacheEntry,
     MaterialStudyGroup,
     Project,
@@ -1211,6 +1212,162 @@ class ServiceLayerTests(unittest.TestCase):
             totals.cell(row=totals_total_general_row, column=7).value,
             f'=SUMIFS(G2:G{totals_total_general_row - 1},C2:C{totals_total_general_row - 1},"General")',
         )
+
+    def test_cost_model_view_returns_consolidated_rows_with_aggregate_and_per_subtype_adjustments(self) -> None:
+        view_response = self.client.get(
+            "/api/v1/projects/2/cost-model",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(view_response.status_code, 200)
+        view = view_response.json()
+        self.assertEqual(view["project"]["id"], 2)
+
+        rows_by_sku = {row["sku"]: row for row in view["rows"]}
+        self.assertIn("MAT-001", rows_by_sku)
+        anchor = rows_by_sku["MAT-001"]
+        self.assertAlmostEqual(anchor["estimated_total_quantity"], 24.0, places=6)
+        self.assertFalse(anchor["is_auxiliary"])
+        self.assertEqual(anchor["adjustments"], [])
+
+        aux_rows = [row for row in view["rows"] if row["is_auxiliary"]]
+        self.assertGreaterEqual(len(aux_rows), 1)
+
+        material_id = anchor["material_id"]
+        upsert_aggregate = self.client.put(
+            "/api/v1/projects/2/cost-model/adjustments",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "material_id": material_id,
+                "subtype_id": None,
+                "adjusted_quantity": 30.5,
+                "source_kind": "historic_consumption",
+                "source_note": "Based on last quarter",
+                "source_sample_houses": 12,
+                "source_total_consumption": 366.0,
+            },
+        )
+        self.assertEqual(upsert_aggregate.status_code, 200)
+        aggregate_row = next(row for row in upsert_aggregate.json()["rows"] if row["sku"] == "MAT-001")
+        self.assertEqual(len(aggregate_row["adjustments"]), 1)
+        aggregate_adjustment = aggregate_row["adjustments"][0]
+        self.assertIsNone(aggregate_adjustment["subtype_id"])
+        self.assertAlmostEqual(aggregate_adjustment["adjusted_quantity"], 30.5, places=6)
+        self.assertEqual(aggregate_adjustment["source_kind"], "historic_consumption")
+        self.assertEqual(aggregate_adjustment["source_sample_houses"], 12)
+
+        subtype_targets = [
+            entry["subtype_id"]
+            for entry in aggregate_row["subtypes"]
+            if entry["subtype_id"] is not None
+        ]
+        if subtype_targets:
+            subtype_id = subtype_targets[0]
+            upsert_subtype = self.client.put(
+                "/api/v1/projects/2/cost-model/adjustments",
+                headers={"X-Spec-Sheets-User": "editor"},
+                json={
+                    "material_id": material_id,
+                    "subtype_id": subtype_id,
+                    "adjusted_quantity": 8.25,
+                    "source_kind": "manual",
+                },
+            )
+            self.assertEqual(upsert_subtype.status_code, 200)
+            updated_row = next(row for row in upsert_subtype.json()["rows"] if row["sku"] == "MAT-001")
+            self.assertEqual(len(updated_row["adjustments"]), 2)
+            self.assertIn(subtype_id, {item["subtype_id"] for item in updated_row["adjustments"]})
+
+            replace_subtype = self.client.put(
+                "/api/v1/projects/2/cost-model/adjustments",
+                headers={"X-Spec-Sheets-User": "editor"},
+                json={
+                    "material_id": material_id,
+                    "subtype_id": subtype_id,
+                    "adjusted_quantity": 9.0,
+                },
+            )
+            self.assertEqual(replace_subtype.status_code, 200)
+            replaced_row = next(row for row in replace_subtype.json()["rows"] if row["sku"] == "MAT-001")
+            self.assertEqual(len(replaced_row["adjustments"]), 2)
+            replaced_subtype_entry = next(
+                item for item in replaced_row["adjustments"] if item["subtype_id"] == subtype_id
+            )
+            self.assertAlmostEqual(replaced_subtype_entry["adjusted_quantity"], 9.0, places=6)
+
+            delete_subtype = self.client.request(
+                "DELETE",
+                "/api/v1/projects/2/cost-model/adjustments",
+                headers={"X-Spec-Sheets-User": "editor"},
+                json={"material_id": material_id, "subtype_id": subtype_id},
+            )
+            self.assertEqual(delete_subtype.status_code, 200)
+            after_delete = next(row for row in delete_subtype.json()["rows"] if row["sku"] == "MAT-001")
+            self.assertEqual(len(after_delete["adjustments"]), 1)
+            self.assertIsNone(after_delete["adjustments"][0]["subtype_id"])
+
+        delete_aggregate = self.client.request(
+            "DELETE",
+            "/api/v1/projects/2/cost-model/adjustments",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"material_id": material_id, "subtype_id": None},
+        )
+        self.assertEqual(delete_aggregate.status_code, 200)
+        cleared_row = next(row for row in delete_aggregate.json()["rows"] if row["sku"] == "MAT-001")
+        self.assertEqual(cleared_row["adjustments"], [])
+
+    @patch("app.services.cost_model._get_average_prices_for_products_batch")
+    @patch("app.services.cost_model._open_connection")
+    @patch("app.services.cost_model.erp_search_available")
+    def test_cost_model_view_falls_back_to_live_erp_prices_when_cache_is_missing(
+        self,
+        erp_search_available_mock,
+        open_connection_mock,
+        average_prices_mock,
+    ) -> None:
+        with self.session_factory() as session:
+            cache = session.scalar(select(ErpMaterialCache).where(ErpMaterialCache.sku == "MAT-001"))
+            self.assertIsNotNone(cache)
+            cache.average_price = None
+            session.commit()
+
+        class _DummyConnection:
+            def cursor(self):
+                return object()
+
+        class _DummyContextManager:
+            def __enter__(self):
+                return _DummyConnection()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        erp_search_available_mock.return_value = True
+        open_connection_mock.return_value = _DummyContextManager()
+        average_prices_mock.return_value = {"MAT-001": 4321.0}
+
+        view_response = self.client.get(
+            "/api/v1/projects/2/cost-model",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(view_response.status_code, 200)
+
+        rows_by_sku = {row["sku"]: row for row in view_response.json()["rows"]}
+        self.assertEqual(rows_by_sku["MAT-001"]["price"], 4321.0)
+        self.assertEqual(average_prices_mock.call_count, 1)
+
+    def test_cost_model_view_endpoint_denies_viewer_edits_but_allows_read(self) -> None:
+        view_response = self.client.get(
+            "/api/v1/projects/2/cost-model",
+            headers={"X-Spec-Sheets-User": "viewer"},
+        )
+        self.assertEqual(view_response.status_code, 200)
+
+        denied = self.client.put(
+            "/api/v1/projects/2/cost-model/adjustments",
+            headers={"X-Spec-Sheets-User": "viewer"},
+            json={"material_id": 1, "adjusted_quantity": 1.0},
+        )
+        self.assertEqual(denied.status_code, 403)
 
     @unittest.skipUnless(importlib.util.find_spec("reportlab"), "reportlab is not installed")
     def test_commercial_pdf_export_generates_browser_viewable_artifact(self) -> None:

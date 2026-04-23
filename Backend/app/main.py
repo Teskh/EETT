@@ -28,6 +28,9 @@ from app.api_models import (
     CatalogMaterialSearchResponse,
     CatalogResponse,
     CommentModel,
+    CostModelAdjustmentDeleteRequest,
+    CostModelAdjustmentUpsertRequest,
+    CostModelViewResponse,
     DashboardResponse,
     ExportJobModel,
     LoginRequest,
@@ -1429,6 +1432,98 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "updated_at": material_mode.updated_at.isoformat() if material_mode else project.updated_at.isoformat(),
             "changed_by": material_mode.changed_by.username if material_mode and material_mode.changed_by else None,
         }
+
+    @app.get("/api/v1/projects/{project_id}/cost-model", response_model=CostModelViewResponse)
+    async def get_project_cost_model_api(
+        project_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model import get_cost_model_view
+
+        view = get_cost_model_view(
+            session,
+            project_id,
+            settings=request.app.state.settings,
+            user=current_user,
+        )
+        if view is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return view
+
+    @app.put("/api/v1/projects/{project_id}/cost-model/adjustments", response_model=CostModelViewResponse)
+    async def upsert_project_cost_model_adjustment_api(
+        project_id: int,
+        payload: CostModelAdjustmentUpsertRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model import get_cost_model_view, upsert_cost_model_adjustment
+
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            upsert_cost_model_adjustment(
+                session,
+                project=project,
+                material_id=payload.material_id,
+                subtype_id=payload.subtype_id,
+                adjusted_quantity=payload.adjusted_quantity,
+                source_kind=payload.source_kind,
+                source_note=payload.source_note,
+                source_house_type_id=payload.source_house_type_id,
+                source_range_start=payload.source_range_start,
+                source_range_end=payload.source_range_end,
+                source_sample_houses=payload.source_sample_houses,
+                source_total_consumption=payload.source_total_consumption,
+                actor=current_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        view = get_cost_model_view(
+            session,
+            project_id,
+            settings=request.app.state.settings,
+            user=current_user,
+        )
+        if view is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return view
+
+    @app.delete("/api/v1/projects/{project_id}/cost-model/adjustments", response_model=CostModelViewResponse)
+    async def delete_project_cost_model_adjustment_api(
+        project_id: int,
+        payload: CostModelAdjustmentDeleteRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model import delete_cost_model_adjustment, get_cost_model_view
+
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        delete_cost_model_adjustment(
+            session,
+            project=project,
+            material_id=payload.material_id,
+            subtype_id=payload.subtype_id,
+        )
+        view = get_cost_model_view(
+            session,
+            project_id,
+            settings=request.app.state.settings,
+            user=current_user,
+        )
+        if view is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return view
 
     @app.put("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
     async def update_project_material_mode_api(
