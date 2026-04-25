@@ -917,7 +917,7 @@ function getIncomingOccurrencePrimaryLabel(instance: ProjectInstance, occurrence
       (link.application_label || null) === (occurrence.context_label || null),
   );
 
-  return matchingLink?.name || instance.linked_accessories[index]?.name || getOccurrencePrimaryLabel(occurrence);
+  return matchingLink?.name || instance.linked_accessories[index]?.name || occurrence.context_label || "Usage occurrence";
 }
 
 function renderOccurrenceSummary(
@@ -925,19 +925,14 @@ function renderOccurrenceSummary(
   index: number,
   options?: {
     primaryLabel?: string;
-    secondaryLabel?: string | null;
   },
 ) {
   const primaryLabel = options?.primaryLabel || getOccurrencePrimaryLabel(occurrence);
-  const secondaryLabel = options?.secondaryLabel?.trim() || null;
 
   return (
     <div key={`${occurrence.relationship_type}-${primaryLabel}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
       <div className="mb-2">
         <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</div>
-        {secondaryLabel && secondaryLabel !== primaryLabel ? (
-          <div className="text-xs text-zinc-500 dark:text-zinc-400">{secondaryLabel}</div>
-        ) : null}
         <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
       </div>
       {occurrence.attributes.length ? (
@@ -968,22 +963,26 @@ function getSyncStatusMeta(status: string) {
     case "customized":
       return {
         label: "Custom",
-        className: "border-sky-200 text-sky-700 bg-sky-50 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-300",
+        icon: "ph-pencil-simple",
+        className: "text-sky-500 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300",
       };
     case "stale":
       return {
         label: "Stale",
-        className: "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300",
+        icon: "ph-clock-counter-clockwise",
+        className: "text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300",
       };
     case "conflict":
       return {
         label: "Conflict",
-        className: "border-red-200 text-red-700 bg-red-50 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300",
+        icon: "ph-warning",
+        className: "text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300",
       };
     case "out_of_sync":
       return {
         label: "Schema",
-        className: "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300",
+        icon: "ph-warning-circle",
+        className: "text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300",
       };
     default:
       return null;
@@ -1007,11 +1006,11 @@ function SyncIndicatorButton({
   return (
     <button
       type="button"
-      title={title}
+      title={`${title} (${meta.label})`}
       onClick={onClick}
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest transition-colors hover:opacity-80 ${meta.className}`}
+      className={`inline-flex items-center justify-center p-0.5 rounded-full transition-colors ${meta.className}`}
     >
-      {meta.label}
+      <i className={`ph-fill ${meta.icon} text-sm`} />
     </button>
   );
 }
@@ -1562,18 +1561,44 @@ function MaterialOccurrenceEditor({
   }
 
   return (
-    <div className="bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg overflow-hidden">
-      <div className="relative flex items-center justify-between gap-3 p-3 border-b border-black/5 dark:border-white/5 bg-white dark:bg-black/40">
+    <div className={`shadow-sm border rounded-lg overflow-hidden ${
+      material.source_status === "missing"
+        ? "bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-900/30"
+        : material.source_status === "manual"
+          ? "bg-sky-50/30 dark:bg-sky-950/10 border-sky-200 dark:border-sky-900/30"
+          : "bg-white dark:bg-black/20 border-black/5 dark:border-white/5"
+    }`}>
+      <div className={`relative flex items-center justify-between gap-3 p-3 border-b ${
+        material.source_status === "missing"
+          ? "border-red-200 dark:border-red-900/30 bg-red-50/50 dark:bg-red-900/20"
+          : material.source_status === "manual"
+            ? "border-sky-200 dark:border-sky-900/30 bg-sky-50/50 dark:bg-sky-900/20"
+            : "border-black/5 dark:border-white/5 bg-white dark:bg-black/40"
+      }`}>
         <div className="flex items-center gap-3 min-w-0">
           <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2 min-w-0">
             <span className="truncate">{material.material_name}</span>
             <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
               {material.sku}
             </span>
-            {material.source_status !== "catalog" ? (
+            {material.source_status === "manual" ? (
+              <span
+                title={material.source_label || "Manually added material"}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-sky-200 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-500/10 text-[10px] font-semibold tracking-wide text-sky-700 dark:text-sky-300"
+              >
+                <i className="ph-bold ph-hand-pointing" /> Manual
+              </span>
+            ) : material.source_status === "missing" ? (
+              <span
+                title={material.source_label || "Material missing from catalog"}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-[10px] font-semibold tracking-wide text-red-700 dark:text-red-300"
+              >
+                <i className="ph-bold ph-warning" /> Missing
+              </span>
+            ) : material.source_status !== "catalog" ? (
               <span
                 title={material.source_label || undefined}
-                className="px-2 py-0.5 rounded border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300"
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[10px] font-semibold tracking-wide text-amber-700 dark:text-amber-300"
               >
                 {material.source_status}
               </span>
@@ -1897,14 +1922,6 @@ function InstanceCard({
               title="View name sync details"
               onClick={() => onOpenSyncModal("name")}
             />
-            <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle">
-              {instance.short_name || instance.name}
-            </span>
-            <SyncIndicatorButton
-              status={shortNameSync?.status}
-              title="View short name sync details"
-              onClick={() => onOpenSyncModal("short_name")}
-            />
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -1946,6 +1963,19 @@ function InstanceCard({
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-info text-zinc-600" /> Info
                 </h6>
+                {instance.short_name && instance.short_name.trim() !== "" && instance.short_name !== instance.name ? (
+                  <div className="mb-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Short Name</span>
+                      <SyncIndicatorButton
+                        status={shortNameSync?.status}
+                        title="View short name sync details"
+                        onClick={() => onOpenSyncModal("short_name")}
+                      />
+                    </div>
+                    <p className="text-sm font-mono text-zinc-800 dark:text-zinc-300">{instance.short_name}</p>
+                  </div>
+                ) : null}
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Description</span>
@@ -1955,7 +1985,9 @@ function InstanceCard({
                       onClick={() => onOpenSyncModal("description")}
                     />
                   </div>
-                  <p className="text-sm text-zinc-800 dark:text-zinc-300">{instance.description || "No description provided."}</p>
+                  <p className={`text-sm ${descriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-800 dark:text-zinc-300"}`}>
+                    {instance.description || "No description provided."}
+                  </p>
                 </div>
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
@@ -1966,7 +1998,7 @@ function InstanceCard({
                       onClick={() => onOpenSyncModal("short_description")}
                     />
                   </div>
-                  <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                  <p className={`text-xs ${shortDescriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-1 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-600 dark:text-zinc-400"}`}>
                     {instance.short_description || "No short description."}
                   </p>
                 </div>
@@ -2005,7 +2037,6 @@ function InstanceCard({
                     {instance.incoming_occurrences.map((occurrence, index) =>
                       renderOccurrenceSummary(occurrence, index, {
                         primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index),
-                        secondaryLabel: occurrence.context_label,
                       }),
                     )}
                   </div>
@@ -2036,27 +2067,63 @@ function InstanceCard({
                   onClick={() => onOpenSyncModal("attributes")}
                 />
               </div>
-              {instance.attributes.length ? (
-                instance.attributes.map((group) => (
-                  <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
-                    <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                      <i className="ph-bold ph-list-dashes text-zinc-600" /> {group.name}
-                    </h5>
-                    <table className="w-full text-left border-collapse text-sm">
-                      <tbody className="divide-y divide-white/10">
-                        {group.values.map((row) => (
-                          <tr key={`${group.name}-${row.name}`}>
-                            <td className="py-1.5 text-zinc-500 w-1/2">{row.name}</td>
-                            <td className="py-1.5 text-zinc-900 dark:text-zinc-200 font-mono w-1/2">{row.value || "-"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-zinc-500 font-mono italic">No attributes loaded.</p>
-              )}
+              
+              {(() => {
+                const missingAttributes = attributeSchemaSync?.differences.filter((item) => item.status === "missing_in_instance") || [];
+                const extraAttributes = new Set(attributeSchemaSync?.differences.filter((item) => item.status === "extra_in_instance").map(d => d.name) || []);
+
+                return (
+                  <>
+                    {instance.attributes.length ? (
+                      instance.attributes.map((group) => (
+                        <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
+                          <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                            <i className="ph-bold ph-list-dashes text-zinc-600" /> {group.name}
+                          </h5>
+                          <table className="w-full text-left border-collapse text-sm">
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                              {group.values.map((row) => {
+                                const isExtra = extraAttributes.has(row.name);
+                                return (
+                                  <tr key={`${group.name}-${row.name}`} className={isExtra ? "bg-sky-50/30 dark:bg-sky-950/20" : ""}>
+                                    <td className={`py-1.5 w-1/2 ${isExtra ? "text-sky-700 dark:text-sky-300 font-medium" : "text-zinc-500"}`}>
+                                      {row.name}
+                                      {isExtra && (
+                                        <span title="Custom attribute not in catalog" className="inline-block ml-1.5 align-middle w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+                                      )}
+                                    </td>
+                                    <td className={`py-1.5 font-mono w-1/2 ${isExtra ? "text-sky-800 dark:text-sky-200" : "text-zinc-900 dark:text-zinc-200"}`}>{row.value || "-"}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-zinc-500 font-mono italic">No attributes loaded.</p>
+                    )}
+
+                    {missingAttributes.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
+                        <h5 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                          <i className="ph-bold ph-ghost text-zinc-400" /> Catalog Schema Defaults
+                        </h5>
+                        <table className="w-full text-left border-collapse text-sm opacity-50">
+                          <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                            {missingAttributes.map((diff) => (
+                              <tr key={`missing-${diff.name}`}>
+                                <td className="py-1.5 text-zinc-500 w-1/2">{diff.name}</td>
+                                <td className="py-1.5 text-zinc-500 font-mono w-1/2 italic">Not set</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -2077,22 +2144,46 @@ function InstanceCard({
                   existingMaterialIds={instance.materials.map((material) => material.material_id)}
                   onAddMaterial={onAddManualMaterial}
                 />
-                {instance.materials.length ? (
-                  instance.materials.map((material) => (
-                    <MaterialOccurrenceEditor
-                      key={`${instance.id}-${material.material_key}`}
-                      material={material}
-                      subtypeOptions={subtypeOptions}
-                      onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
-                      onUpdateMaterial={onUpdateMaterial}
-                      onDeleteMaterial={onDeleteMaterial}
-                    />
-                  ))
-                ) : (
+                {instance.materials.filter(m => m.source_status === "catalog").length ? (
+                  <div className="space-y-4">
+                    {instance.materials.filter(m => m.source_status === "catalog").map((material) => (
+                      <MaterialOccurrenceEditor
+                        key={`${instance.id}-${material.material_key}`}
+                        material={material}
+                        subtypeOptions={subtypeOptions}
+                        onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
+                        onUpdateMaterial={onUpdateMaterial}
+                        onDeleteMaterial={onDeleteMaterial}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+
+                {instance.materials.filter(m => m.source_status !== "catalog").length ? (
+                  <div className="mt-6 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
+                    <h6 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <i className="ph-bold ph-warning-circle text-zinc-400" /> Exceptions (Manual / Missing)
+                    </h6>
+                    <div className="space-y-4">
+                      {instance.materials.filter(m => m.source_status !== "catalog").map((material) => (
+                        <MaterialOccurrenceEditor
+                          key={`${instance.id}-${material.material_key}`}
+                          material={material}
+                          subtypeOptions={subtypeOptions}
+                          onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
+                          onUpdateMaterial={onUpdateMaterial}
+                          onDeleteMaterial={onDeleteMaterial}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {!instance.materials.length ? (
                   <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
                     No applicable materials resolved for this instance.
                   </div>
-                )}
+                ) : null}
               </div>
             ) : null}
           </div>

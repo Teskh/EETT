@@ -348,16 +348,8 @@ function getClampedSelectionBounds(selection: ChartSelection, pointCount: number
   };
 }
 
-function findAggregateAdjustment(row: CostModelRow): CostModelAdjustment | null {
-  return row.adjustments.find((adj) => adj.subtype_id === null) ?? null;
-}
-
 function findSubtypeAdjustment(row: CostModelRow, subtypeId: number | null): CostModelAdjustment | null {
   return row.adjustments.find((adj) => adj.subtype_id === subtypeId) ?? null;
-}
-
-function rowHasSubtypeAdjustments(row: CostModelRow) {
-  return row.adjustments.some((adj) => adj.subtype_id !== null);
 }
 
 function computeEffectiveQuantity(row: CostModelRow, subtypeId: number | null): number | null {
@@ -365,51 +357,26 @@ function computeEffectiveQuantity(row: CostModelRow, subtypeId: number | null): 
   if (override) {
     return override.adjusted_quantity;
   }
-  if (subtypeId === null) {
-    const aggregate = findAggregateAdjustment(row);
-    if (aggregate) {
-      return aggregate.adjusted_quantity;
-    }
-    return row.estimated_total_quantity;
-  }
   const subtypeEntry = row.subtypes.find((entry) => entry.subtype_id === subtypeId);
   return subtypeEntry ? subtypeEntry.estimated_quantity : null;
 }
 
-function computeRowTotal(row: CostModelRow): number | null {
-  const aggregate = findAggregateAdjustment(row);
-  if (aggregate) {
-    return aggregate.adjusted_quantity;
-  }
+function computeDisplayedQuantity(row: CostModelRow, subtypeId: number | null): number | null {
+  return computeEffectiveQuantity(row, subtypeId);
+}
+
+function computeRowQuantity(row: CostModelRow): number | null {
   let total = 0;
   let hasAny = false;
   for (const subtype of row.subtypes) {
-    const override = findSubtypeAdjustment(row, subtype.subtype_id);
-    const value = override ? override.adjusted_quantity : subtype.estimated_quantity;
+    const value = computeDisplayedQuantity(row, subtype.subtype_id);
     if (value === null || value === undefined) {
       continue;
     }
     total += value;
     hasAny = true;
   }
-  if (!hasAny) {
-    return row.estimated_total_quantity;
-  }
-  return total;
-}
-
-function computeDisplayedQuantity(row: CostModelRow, subtypeId: number | null): number | null {
-  if (subtypeId !== null) {
-    return computeEffectiveQuantity(row, subtypeId);
-  }
-  const aggregate = findAggregateAdjustment(row);
-  if (aggregate) {
-    return aggregate.adjusted_quantity;
-  }
-  if (rowHasSubtypeAdjustments(row)) {
-    return computeRowTotal(row);
-  }
-  return row.estimated_total_quantity;
+  return hasAny ? total : null;
 }
 
 function quantityCost(quantity: number | null, price: number | null): number | null {
@@ -516,7 +483,7 @@ function applyOptimisticDelete(currentView: CostModelView, materialId: number, s
 
 function getSubtypeLabel(row: CostModelRow, subtypeId: number | null) {
   if (subtypeId === null) {
-    return "Total";
+    return "General";
   }
   return row.subtypes.find((entry) => entry.subtype_id === subtypeId)?.subtype_name ?? "Subtype";
 }
@@ -971,7 +938,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       } else if (sort.key === "price") {
         comparison = compareNullableNumbers(left.price, right.price);
       } else if (sort.key === "quantity") {
-        comparison = compareNullableNumbers(computeDisplayedQuantity(left, null), computeDisplayedQuantity(right, null));
+        comparison = compareNullableNumbers(computeRowQuantity(left), computeRowQuantity(right));
       } else if (sort.key === "usage_delta") {
         comparison = compareNullableNumbers(
           economicMetricsBySku.get(metricKeyForSku(left.sku))?.consumption_delta_percent,
@@ -979,8 +946,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
         );
       } else if (sort.key === "cost") {
         comparison = compareNullableNumbers(
-          quantityCost(computeDisplayedQuantity(left, null), left.price),
-          quantityCost(computeDisplayedQuantity(right, null), right.price),
+          quantityCost(computeRowQuantity(left), left.price),
+          quantityCost(computeRowQuantity(right), right.price),
         );
       } else if (sort.key.startsWith("subtype:")) {
         const subtypeIdToken = sort.key.slice("subtype:".length);
@@ -1003,18 +970,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     if (!view) {
       return null;
     }
-    let totalCost = 0;
-    let hasCost = false;
-    let pricedRowCount = 0;
     const perSubtype = new Map<string, number>();
     for (const row of filteredRows) {
-      const rowTotal = computeDisplayedQuantity(row, null);
-      const cost = quantityCost(rowTotal, row.price);
-      if (cost !== null) {
-        totalCost += cost;
-        hasCost = true;
-        pricedRowCount += 1;
-      }
       for (const subtype of row.subtypes) {
         const effective = computeDisplayedQuantity(row, subtype.subtype_id);
         const subtypeCost = quantityCost(effective, row.price);
@@ -1026,9 +983,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       }
     }
     return {
-      totalCost: hasCost ? totalCost : null,
       perSubtype,
-      pricedRowCount,
     };
   }, [filteredRows, view]);
 
@@ -1170,7 +1125,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
           <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Cost Model</p>
           <h2 className="text-xl font-medium text-zinc-900 dark:text-white">No projects available</h2>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-            Create a project first to load cost totals, subtype adjustments, and consumption studies.
+            Create a project first to load cost tallies, subtype adjustments, and consumption studies.
           </p>
         </div>
       </section>
@@ -1234,18 +1189,17 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
           View by subtype
         </label>
         <p className="text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-          Off shows one rolled-up quantity and cost per material. On keeps the same total row and adds one quantity column for each project subtype.
+          Shows or hides the General and subtype quantity columns in the table. The tallies below always stay split by bucket.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 mt-2">
-        <SummaryMetric label="Visible total" value={formatCurrency(totals?.totalCost ?? null)} emphasis />
+      <div className="mt-2">
         <SummaryMetric label="Visible materials" value={formatNumber(sortedRows.length, 0)} />
       </div>
 
-      {viewBySubtype && subtypeColumns.length > 0 && totals ? (
+      {subtypeColumns.length > 0 && totals ? (
         <div className="space-y-1 mt-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Subtype totals in view</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Tallies in view</p>
           <div className="flex flex-wrap gap-2 pb-1">
             {subtypeColumns.map((column) => {
               const key = column.id === null ? "__none__" : String(column.id);
@@ -2625,9 +2579,8 @@ function CostModelRowView({
   onUpsert,
   onDelete,
 }: CostModelRowViewProps) {
-  const rowTotal = computeDisplayedQuantity(row, null);
-  const rowCost = quantityCost(rowTotal, row.price);
-  const aggregateAdjustment = findAggregateAdjustment(row);
+  const rowQuantity = computeRowQuantity(row);
+  const rowCost = quantityCost(rowQuantity, row.price);
   const rowSelected = selectedConsumption?.sku === row.sku;
   const rowHasOverrides = row.adjustments.length > 0;
   const usageDelta = usageMetric?.consumption_delta_percent ?? null;
@@ -2699,19 +2652,8 @@ function CostModelRowView({
       <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
         {formatCurrency(row.price)}
       </td>
-      <td className="px-4 py-3 text-right">
-        <AdjustableQuantityCell
-          row={row}
-          subtypeId={null}
-          estimated={row.estimated_total_quantity}
-          adjustment={aggregateAdjustment}
-          selected={Boolean(rowSelected && selectedConsumption?.subtypeId === null)}
-          canEdit={canEdit && !row.is_auxiliary}
-          saving={savingKey === `${row.material_id}:null`}
-          onFocusConsumption={() => onFocusConsumption(null)}
-          onUpsert={(value) => onUpsert(row, null, value)}
-          onDelete={() => onDelete(row, null)}
-        />
+      <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-900 dark:text-white whitespace-nowrap">
+        {formatNumber(rowQuantity)}
       </td>
       <td
         className={`px-4 py-3 text-right font-mono text-[11px] whitespace-nowrap ${usageDeltaClass}`}
@@ -2788,7 +2730,6 @@ function AdjustableQuantityCell({
   const [draft, setDraft] = useState("");
   const effective = computeDisplayedQuantity(row, subtypeId);
   const isOverridden = adjustment !== null;
-  const isImplicit = subtypeId === null && !adjustment && rowHasSubtypeAdjustments(row);
 
   useEffect(() => {
     if (!modalOpen) {
@@ -2831,16 +2772,12 @@ function AdjustableQuantityCell({
           className={
             isOverridden
               ? "px-2 py-0.5 rounded font-mono text-[11px] bg-amber-100 dark:bg-amber-500/15 text-amber-800 dark:text-amber-200 border border-amber-300/50 dark:border-amber-500/30 hover:bg-amber-200 dark:hover:bg-amber-500/30 transition-colors"
-              : isImplicit
-                ? "px-2 py-0.5 rounded font-mono text-[11px] bg-amber-50 dark:bg-amber-500/5 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-500/20 italic hover:bg-amber-100 dark:hover:bg-amber-500/10 transition-colors"
-                : "font-mono text-[11px] text-zinc-800 dark:text-zinc-200 hover:text-accent-600 dark:hover:text-accent-400 transition-colors"
+              : "font-mono text-[11px] text-zinc-800 dark:text-zinc-200 hover:text-accent-600 dark:hover:text-accent-400 transition-colors"
           }
           title={
             isOverridden
               ? `Adjusted from ${formatNumber(estimated)} to ${formatNumber(effective)}`
-              : isImplicit
-                ? "Implied from per-subtype adjustments"
-                : "Estimated from BOM"
+              : "Estimated from BOM"
           }
         >
           {formatNumber(effective)}
@@ -2851,7 +2788,7 @@ function AdjustableQuantityCell({
         <div className="p-4 flex flex-col gap-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             {row.material_name}
-            {subtypeId !== null ? ` (Subtype: ${getSubtypeLabel(row, subtypeId)})` : ""}
+            {` (Bucket: ${getSubtypeLabel(row, subtypeId)})`}
           </p>
 
           <div className="flex flex-col gap-2">
@@ -2953,7 +2890,7 @@ function DetailsModal({ row, onClose }: { row: CostModelRow | null; onClose: () 
           <div className="grid grid-cols-3 gap-4 text-xs">
             <Stat label="Unit" value={row.unit || "—"} />
             <Stat label="Unit price" value={formatCurrency(row.price)} />
-            <Stat label="Estimated total" value={formatNumber(row.estimated_total_quantity)} />
+            <Stat label="Estimated sum" value={formatNumber(row.estimated_total_quantity)} />
           </div>
           {grouped.length === 0 ? (
             <p className="text-xs text-zinc-500">No instance-level data available for this material.</p>
