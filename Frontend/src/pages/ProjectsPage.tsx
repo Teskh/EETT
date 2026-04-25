@@ -514,14 +514,6 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             >
                               Subtypes
                             </button>
-                            <button
-                              type="button"
-                              className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 flex items-center gap-1.5"
-                              onClick={() => onNavigate(`/projects/${project.id}/cost-model`)}
-                              title="Open cost model dashboard"
-                            >
-                              <i className="ph-bold ph-chart-pie-slice" /> Cost Model
-                            </button>
                             <details className="relative">
                               <summary
                                 className="list-none px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 cursor-pointer flex items-center gap-1.5"

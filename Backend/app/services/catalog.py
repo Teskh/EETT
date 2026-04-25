@@ -338,8 +338,8 @@ def replace_component_material_rules(
     if component is None:
         return None
 
-    component.material_rules.clear()
-    session.flush()
+    existing_rules = {rule.id: rule for rule in component.material_rules}
+    retained_rule_ids: set[int] = set()
 
     for index, rule_data in enumerate(rules, start=1):
         sku = (rule_data.get("sku") or "").strip().upper()
@@ -356,15 +356,21 @@ def replace_component_material_rules(
             unit=material_unit,
         )
 
-        material_rule = ComponentMaterialRule(
-            component=component,
-            material=material,
-            display_order=index * 10,
-            unit=None,
-            unit_qty_per_unit=rule_data.get("unit_qty_per_unit"),
-            notes=(rule_data.get("notes") or "").strip() or None,
-        )
-        session.add(material_rule)
+        rule_id = rule_data.get("id")
+        material_rule = existing_rules.get(rule_id) if isinstance(rule_id, int) else None
+        if material_rule is not None and material_rule.material_id != material.id:
+            material_rule = None
+        if material_rule is None:
+            material_rule = ComponentMaterialRule(component=component, material=material)
+            session.add(material_rule)
+            session.flush()
+        retained_rule_ids.add(material_rule.id)
+        material_rule.material = material
+        material_rule.display_order = index * 10
+        material_rule.unit = None
+        material_rule.unit_qty_per_unit = rule_data.get("unit_qty_per_unit")
+        material_rule.notes = (rule_data.get("notes") or "").strip() or None
+        material_rule.condition_groups.clear()
         session.flush()
 
         for group_index, group_data in enumerate(rule_data.get("conditions") or [], start=1):
@@ -388,7 +394,10 @@ def replace_component_material_rules(
                     )
                 )
 
-    _remove_orphan_bom_entries(component)
+    for material_rule in list(component.material_rules):
+        if material_rule.id not in retained_rule_ids:
+            component.material_rules.remove(material_rule)
+
     _touch_component(component)
     session.commit()
     session.refresh(component)

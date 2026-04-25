@@ -272,7 +272,7 @@ class ServiceLayerTests(unittest.TestCase):
             )
             self.assertTrue(get_instance_sync_preview(session, instance.id)["is_outdated"])
 
-    def test_replace_component_material_rules_removes_orphan_bom_rows_for_existing_instances(self) -> None:
+    def test_replace_component_material_rules_marks_removed_materials_stale_without_deleting_project_bom(self) -> None:
         with self.session_factory() as session:
             component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Entry Door"))
             project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
@@ -286,12 +286,14 @@ class ServiceLayerTests(unittest.TestCase):
             assert component is not None
             assert project is not None
             assert door_instance is not None
+            retained_rule = next(rule for rule in component.material_rules if rule.material.sku == "MAT-001")
 
             updated_component = replace_component_material_rules(
                 session,
                 component_id=component.id,
                 rules=[
                     {
+                        "id": retained_rule.id,
                         "material_name": "Anchor Screw 5x70",
                         "sku": "MAT-001",
                         "unit": "ea",
@@ -309,21 +311,22 @@ class ServiceLayerTests(unittest.TestCase):
                 .where(ProjectBomEntry.instance_id == door_instance.id)
                 .order_by(ProjectBomEntry.material_id)
             ).all()
-            self.assertEqual([row.material.sku for row in remaining_bom_rows], ["MAT-001"])
+            self.assertEqual([row.material.sku for row in remaining_bom_rows], ["MAT-001", "MAT-002"])
 
             detail = get_project_view_data(session, project.id)
             self.assertIsNotNone(detail)
             assert detail is not None
             door_section = next(section for section in detail["categories"] if section["name"] == "Doors")
             door_instance = next(item for item in door_section["instances"] if item["name"] == "Door A")
-            self.assertEqual([material["sku"] for material in door_instance["materials"]], ["MAT-001"])
+            self.assertEqual([material["sku"] for material in door_instance["materials"]], ["MAT-001", "MAT-002"])
+            self.assertEqual(next(material for material in door_instance["materials"] if material["sku"] == "MAT-002")["source_status"], "stale")
 
             catalog_payload = get_catalog_page_data(session, selected_category_id=component.category_id)
             selected_component = next(
                 item for item in catalog_payload["selected"]["components"] if item["id"] == component.id
             )
             self.assertIsNotNone(selected_component["material_rules"][0]["id"])
-            self.assertEqual(selected_component["material_rules"][0]["material_id"], remaining_bom_rows[0].material_id)
+            self.assertEqual(selected_component["material_rules"][0]["id"], retained_rule.id)
 
     def test_visible_project_subtype_rows_ignore_flat_subtypes_outside_visible_tree(self) -> None:
         project = Project(name="Subtype Visibility Contract", status="template")

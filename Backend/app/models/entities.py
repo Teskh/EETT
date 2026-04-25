@@ -18,7 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, foreign, mapped_column, relationship
 
 from app.database import Base
 
@@ -347,7 +347,10 @@ class ComponentMaterialRule(Base):
 
     component: Mapped[CatalogComponent] = relationship(back_populates="material_rules")
     material: Mapped[Material] = relationship(back_populates="component_rules")
-    bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="material_rule")
+    bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(
+        back_populates="material_rule",
+        primaryjoin="ComponentMaterialRule.id == foreign(ProjectBomEntry.material_rule_id)",
+    )
     condition_groups: Mapped[list["MaterialRuleGroup"]] = relationship(
         back_populates="rule",
         cascade="all, delete-orphan",
@@ -712,12 +715,29 @@ class ProjectBomEntry(Base):
             unique=True,
             postgresql_where=text("subtype_id IS NOT NULL"),
         ),
+        Index(
+            "uq_project_bom_entries_manual_general",
+            "project_id",
+            "instance_id",
+            "material_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NULL AND material_rule_id IS NULL"),
+        ),
+        Index(
+            "uq_project_bom_entries_manual_subtype",
+            "project_id",
+            "instance_id",
+            "material_id",
+            "subtype_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NOT NULL AND material_rule_id IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
-    material_rule_id: Mapped[int] = mapped_column(ForeignKey("component_material_rules.id", ondelete="CASCADE"), nullable=False)
+    material_rule_id: Mapped[int | None] = mapped_column(Integer, default=None)
     material_id: Mapped[int] = mapped_column(ForeignKey("materials.id"), nullable=False)
     subtype_id: Mapped[int | None] = mapped_column(ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None)
     quantity: Mapped[float | None] = mapped_column(Float, default=None)
@@ -732,7 +752,10 @@ class ProjectBomEntry(Base):
 
     project: Mapped[Project] = relationship(back_populates="bom_entries")
     instance: Mapped[ProjectInstance] = relationship(back_populates="bom_entries")
-    material_rule: Mapped[ComponentMaterialRule] = relationship(back_populates="bom_entries")
+    material_rule: Mapped[ComponentMaterialRule | None] = relationship(
+        back_populates="bom_entries",
+        primaryjoin="foreign(ProjectBomEntry.material_rule_id) == ComponentMaterialRule.id",
+    )
     material: Mapped[Material] = relationship(back_populates="bom_entries")
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="bom_entries")
 

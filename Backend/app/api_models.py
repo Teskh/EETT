@@ -191,6 +191,7 @@ class ProjectInstanceCreateRequest(BaseModel):
     installation: str | None = None
     unit_amount: float | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
+    selected_material_rule_ids: list[int] | None = None
 
 
 class ProjectInstanceUpdateRequest(BaseModel):
@@ -221,6 +222,10 @@ class MaterialOccurrenceEntryInputModel(BaseModel):
 class MaterialOccurrenceUpdateRequest(BaseModel):
     mode: str
     entries: list[MaterialOccurrenceEntryInputModel] = Field(default_factory=list)
+
+
+class ManualMaterialAddRequest(BaseModel):
+    material_id: int
 
 
 class MaterialCalculationCellInputModel(BaseModel):
@@ -303,13 +308,16 @@ class BomEntryModel(BaseModel):
 
 
 class MaterialModel(BaseModel):
-    rule_id: int
+    material_key: str
+    rule_id: int | None
     material_id: int
     material_name: str
     sku: str
     unit_qty_per_unit: float | None
     unit: str | None
     notes: str | None
+    source_status: str = "catalog"
+    source_label: str | None = None
     applicability: MaterialApplicabilityModel
     mode: str
     bom_entries: list[BomEntryModel]
@@ -361,6 +369,7 @@ class AvailableComponentModel(BaseModel):
     installation: str | None
     base_attributes: list[EditableAttributeModel]
     usage_attributes: list[EditableAttributeModel]
+    material_rules: list[CatalogMaterialRulePayloadModel] = Field(default_factory=list)
 
 
 class InstanceLinkModel(BaseModel):
@@ -791,7 +800,7 @@ class MaterialDashboardProjectUsageItemModel(BaseModel):
     instance_name: str
     category_name: str | None
     component_name: str | None
-    rule_id: int
+    rule_id: int | None
     material_id: int
     unit_qty_per_unit: float | None
     rule_notes: str | None
@@ -832,6 +841,12 @@ class MaterialDashboardHouseComparisonResponse(BaseModel):
     project_comparison: MaterialDashboardProjectComparisonModel | None = None
     points: list[MaterialDashboardHouseComparisonPointModel] = Field(default_factory=list)
     generated_at: str
+
+
+class MaterialDashboardMaterialStudyResponse(BaseModel):
+    detail: MaterialDashboardDetailResponse
+    history: MaterialDashboardMovementResponse
+    comparison: MaterialDashboardHouseComparisonResponse
 
 
 class MaterialStudyGroupMemberModel(BaseModel):

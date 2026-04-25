@@ -209,18 +209,19 @@ def get_material_dashboard_project_usage(
     for entry in project.bom_entries:
         if entry.material is None or entry.material.sku.strip().upper() != normalized_sku:
             continue
-        if entry.instance is None or entry.material_rule is None:
+        if entry.instance is None:
             continue
 
         if material_name is None:
             material_name = entry.material.name
         if material_unit is None:
-            material_unit = entry.unit or entry.material_rule.unit or entry.material.unit
+            material_unit = entry.unit or (entry.material_rule.unit if entry.material_rule else None) or entry.material.unit
 
-        item_key = (entry.instance_id, entry.material_rule_id)
+        item_key = (entry.instance_id, entry.material_rule_id or -entry.material_id)
         sheet = calculation_sheet_by_key.get((entry.instance_id, entry.material_id))
         item = items_by_key.get(item_key)
         if item is None:
+            rule = entry.material_rule
             item = {
                 "instance_id": entry.instance_id,
                 "instance_name": entry.instance.name,
@@ -228,14 +229,14 @@ def get_material_dashboard_project_usage(
                 "component_name": entry.instance.component.name if entry.instance.component else None,
                 "rule_id": entry.material_rule_id,
                 "material_id": entry.material_id,
-                "unit_qty_per_unit": round(float(entry.material_rule.unit_qty_per_unit), 4)
-                if entry.material_rule.unit_qty_per_unit is not None
+                "unit_qty_per_unit": round(float(rule.unit_qty_per_unit), 4)
+                if rule is not None and rule.unit_qty_per_unit is not None
                 else None,
-                "rule_notes": entry.material_rule.notes,
+                "rule_notes": rule.notes if rule else None,
                 "total_quantity": 0.0,
                 "blank_quantity_count": 0,
                 "zero_quantity_count": 0,
-                "unit": entry.unit or entry.material_rule.unit or entry.material.unit,
+                "unit": entry.unit or (rule.unit if rule else None) or entry.material.unit,
                 "has_calculation_sheet": sheet is not None,
                 "calculation_sheet_cell_count": len(sheet.cells) if sheet is not None else 0,
                 "calculation_sheet_updated_at": sheet.updated_at.isoformat() if sheet is not None else None,
@@ -263,7 +264,7 @@ def get_material_dashboard_project_usage(
                 "quantity_state": quantity_state,
                 "assembly_quantity": assembly_quantity,
                 "assembly_quantity_state": assembly_quantity_state,
-                "unit": entry.unit or entry.material_rule.unit or entry.material.unit,
+                "unit": entry.unit or (entry.material_rule.unit if entry.material_rule else None) or entry.material.unit,
                 "calculation_mode": entry.calculation_mode.value,
                 "calculation_formula": entry.calculation_formula,
                 "calculation_explanation": _dashboard_bom_calculation_explanation(entry),
@@ -283,7 +284,7 @@ def get_material_dashboard_project_usage(
         key=lambda item: (
             (item["category_name"] or "").lower(),
             item["instance_name"].lower(),
-            item["rule_id"],
+            item["rule_id"] or 0,
         )
     )
 

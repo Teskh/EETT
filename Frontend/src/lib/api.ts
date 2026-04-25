@@ -26,6 +26,7 @@ import type {
   MaterialDashboardHouseTypesResponse,
   MaterialDashboardData,
   MaterialDashboardDetailData,
+  MaterialDashboardMaterialStudyData,
   MaterialDashboardMovementData,
   MaterialDashboardProjectUsageData,
   MaterialStudyGroupListResponse,
@@ -402,6 +403,24 @@ export const api = {
       }),
     });
   },
+  getMaterialDashboardMaterialStudy(
+    sku: string,
+    houseTypeId: number,
+    filters: MaterialDashboardFilterSelection = {},
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    return request<MaterialDashboardMaterialStudyData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/study`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        house_type_id: houseTypeId,
+        project_id: options.projectId ?? null,
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
   getMaterialDashboardEconomicMetrics(
     houseTypeId: number,
     filters: MaterialDashboardFilterSelection = {},
@@ -508,10 +527,23 @@ export const api = {
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  updateMaterialOccurrence(projectId: number, instanceId: number, ruleId: number, payload: UpdateMaterialOccurrenceRequest, mutationBatchId?: string) {
-    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}`, {
+  addManualMaterial(projectId: number, instanceId: number, materialId: number, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials`, {
+      method: "POST",
+      body: JSON.stringify({ material_id: materialId }),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  updateMaterialOccurrence(projectId: number, instanceId: number, materialKey: string, payload: UpdateMaterialOccurrenceRequest, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${encodeURIComponent(materialKey)}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  deleteMaterialOccurrence(projectId: number, instanceId: number, materialKey: string, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${encodeURIComponent(materialKey)}`, {
+      method: "DELETE",
       headers: mutationHeaders(mutationBatchId),
     });
   },

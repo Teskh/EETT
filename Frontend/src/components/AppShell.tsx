@@ -3,7 +3,7 @@ import { type ReactNode } from "react";
 import type { SessionUser } from "../lib/types";
 import type { ThemeMode } from "../lib/theme";
 
-type NavKey = "home" | "catalog" | "dashboard" | "history" | "projects" | "users";
+type NavKey = "home" | "catalog" | "dashboard" | "cost-model" | "history" | "projects" | "users";
 
 type AppShellProps = {
   title: string;
@@ -86,6 +86,7 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
             {currentUser.permissions.material_dashboard ? (
               <NavButton href="/dashboard/materials" icon="ph-chart-line-up" label="Material Dashboard" active={activeNav === "dashboard"} onNavigate={onNavigate} />
             ) : null}
+            <NavButton href="/cost-model" icon="ph-chart-pie-slice" label="Cost Model" active={activeNav === "cost-model"} onNavigate={onNavigate} />
             <NavButton href="/history" icon="ph-clock-counter-clockwise" label="Change History" active={activeNav === "history"} onNavigate={onNavigate} />
             <NavButton href="/projects" icon="ph-kanban" label="Projects" active={activeNav === "projects"} onNavigate={onNavigate} />
             {currentUser.permissions.user_admin ? (

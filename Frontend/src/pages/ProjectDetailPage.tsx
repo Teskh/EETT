@@ -7,6 +7,8 @@ import type {
   AttributeValueInput,
   AvailableComponent,
   BomEntry,
+  CatalogMaterialSearchResult,
+  CatalogMaterialRule,
   EditableAttribute,
   InstanceSyncPreview,
   InstanceMaterial,
@@ -53,6 +55,7 @@ type InstanceFormModalProps = {
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
+    selected_material_rule_ids?: number[];
   }) => Promise<void>;
 };
 
@@ -526,6 +529,55 @@ function buildAttributesFromComponent(component: AvailableComponent | undefined)
   }));
 }
 
+function editableAttributesToMap(attributes: EditableAttribute[]) {
+  return new Map(attributes.map((attribute) => [attribute.name, attribute.value || ""]));
+}
+
+function numericValue(value: string | null | undefined) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function materialRuleApplies(rule: CatalogMaterialRule, attributes: EditableAttribute[]) {
+  if (!rule.conditions.length) {
+    return true;
+  }
+  const values = editableAttributesToMap(attributes);
+  return rule.conditions.some((group) =>
+    group.clauses.every((clause) => {
+      const rawValue = values.get(clause.attribute_name) || "";
+      const operator = clause.operator.toUpperCase();
+      if (operator === "IS NOT NULL") {
+        return rawValue.trim() !== "";
+      }
+      if (!rawValue.trim()) {
+        return false;
+      }
+      if (operator === "=") {
+        return rawValue === (clause.comparison_value || "");
+      }
+      if (operator === ">") {
+        return numericValue(rawValue) > numericValue(clause.comparison_value);
+      }
+      if (operator === "<") {
+        return numericValue(rawValue) < numericValue(clause.comparison_value);
+      }
+      if (operator === "IN") {
+        return (clause.comparison_value || "")
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .includes(rawValue);
+      }
+      if (operator === "BETWEEN") {
+        const candidate = numericValue(rawValue);
+        return numericValue(clause.comparison_value) <= candidate && candidate <= numericValue(clause.comparison_value_secondary);
+      }
+      return false;
+    }),
+  );
+}
+
 function buildOccurrenceAttributeDrafts(instance: ProjectInstance, occurrence?: UsageOccurrence): EditableAttribute[] {
   const values = new Map((occurrence?.attributes || []).map((attribute) => [attribute.name, attribute.value ?? ""]));
   const drafts = instance.usage_attribute_definitions.map((attribute) => ({
@@ -562,6 +614,13 @@ function InstanceFormModal({
   const [installation, setInstallation] = useState("");
   const [unitAmount, setUnitAmount] = useState("");
   const [attributes, setAttributes] = useState<EditableAttribute[]>([]);
+  const [selectedMaterialRuleIds, setSelectedMaterialRuleIds] = useState<number[]>([]);
+  const selectedComponent = availableComponents.find((component) => component.id === componentId) || availableComponents[0];
+  const applicableMaterialRules =
+    mode === "create" && selectedComponent
+      ? selectedComponent.material_rules.filter((rule) => rule.id !== undefined && materialRuleApplies(rule, attributes))
+      : [];
+  const applicableMaterialRuleIdKey = applicableMaterialRules.map((rule) => rule.id).join(",");
 
   useEffect(() => {
     if (!open) {
@@ -589,6 +648,7 @@ function InstanceFormModal({
     setInstallation(defaultComponent?.installation || "");
     setUnitAmount("");
     setAttributes(buildAttributesFromComponent(defaultComponent));
+    setSelectedMaterialRuleIds((defaultComponent?.material_rules || []).map((rule) => rule.id).filter((id): id is number => id !== undefined));
   }, [availableComponents, initialInstance, mode, open]);
 
   useEffect(() => {
@@ -605,7 +665,23 @@ function InstanceFormModal({
     setShortDescription(selectedComponent.short_description || "");
     setInstallation(selectedComponent.installation || "");
     setAttributes(buildAttributesFromComponent(selectedComponent));
+    setSelectedMaterialRuleIds(selectedComponent.material_rules.map((rule) => rule.id).filter((id): id is number => id !== undefined));
   }, [availableComponents, componentId, mode, open]);
+
+  useEffect(() => {
+    if (!open || mode !== "create") {
+      return;
+    }
+    const applicableIds = applicableMaterialRuleIdKey
+      .split(",")
+      .filter(Boolean)
+      .map((id) => Number(id));
+    setSelectedMaterialRuleIds((current) => {
+      const applicableSet = new Set(applicableIds);
+      const nextIds = current.filter((id) => applicableSet.has(id));
+      return nextIds.length === current.length && nextIds.every((id, index) => id === current[index]) ? current : nextIds;
+    });
+  }, [applicableMaterialRuleIdKey, mode, open]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -621,6 +697,7 @@ function InstanceFormModal({
         name: attribute.name,
         value: (attribute.value || "").trim() || null,
       })),
+      selected_material_rule_ids: mode === "create" ? selectedMaterialRuleIds : undefined,
     });
   }
 
@@ -750,6 +827,56 @@ function InstanceFormModal({
                 )}
               </div>
             ))}
+          </div>
+        ) : null}
+
+        {mode === "create" ? (
+          <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 shadow-sm p-4 flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Initial Materials</div>
+              {applicableMaterialRules.length ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const ids = applicableMaterialRules.map((rule) => rule.id).filter((id): id is number => id !== undefined);
+                    setSelectedMaterialRuleIds(selectedMaterialRuleIds.length === ids.length ? [] : ids);
+                  }}
+                  className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-[10px] font-semibold"
+                >
+                  {selectedMaterialRuleIds.length === applicableMaterialRules.length ? "Clear" : "Select All"}
+                </button>
+              ) : null}
+            </div>
+            {applicableMaterialRules.length ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {applicableMaterialRules.map((rule) => {
+                  const ruleId = rule.id || 0;
+                  return (
+                    <label
+                      key={ruleId}
+                      className="flex items-start gap-3 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3 text-sm cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedMaterialRuleIds.includes(ruleId)}
+                        onChange={() =>
+                          setSelectedMaterialRuleIds((current) =>
+                            current.includes(ruleId) ? current.filter((id) => id !== ruleId) : [...current, ruleId],
+                          )
+                        }
+                        className="mt-1"
+                      />
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-zinc-900 dark:text-zinc-100 truncate">{rule.material_name}</span>
+                        <span className="block text-[11px] font-mono text-zinc-500">{rule.sku}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">No predefined materials apply to the current attribute values.</div>
+            )}
           </div>
         ) : null}
 
@@ -1062,7 +1189,7 @@ function InstanceSyncModal({
               <button
                 type="button"
                 disabled={syncing}
-                onClick={() => void onApplyInstanceField(targetField)}
+                onClick={() => void onApplyInstanceField(targetField as Exclude<SyncFieldKey, "attributes">)}
                 className="px-4 py-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-semibold disabled:opacity-50"
               >
                 Apply Instance Value to Catalog
@@ -1070,7 +1197,7 @@ function InstanceSyncModal({
               <button
                 type="button"
                 disabled={syncing}
-                onClick={() => void onApplyCatalogField(targetField)}
+                onClick={() => void onApplyCatalogField(targetField as Exclude<SyncFieldKey, "attributes">)}
                 className="px-4 py-2 rounded bg-accent-500 hover:bg-accent-400 text-sm font-semibold text-zinc-950 disabled:opacity-50"
               >
                 Apply Catalog Value
@@ -1338,11 +1465,13 @@ function MaterialOccurrenceEditor({
   subtypeOptions,
   onOpenCalculationSheet,
   onUpdateMaterial,
+  onDeleteMaterial,
 }: {
   material: InstanceMaterial;
   subtypeOptions: FlatSubtype[];
   onOpenCalculationSheet: () => void;
-  onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+  onUpdateMaterial: (materialKey: string, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+  onDeleteMaterial: (materialKey: string) => Promise<void>;
 }) {
   const [draftRows, setDraftRows] = useState<MaterialRowDraft[]>(() => buildDraftRows(material.bom_entries));
   const [draftMode, setDraftMode] = useState(material.mode);
@@ -1384,7 +1513,7 @@ function MaterialOccurrenceEditor({
     while (nextPayload) {
       setError(null);
       try {
-        await onUpdateMaterial(material.rule_id, {
+        await onUpdateMaterial(material.material_key, {
           mode: nextPayload.mode,
           entries: nextPayload.rows.map((row) => ({
             subtype_id: row.subtype_id,
@@ -1441,6 +1570,14 @@ function MaterialOccurrenceEditor({
             <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
               {material.sku}
             </span>
+            {material.source_status !== "catalog" ? (
+              <span
+                title={material.source_label || undefined}
+                className="px-2 py-0.5 rounded border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[10px] font-semibold uppercase tracking-widest text-amber-700 dark:text-amber-300"
+              >
+                {material.source_status}
+              </span>
+            ) : null}
           </h5>
           <label className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 shrink-0">
             <span>Subtypes</span>
@@ -1469,12 +1606,24 @@ function MaterialOccurrenceEditor({
           <button
             type="button"
             onClick={onOpenCalculationSheet}
+            disabled={material.rule_id === null}
             aria-label={`Open calculation sheet for ${material.material_name}`}
-            title="Open calculation sheet"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200"
+            title={material.rule_id === null ? "Calculation sheets are available for catalog material rules." : "Open calculation sheet"}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200 disabled:opacity-40"
           >
             <i className="ph-bold ph-table" />
           </button>
+          {material.source_status !== "missing" ? (
+            <button
+              type="button"
+              onClick={() => void onDeleteMaterial(material.material_key)}
+              aria-label={`Remove ${material.material_name}`}
+              title="Remove material from this instance"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300"
+            >
+              <i className="ph-bold ph-trash" />
+            </button>
+          ) : null}
           <div className="text-right flex flex-col items-end">
             <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
             <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
@@ -1505,7 +1654,7 @@ function MaterialOccurrenceEditor({
           </thead>
           <tbody className="divide-y divide-white/5">
             {displayRows.map((row, index) => (
-              <tr key={`${material.rule_id}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
+              <tr key={`${material.material_key}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
                 <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">
                   <div style={{ paddingLeft: `${row.subtype_depth * 14}px` }}>{row.subtype}</div>
                 </td>
@@ -1578,6 +1727,112 @@ function MaterialOccurrenceEditor({
   );
 }
 
+function ManualMaterialPicker({
+  existingMaterialIds,
+  onAddMaterial,
+}: {
+  existingMaterialIds: number[];
+  onAddMaterial: (materialId: number) => Promise<void>;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<CatalogMaterialSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [addingId, setAddingId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      api
+        .searchCatalogMaterials(trimmed, 8)
+        .then((response) => {
+          if (!cancelled) {
+            setResults(response.results);
+            setError(null);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : "Could not search materials.");
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setLoading(false);
+          }
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [query]);
+
+  async function handleAdd(result: CatalogMaterialSearchResult) {
+    if (!result.material_id || existingMaterialIds.includes(result.material_id)) {
+      return;
+    }
+    setAddingId(result.material_id);
+    setError(null);
+    try {
+      await onAddMaterial(result.material_id);
+      setQuery("");
+      setResults([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add material.");
+    } finally {
+      setAddingId(null);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <i className="ph-bold ph-plus-circle text-zinc-500" />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Add material by SKU or name"
+          className="flex-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-black/30 px-2 py-1.5 text-sm"
+        />
+      </div>
+      {loading ? <div className="text-xs text-zinc-500">Searching...</div> : null}
+      {results.length ? (
+        <div className="divide-y divide-black/5 dark:divide-white/5 rounded border border-black/5 dark:border-white/5 overflow-hidden">
+          {results.map((result) => {
+            const alreadyAdded = result.material_id !== null && existingMaterialIds.includes(result.material_id);
+            return (
+              <button
+                key={`${result.source}-${result.sku}-${result.material_id ?? "none"}`}
+                type="button"
+                disabled={!result.material_id || alreadyAdded || addingId === result.material_id}
+                onClick={() => void handleAdd(result)}
+                className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-50"
+              >
+                <span className="min-w-0">
+                  <span className="block font-semibold text-zinc-900 dark:text-zinc-100 truncate">{result.name}</span>
+                  <span className="block text-[11px] font-mono text-zinc-500">{result.sku}</span>
+                </span>
+                <span className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+                  {alreadyAdded ? "Added" : addingId === result.material_id ? "Adding..." : "Add"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      {error ? <div className="text-xs text-red-700 dark:text-red-300">{error}</div> : null}
+    </div>
+  );
+}
+
 function InstanceCard({
   instance,
   subtypeOptions,
@@ -1593,6 +1848,8 @@ function InstanceCard({
   onUpdateOccurrence,
   onDeleteOccurrence,
   onUpdateMaterial,
+  onAddManualMaterial,
+  onDeleteMaterial,
 }: {
   instance: ProjectInstance;
   subtypeOptions: FlatSubtype[];
@@ -1607,7 +1864,9 @@ function InstanceCard({
   onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onDeleteOccurrence: (occurrenceId: number) => Promise<void>;
-  onUpdateMaterial: (ruleId: number, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+  onUpdateMaterial: (materialKey: string, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+  onAddManualMaterial: (materialId: number) => Promise<void>;
+  onDeleteMaterial: (materialKey: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [materialsExpanded, setMaterialsExpanded] = useState(true);
@@ -1732,7 +1991,7 @@ function InstanceCard({
                     <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Summary
                   </h6>
                   <div className="space-y-3">
-                    {instance.outgoing_occurrences.map(renderOccurrenceSummary)}
+                    {instance.outgoing_occurrences.map((occurrence, index) => renderOccurrenceSummary(occurrence, index))}
                   </div>
                 </div>
               ) : null}
@@ -1814,14 +2073,19 @@ function InstanceCard({
             </button>
             {materialsExpanded ? (
               <div className="space-y-4">
+                <ManualMaterialPicker
+                  existingMaterialIds={instance.materials.map((material) => material.material_id)}
+                  onAddMaterial={onAddManualMaterial}
+                />
                 {instance.materials.length ? (
                   instance.materials.map((material) => (
                     <MaterialOccurrenceEditor
-                      key={`${instance.id}-${material.rule_id}`}
+                      key={`${instance.id}-${material.material_key}`}
                       material={material}
                       subtypeOptions={subtypeOptions}
                       onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
                       onUpdateMaterial={onUpdateMaterial}
+                      onDeleteMaterial={onDeleteMaterial}
                     />
                   ))
                 ) : (
@@ -1923,6 +2187,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
+    selected_material_rule_ids?: number[];
   }) {
     if (!modalState || modalState.kind !== "create" || !activeCategory || !payload.component_id) {
       return;
@@ -1939,6 +2204,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         installation: payload.installation,
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
+        selected_material_rule_ids: payload.selected_material_rule_ids ?? [],
       });
       if (result.instance) {
         setData((current) => (current ? upsertCategoryInstance(current, activeCategory.id, result.instance as ProjectInstance) : current));
@@ -2008,12 +2274,12 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
 
   async function handleUpdateMaterialOccurrence(
     instanceId: number,
-    ruleId: number,
+    materialKey: string,
     payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> },
   ) {
     setError(null);
     try {
-      await api.updateMaterialOccurrence(projectId, instanceId, ruleId, payload);
+      await api.updateMaterialOccurrence(projectId, instanceId, materialKey, payload);
       startTransition(() => {
         setData((current) => {
           if (!current) {
@@ -2027,11 +2293,13 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           return updateCategoryInstance(current, category.id, instanceId, (instance) => ({
             ...instance,
             materials: instance.materials.map((material) => {
-              if (material.rule_id !== ruleId) {
+              if (material.material_key !== materialKey) {
                 return material;
               }
               return {
                 ...material,
+                source_status: material.source_status === "missing" ? "catalog" : material.source_status,
+                source_label: material.source_status === "missing" ? null : material.source_label,
                 mode: payload.mode,
                 bom_entries: buildLocalBomEntries(payload.mode, payload.entries, material, subtypeOptions),
               };
@@ -2041,6 +2309,34 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       });
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Could not update material rows.";
+      setError(message);
+      throw err;
+    }
+  }
+
+  async function handleAddManualMaterial(instanceId: number, materialId: number) {
+    setError(null);
+    try {
+      await api.addManualMaterial(projectId, instanceId, materialId);
+      await loadProject(false);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not add material.";
+      setError(message);
+      throw err;
+    }
+  }
+
+  async function handleDeleteMaterialOccurrence(instanceId: number, materialKey: string) {
+    const confirmed = window.confirm("Remove this material from the instance?");
+    if (!confirmed) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.deleteMaterialOccurrence(projectId, instanceId, materialKey);
+      await loadProject(false);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "Could not remove material.";
       setError(message);
       throw err;
     }
@@ -2257,7 +2553,9 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                       )}
                       syncPreview={syncPreviews[instance.id] || null}
                       syncPreviewLoading={Boolean(syncPreviewLoading[instance.id])}
-                      onEnsureSyncPreview={() => ensureSyncPreview(instance.id)}
+                      onEnsureSyncPreview={async () => {
+                        await ensureSyncPreview(instance.id);
+                      }}
                       onOpenSyncModal={(field) => void openSyncModal(instance.id, field)}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
@@ -2271,7 +2569,9 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                       onCreateOccurrence={(payload) => handleCreateOccurrence(instance.id, payload)}
                       onUpdateOccurrence={(occurrenceId, payload) => handleUpdateOccurrence(instance.id, occurrenceId, payload)}
                       onDeleteOccurrence={(occurrenceId) => handleDeleteOccurrence(instance.id, occurrenceId)}
-                      onUpdateMaterial={(ruleId, payload) => handleUpdateMaterialOccurrence(instance.id, ruleId, payload)}
+                      onUpdateMaterial={(materialKey, payload) => handleUpdateMaterialOccurrence(instance.id, materialKey, payload)}
+                      onAddManualMaterial={(materialId) => handleAddManualMaterial(instance.id, materialId)}
+                      onDeleteMaterial={(materialKey) => handleDeleteMaterialOccurrence(instance.id, materialKey)}
                     />
                   ))
                 ) : (

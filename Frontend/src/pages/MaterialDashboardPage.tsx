@@ -5,6 +5,20 @@ import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor
 import { MovementStationDistributionModal } from "../components/MovementStationDistributionModal";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
+import {
+  CECO_CACHE_KEY,
+  HOUSE_TYPES_CACHE_KEY,
+  dashboardCacheKey,
+  detailCacheKey,
+  economicMetricsCacheKey,
+  groupDashboardCacheKey,
+  groupDetailCacheKey,
+  groupHistoryCacheKey,
+  groupHouseComparisonCacheKey,
+  historyCacheKey,
+  houseComparisonCacheKey,
+  normalizeCecos,
+} from "../lib/materialDashboardCacheKeys";
 import type {
   MaterialDashboardCeco,
   MaterialDashboardData,
@@ -162,58 +176,6 @@ function isDateWithinRange(value: string, startDate: string | null | undefined, 
     return false;
   }
   return true;
-}
-
-const CECO_CACHE_KEY = "material-dashboard::cecos";
-
-function normalizeCecos(cecos: string[]) {
-  return Array.from(new Set(cecos.map((ceco) => ceco.trim()).filter(Boolean))).sort((left, right) => left.localeCompare(right));
-}
-
-function dashboardCacheKey(cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null, movementDays = 60) {
-  const normalized = normalizeCecos(cecos);
-  const startDate = range?.startDate || "default";
-  const endDate = range?.endDate || "default";
-  return `dashboard::${movementDays}::${startDate}::${endDate}::${normalized.join("|") || "all"}`;
-}
-
-function detailCacheKey(sku: string, cecos: string[]) {
-  return `detail::${sku}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function historyCacheKey(sku: string, cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null) {
-  const startDate = range?.startDate || "default";
-  const endDate = range?.endDate || "default";
-  return `history::${sku}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function houseComparisonCacheKey(sku: string, houseTypeId: number, cecos: string[], range: HouseRange, projectId?: number | null) {
-  return `houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function economicMetricsCacheKey(houseTypeId: number, cecos: string[], range: HouseRange, projectId?: number | null) {
-  return `economics::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function groupDashboardCacheKey(cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null, movementDays = 60) {
-  const normalized = normalizeCecos(cecos);
-  const startDate = range?.startDate || "default";
-  const endDate = range?.endDate || "default";
-  return `groups::${movementDays}::${startDate}::${endDate}::${normalized.join("|") || "all"}`;
-}
-
-function groupDetailCacheKey(groupId: number, cecos: string[]) {
-  return `group-detail::${groupId}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function groupHistoryCacheKey(groupId: number, cecos: string[], range?: { startDate?: string | null; endDate?: string | null } | null) {
-  const startDate = range?.startDate || "default";
-  const endDate = range?.endDate || "default";
-  return `group-history::${groupId}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
-}
-
-function groupHouseComparisonCacheKey(groupId: number, houseTypeId: number, cecos: string[], range: HouseRange, projectId?: number | null) {
-  return `group-houses::${groupId}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 type DashboardSelectionRow = MaterialDashboardListRow | MaterialStudyGroupRow;
@@ -3056,14 +3018,24 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   useEffect(() => {
     let cancelled = false;
     async function loadHouseTypes() {
+      let hasCached = false;
+      const cached = await getMaterialDashboardCacheValue<MaterialDashboardHouseType[]>(HOUSE_TYPES_CACHE_KEY);
+      if (cancelled) {
+        return;
+      }
+      if (cached) {
+        hasCached = true;
+        setHouseTypes(cached);
+      }
       try {
         const response = await api.getMaterialDashboardHouseTypes();
         if (cancelled) {
           return;
         }
         setHouseTypes(response.house_types);
+        void setMaterialDashboardCacheValue(HOUSE_TYPES_CACHE_KEY, response.house_types);
       } catch {
-        if (!cancelled) {
+        if (!cancelled && !hasCached) {
           setHouseTypes([]);
           setSelectedHouseTypeId(null);
         }

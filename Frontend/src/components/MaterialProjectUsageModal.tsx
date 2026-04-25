@@ -37,7 +37,7 @@ function formatUpdatedAt(value: string | null) {
 }
 
 function projectUsageItemKey(item: MaterialDashboardProjectUsageItem) {
-  return `${item.instance_id}:${item.rule_id}`;
+  return `${item.instance_id}:${item.rule_id ?? `manual-${item.material_id}`}`;
 }
 
 function quantityStateLabel(value: number | null, state: string) {
@@ -250,7 +250,7 @@ export function MaterialProjectUsageModal({
             </div>
 
             <div className="min-h-[420px]">
-              {selectedItem ? (
+              {selectedItem && selectedItem.rule_id !== null ? (
                 <MaterialCalculationSheetPreview
                   projectId={projectId}
                   instanceId={selectedItem.instance_id}
@@ -261,6 +261,10 @@ export function MaterialProjectUsageModal({
                     sku: data.sku,
                   }}
                 />
+              ) : selectedItem ? (
+                <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
+                  Calculation sheets are available for catalog material rules.
+                </div>
               ) : (
                 <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
                   Select an item to preview its calculation sheet.

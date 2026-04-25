@@ -161,6 +161,12 @@ export type MaterialDashboardHouseComparisonData = {
   generated_at: string;
 };
 
+export type MaterialDashboardMaterialStudyData = {
+  detail: MaterialDashboardDetailData;
+  history: MaterialDashboardMovementData;
+  comparison: MaterialDashboardHouseComparisonData;
+};
+
 export type MaterialDashboardProjectUsageBreakdownEntry = {
   subtype_id: number | null;
   subtype_name: string;
@@ -179,7 +185,7 @@ export type MaterialDashboardProjectUsageItem = {
   instance_name: string;
   category_name: string | null;
   component_name: string | null;
-  rule_id: number;
+  rule_id: number | null;
   material_id: number;
   unit_qty_per_unit: number | null;
   rule_notes: string | null;
@@ -565,13 +571,16 @@ export type MaterialApplicability = {
 };
 
 export type InstanceMaterial = {
-  rule_id: number;
+  material_key: string;
+  rule_id: number | null;
   material_id: number;
   material_name: string;
   sku: string;
   unit_qty_per_unit: number | null;
   unit: string | null;
   notes: string | null;
+  source_status: string;
+  source_label: string | null;
   applicability: MaterialApplicability;
   mode: string;
   bom_entries: BomEntry[];
@@ -657,6 +666,7 @@ export type AvailableComponent = {
   installation: string | null;
   base_attributes: CatalogAttribute[];
   usage_attributes: CatalogAttribute[];
+  material_rules: CatalogMaterialRule[];
 };
 
 export type ProjectInstance = {
@@ -895,6 +905,7 @@ export type CreateProjectInstanceRequest = {
   installation?: string | null;
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];
+  selected_material_rule_ids?: number[] | null;
 };
 
 export type UpdateProjectInstanceRequest = {

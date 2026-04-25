@@ -46,9 +46,11 @@ from app.api_models import (
     MaterialDashboardHouseComparisonResponse,
     MaterialDashboardProjectUsageResponse,
     MaterialDashboardHouseTypesResponse,
+    MaterialDashboardMaterialStudyResponse,
     MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
+    ManualMaterialAddRequest,
     MaterialCalculationSheetResponse,
     MaterialCalculationSheetUpdateRequest,
     MaterialStudyGroupListResponse,
@@ -153,11 +155,13 @@ from app.services.exports import execute_project_export, get_project_export_job_
 from app.services.projects import (
     apply_catalog_value_to_instance_field,
     apply_instance_value_to_catalog_field,
+    add_project_instance_manual_material,
     create_project,
     create_project_instance,
     create_project_instance_occurrence,
     create_project_subtype,
     delete_project_instance_occurrence,
+    delete_project_instance_material,
     delete_project_subtype,
     delete_project_instance,
     get_project_instance_data,
@@ -1143,6 +1147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 installation=payload.installation,
                 unit_amount=payload.unit_amount,
                 attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                selected_material_rule_ids=payload.selected_material_rule_ids,
                 actor_user=current_user,
                 mutation_batch_id=mutation_batch_id,
             )
@@ -1316,11 +1321,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project_id, "deleted_id": instance_id}
 
-    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}", response_model=MutationResultModel)
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/materials", response_model=MutationResultModel)
+    async def add_project_manual_material_v1(
+        project_id: int,
+        instance_id: int,
+        payload: ManualMaterialAddRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            added = add_project_instance_manual_material(
+                session,
+                project=project,
+                instance_id=instance_id,
+                material_id=payload.material_id,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not added:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project.id, "instance_id": instance_id}
+
+    @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{material_key}", response_model=MutationResultModel)
     async def update_project_material_occurrence_v1(
         project_id: int,
         instance_id: int,
-        rule_id: int,
+        material_key: str,
         payload: MaterialOccurrenceUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1335,7 +1368,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session,
                 project=project,
                 instance_id=instance_id,
-                rule_id=rule_id,
+                material_key=material_key,
                 mode=payload.mode,
                 entries=[
                     {
@@ -1351,6 +1384,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not updated:
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return {"ok": True, "project_id": project.id, "instance_id": instance_id}
+
+    @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{material_key}", response_model=MutationResultModel)
+    async def delete_project_material_occurrence_v1(
+        project_id: int,
+        instance_id: int,
+        material_key: str,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            deleted = delete_project_instance_material(
+                session,
+                project=project,
+                instance_id=instance_id,
+                material_key=material_key,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not deleted:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return {"ok": True, "project_id": project.id, "instance_id": instance_id}
 
@@ -2318,6 +2379,73 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if detail is None:
             raise HTTPException(status_code=404, detail="Material not found")
         return detail
+
+    @app.post("/api/v1/dashboard/materials/{sku}/study", response_model=MaterialDashboardMaterialStudyResponse)
+    def material_dashboard_material_study_v1_post(
+        sku: str,
+        payload: MaterialDashboardHouseComparisonRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        history_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            detail = get_material_dashboard_detail(
+                request.app.state.settings,
+                sku,
+                session=session,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+            if detail is None:
+                raise HTTPException(status_code=404, detail="Material not found")
+            history = get_material_dashboard_history(
+                request.app.state.settings,
+                sku,
+                session=session,
+                history_days=history_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+            comparison = get_material_dashboard_house_start_comparison(
+                request.app.state.settings,
+                sku=sku,
+                movements=history.get("movements", []),
+                house_type_id=payload.house_type_id,
+                cost_centers=payload.cecos,
+                history_days=int(history.get("movement_days") or history_days),
+                start_date=payload.start_date.isoformat() if payload.start_date else None,
+                end_date=payload.end_date.isoformat() if payload.end_date else None,
+            )
+            comparison = attach_project_comparison(
+                comparison,
+                project_id=payload.project_id,
+                sku_factors={sku: 1.0},
+                session=session,
+                current_user=current_user,
+            )
+            return {
+                "detail": detail,
+                "history": history,
+                "comparison": comparison,
+            }
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/{sku}/project-usage", response_model=MaterialDashboardProjectUsageResponse)
     def material_dashboard_project_usage_v1(

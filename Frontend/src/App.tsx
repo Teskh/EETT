@@ -19,6 +19,7 @@ type Route =
   | { name: "login" }
   | { name: "catalog"; categoryId: number | null }
   | { name: "material-dashboard" }
+  | { name: "cost-model"; projectId: number | null }
   | { name: "history" }
   | { name: "projects" }
   | { name: "project-detail"; projectId: number }
@@ -41,6 +42,12 @@ function parseCurrentRoute(): Route {
   }
   if (pathname === "/dashboard/materials") {
     return { name: "material-dashboard" };
+  }
+  if (pathname === "/cost-model") {
+    const params = new URLSearchParams(search);
+    const projectId = params.get("project_id");
+    const parsedProjectId = projectId ? Number(projectId) : null;
+    return { name: "cost-model", projectId: parsedProjectId !== null && Number.isFinite(parsedProjectId) ? parsedProjectId : null };
   }
   if (pathname === "/history") {
     return { name: "history" };
@@ -147,6 +154,8 @@ export function App() {
       document.title = "Database Editor | Spec Sheets";
     } else if (route.name === "material-dashboard") {
       document.title = "Material Dashboard | Spec Sheets";
+    } else if (route.name === "cost-model") {
+      document.title = route.projectId ? `${projectDetailTitle} — Cost Model | Spec Sheets` : "Cost Model | Spec Sheets";
     } else if (route.name === "history") {
       document.title = "Change History | Spec Sheets";
     } else if (route.name === "projects") {
@@ -167,6 +176,12 @@ export function App() {
       navigate("/", true);
     }
   }, [route, session]);
+
+  useEffect(() => {
+    if (route.name === "project-cost-model") {
+      navigate(`/cost-model?project_id=${route.projectId}`, true);
+    }
+  }, [route]);
 
   async function handleLogin(username: string, password: string) {
     setAuthLoading(true);
@@ -262,6 +277,27 @@ export function App() {
     );
   }
 
+  if (route.name === "cost-model") {
+    return (
+      <AppShell
+        title={route.projectId ? `${projectDetailTitle} — Cost Model` : "Cost Model"}
+        activeNav="cost-model"
+        currentUser={session}
+        themeMode={themeMode}
+        onThemeModeChange={handleThemeModeChange}
+        onNavigate={navigate}
+        onLogout={handleLogout}
+      >
+        <CostModelPage
+          projectId={route.projectId}
+          onNavigate={navigate}
+          onTitleChange={setProjectDetailTitle}
+          currentUser={session}
+        />
+      </AppShell>
+    );
+  }
+
   if (route.name === "history") {
     return (
       <AppShell
@@ -315,24 +351,7 @@ export function App() {
   }
 
   if (route.name === "project-cost-model") {
-    return (
-      <AppShell
-        title={`${projectDetailTitle} — Cost Model`}
-        activeNav="projects"
-        currentUser={session}
-        themeMode={themeMode}
-        onThemeModeChange={handleThemeModeChange}
-        onNavigate={navigate}
-        onLogout={handleLogout}
-      >
-        <CostModelPage
-          projectId={route.projectId}
-          onNavigate={navigate}
-          onTitleChange={setProjectDetailTitle}
-          currentUser={session}
-        />
-      </AppShell>
-    );
+    return null;
   }
 
   if (route.name === "users") {

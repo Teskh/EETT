@@ -13,6 +13,7 @@ from app.models import (
     CatalogComponent,
     ComponentMaterialRule,
     InstanceExportSetting,
+    Material,
     MaterialRuleGroup,
     Project,
     ProjectAuxiliaryMaterialSelection,
@@ -65,6 +66,37 @@ def _serialize_component_sync_attribute(definition: CatalogAttributeDefinition) 
         "value_type": definition.value_type.value,
         "options": [option.value for option in definition.options],
     }
+
+
+def _material_key_for_rule(rule_id: int) -> str:
+    return f"rule:{rule_id}"
+
+
+def _material_key_for_manual(material_id: int) -> str:
+    return f"manual:{material_id}"
+
+
+def _material_key_for_entry(entry: ProjectBomEntry) -> str:
+    if entry.material_rule_id is not None:
+        return _material_key_for_rule(entry.material_rule_id)
+    return _material_key_for_manual(entry.material_id)
+
+
+def _normalize_material_key(raw_key: str) -> str:
+    value = str(raw_key or "").strip()
+    if value.isdigit():
+        return _material_key_for_rule(int(value))
+    return value
+
+
+def _parse_material_key(material_key: str) -> tuple[str, int]:
+    normalized = _normalize_material_key(material_key)
+    if ":" not in normalized:
+        raise ValueError("Invalid material key.")
+    kind, raw_id = normalized.split(":", 1)
+    if kind not in {"rule", "manual"} or not raw_id.isdigit():
+        raise ValueError("Invalid material key.")
+    return kind, int(raw_id)
 
 
 def _serialize_instance_sync_attribute(value: ProjectInstanceAttributeValue) -> dict:
@@ -542,6 +574,82 @@ def delete_project_subtype(
     return True
 
 
+def _project_material_mode_value(project: Project) -> str:
+    return project.material_mode.mode.value if project.material_mode is not None else MaterialMode.GENERAL.value
+
+
+def _append_blank_bom_rows(
+    *,
+    project: Project,
+    instance: ProjectInstance,
+    material: Material,
+    material_rule: ComponentMaterialRule | None,
+) -> None:
+    mode = _project_material_mode_value(project)
+    subtype_rows = _visible_project_subtype_rows(project)
+    if mode == MaterialMode.PER_SUBTYPE.value and subtype_rows:
+        for subtype_row in subtype_rows:
+            instance.bom_entries.append(
+                ProjectBomEntry(
+                    project=project,
+                    instance=instance,
+                    material_rule=material_rule,
+                    material_rule_id=material_rule.id if material_rule else None,
+                    material=material,
+                    subtype=subtype_row["model"],
+                    quantity=None,
+                    assembly_quantity=None,
+                    unit=(material_rule.unit if material_rule else None) or material.unit,
+                    calculation_mode=BomCalculationMode.MANUAL,
+                    calculation_formula=None,
+                )
+            )
+        return
+
+    instance.bom_entries.append(
+        ProjectBomEntry(
+            project=project,
+            instance=instance,
+            material_rule=material_rule,
+            material_rule_id=material_rule.id if material_rule else None,
+            material=material,
+            subtype=None,
+            quantity=None,
+            assembly_quantity=None,
+            unit=(material_rule.unit if material_rule else None) or material.unit,
+            calculation_mode=BomCalculationMode.MANUAL,
+            calculation_formula=None,
+        )
+    )
+
+
+def _create_initial_bom_entries(
+    *,
+    project: Project,
+    instance: ProjectInstance,
+    selected_material_rule_ids: list[int] | None,
+) -> None:
+    attribute_values = _collect_attribute_values(instance)
+    applicable_rules = [
+        rule
+        for rule in sorted(instance.component.material_rules, key=lambda item: item.display_order)
+        if _evaluate_rule(rule, attribute_values)["applies"]
+    ]
+    if selected_material_rule_ids is None:
+        selected_ids = {rule.id for rule in applicable_rules}
+    else:
+        selected_ids = set(selected_material_rule_ids)
+
+    applicable_by_id = {rule.id: rule for rule in applicable_rules}
+    invalid_ids = selected_ids - set(applicable_by_id)
+    if invalid_ids:
+        raise ValueError("One or more selected materials are not applicable to this instance.")
+
+    for rule in applicable_rules:
+        if rule.id in selected_ids:
+            _append_blank_bom_rows(project=project, instance=instance, material=rule.material, material_rule=rule)
+
+
 def create_project_instance(
     session: Session,
     *,
@@ -555,13 +663,20 @@ def create_project_instance(
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
+    selected_material_rule_ids: list[int] | None = None,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> ProjectInstance:
     component = session.scalar(
         select(CatalogComponent)
         .where(CatalogComponent.id == component_id, CatalogComponent.category_id == category_id)
-        .options(selectinload(CatalogComponent.attribute_definitions))
+        .options(
+            selectinload(CatalogComponent.attribute_definitions),
+            selectinload(CatalogComponent.material_rules).selectinload(ComponentMaterialRule.material),
+            selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.condition_groups)
+            .selectinload(MaterialRuleGroup.conditions),
+        )
     )
     if component is None:
         raise ValueError("Selected component does not belong to the requested category.")
@@ -585,6 +700,11 @@ def create_project_instance(
     session.flush()
     _sync_base_attribute_group(instance)
     _apply_base_attribute_values(instance, attribute_values or {})
+    _create_initial_bom_entries(
+        project=project,
+        instance=instance,
+        selected_material_rule_ids=selected_material_rule_ids,
+    )
     session.add(
         ProjectInstanceSyncState(
             instance=instance,
@@ -974,6 +1094,13 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
             .selectinload(CatalogAttributeDefinition.options),
             selectinload(CatalogCategory.components)
             .selectinload(CatalogComponent.attribute_definitions),
+            selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.material),
+            selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.material_rules)
+            .selectinload(ComponentMaterialRule.condition_groups)
+            .selectinload(MaterialRuleGroup.conditions),
         )
         .order_by(CatalogCategory.sort_order, CatalogCategory.name)
     ).all()
@@ -1138,7 +1265,7 @@ def replace_project_material_occurrence(
     *,
     project: Project,
     instance_id: int,
-    rule_id: int,
+    material_key: str,
     mode: str,
     entries: list[dict],
     actor_user: User | None = None,
@@ -1166,13 +1293,17 @@ def replace_project_material_occurrence(
     if normalized_mode not in {MaterialMode.GENERAL.value, MaterialMode.PER_SUBTYPE.value}:
         raise ValueError("Invalid material mode.")
 
-    rule = next((item for item in instance.component.material_rules if item.id == rule_id), None)
-    if rule is None:
+    normalized_key = _normalize_material_key(material_key)
+    existing_entries = [entry for entry in instance.bom_entries if _material_key_for_entry(entry) == normalized_key]
+    parsed_kind, parsed_id = _parse_material_key(normalized_key)
+    rule = next((item for item in instance.component.material_rules if item.id == parsed_id), None) if parsed_kind == "rule" else None
+    material = rule.material if rule is not None else (existing_entries[0].material if existing_entries else None)
+    if material is None:
         raise ValueError("Material occurrence was not found on this instance.")
 
     attribute_values = _collect_attribute_values(instance)
-    evaluation = _evaluate_rule(rule, attribute_values)
-    if not evaluation["applies"]:
+    evaluation = _evaluate_rule(rule, attribute_values) if rule is not None else {"applies": True}
+    if rule is not None and not evaluation["applies"] and not existing_entries:
         raise ValueError("Material occurrence is no longer applicable for this instance.")
 
     subtype_rows = _visible_project_subtype_rows(project)
@@ -1203,12 +1334,11 @@ def replace_project_material_occurrence(
         if required_subtype_ids != submitted_subtype_ids:
             raise ValueError("Subtype material mode requires one row for each project subtype.")
 
-    previous_snapshot = _bom_entry_snapshot(
-        [entry for entry in instance.bom_entries if entry.material_rule_id == rule.id]
-    )
+    previous_snapshot = _bom_entry_snapshot(existing_entries)
+    previous_unit = next((entry.unit for entry in existing_entries if entry.unit), None)
 
     for bom_entry in list(instance.bom_entries):
-        if bom_entry.material_rule_id == rule.id:
+        if _material_key_for_entry(bom_entry) == normalized_key:
             instance.bom_entries.remove(bom_entry)
             session.delete(bom_entry)
     session.flush()
@@ -1219,11 +1349,12 @@ def replace_project_material_occurrence(
                 project=project,
                 instance=instance,
                 material_rule=rule,
-                material=rule.material,
+                material_rule_id=parsed_id if parsed_kind == "rule" else None,
+                material=material,
                 subtype=subtype_map.get(row["subtype_id"]),
                 quantity=row["quantity"],
                 assembly_quantity=row["assembly_quantity"],
-                unit=rule.unit or rule.material.unit,
+                unit=(rule.unit if rule else None) or previous_unit or material.unit,
                 calculation_mode=BomCalculationMode.MANUAL,
                 calculation_formula=None,
             )
@@ -1242,16 +1373,129 @@ def replace_project_material_occurrence(
                 scope_id=instance.id,
             ),
             entity_type="ProjectBomEntry",
-            entity_id=rule.id,
+            entity_id=parsed_id,
             action="updated",
             title=f"Updated materials for {instance.name}",
             scope_type="instance",
             scope_id=instance.id,
             details=build_activity_details(
                 headline="Material quantities changed",
-                subject_name=rule.material.name,
+                subject_name=material.name,
                 notes=[f"Component: {instance.name}"],
                 changes=_describe_material_quantity_changes(previous_snapshot, next_snapshot),
+                kind="material",
+            ),
+        )
+    session.commit()
+    return True
+
+
+def add_project_instance_manual_material(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    material_id: int,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> bool:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
+        .options(selectinload(ProjectInstance.bom_entries))
+    )
+    if instance is None:
+        return False
+
+    material = session.get(Material, material_id)
+    if material is None:
+        raise ValueError("Material was not found.")
+
+    if any(entry.material_id == material.id for entry in instance.bom_entries):
+        raise ValueError("This material is already present on the instance.")
+
+    _append_blank_bom_rows(project=project, instance=instance, material=material, material_rule=None)
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Updated materials for {instance.name}",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectBomEntry",
+            entity_id=material.id,
+            action="created",
+            title=f"Updated materials for {instance.name}",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=build_activity_details(
+                headline="Material added",
+                subject_name=material.name,
+                notes=[f"Component: {instance.name}", "Source: manual"],
+                kind="material",
+            ),
+        )
+    session.commit()
+    return True
+
+
+def delete_project_instance_material(
+    session: Session,
+    *,
+    project: Project,
+    instance_id: int,
+    material_key: str,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> bool:
+    instance = session.scalar(
+        select(ProjectInstance)
+        .where(ProjectInstance.id == instance_id, ProjectInstance.project_id == project.id)
+        .options(
+            selectinload(ProjectInstance.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(ProjectInstance.bom_entries).selectinload(ProjectBomEntry.subtype),
+        )
+    )
+    if instance is None:
+        return False
+
+    normalized_key = _normalize_material_key(material_key)
+    matching_entries = [entry for entry in instance.bom_entries if _material_key_for_entry(entry) == normalized_key]
+    if not matching_entries:
+        raise ValueError("Material occurrence was not found on this instance.")
+
+    material = matching_entries[0].material
+    previous_snapshot = _bom_entry_snapshot(matching_entries)
+    for entry in matching_entries:
+        instance.bom_entries.remove(entry)
+        session.delete(entry)
+
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title=f"Updated materials for {instance.name}",
+                scope_type="instance",
+                scope_id=instance.id,
+            ),
+            entity_type="ProjectBomEntry",
+            entity_id=material.id,
+            action="deleted",
+            title=f"Updated materials for {instance.name}",
+            scope_type="instance",
+            scope_id=instance.id,
+            details=build_activity_details(
+                headline="Material removed",
+                subject_name=material.name,
+                notes=[f"Component: {instance.name}"],
+                changes=_describe_material_quantity_changes(previous_snapshot, []),
                 kind="material",
             ),
         )
@@ -1614,6 +1858,7 @@ def _build_category_sections(
                 "installation": component.installation,
                 "base_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.BASE)],
                 "usage_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.USAGE)],
+                "material_rules": [_serialize_available_material_rule(rule) for rule in sorted(component.material_rules, key=lambda item: item.display_order)],
             }
             for component in sorted(category.components, key=lambda item: item.name)
         ],
@@ -1623,6 +1868,33 @@ def _build_category_sections(
     for child in children_by_parent.get(category.id, []):
         sections.extend(_build_category_sections(child, instance_groups, children_by_parent, depth + 1))
     return sections
+
+
+def _serialize_available_material_rule(rule: ComponentMaterialRule) -> dict:
+    return {
+        "id": rule.id,
+        "material_id": rule.material_id,
+        "material_name": rule.material.name,
+        "sku": rule.material.sku,
+        "unit": rule.unit or rule.material.unit,
+        "unit_qty_per_unit": rule.unit_qty_per_unit,
+        "notes": rule.notes,
+        "conditions": [
+            {
+                "group": group.group_key,
+                "clauses": [
+                    {
+                        "attribute_name": condition.attribute_name,
+                        "operator": condition.operator,
+                        "comparison_value": condition.comparison_value,
+                        "comparison_value_secondary": condition.comparison_value_secondary,
+                    }
+                    for condition in group.conditions
+                ],
+            }
+            for group in rule.condition_groups
+        ],
+    }
 
 
 def _serialize_subtype(subtype: ProjectSubtype) -> dict:
@@ -1704,17 +1976,21 @@ def _serialize_instance(
             }
         )
 
-    bom_by_rule: dict[int, list[ProjectBomEntry]] = defaultdict(list)
+    bom_by_key: dict[str, list[ProjectBomEntry]] = defaultdict(list)
     for entry in instance.bom_entries:
-        bom_by_rule[entry.material_rule_id].append(entry)
+        bom_by_key[_material_key_for_entry(entry)].append(entry)
 
     applicable_materials = []
     for rule in sorted(instance.component.material_rules, key=lambda item: item.display_order):
         evaluation = _evaluate_rule(rule, merged_attributes)
-        if not evaluation["applies"]:
+        material_key = _material_key_for_rule(rule.id)
+        entries = bom_by_key.pop(material_key, [])
+        if not evaluation["applies"] and not entries:
             continue
+        source_status = "catalog" if entries and evaluation["applies"] else "stale" if entries else "missing"
         applicable_materials.append(
             {
+                "material_key": material_key,
                 "rule_id": rule.id,
                 "material_id": rule.material_id,
                 "material_name": rule.material.name,
@@ -1722,9 +1998,52 @@ def _serialize_instance(
                 "unit_qty_per_unit": rule.unit_qty_per_unit,
                 "unit": rule.unit or rule.material.unit,
                 "notes": rule.notes,
+                "source_status": source_status,
+                "source_label": _material_source_label(source_status, rule_exists=True, applies=evaluation["applies"]),
                 "applicability": evaluation,
-                "mode": _material_mode_for_entries(bom_by_rule.get(rule.id, [])),
-                "bom_entries": _serialize_material_bom_entries(rule, bom_by_rule.get(rule.id, []), flat_subtypes),
+                "mode": _material_mode_for_entries(entries),
+                "bom_entries": _serialize_material_bom_entries(
+                    material=rule.material,
+                    unit=rule.unit or rule.material.unit,
+                    entries=entries,
+                    flat_subtypes=flat_subtypes,
+                ),
+            }
+        )
+
+    for material_key, entries in sorted(
+        bom_by_key.items(),
+        key=lambda item: (
+            item[0].split(":", 1)[0] != "rule",
+            (item[1][0].material.sku if item[1] else "").lower(),
+            item[0],
+        ),
+    ):
+        if not entries:
+            continue
+        first_entry = entries[0]
+        rule = first_entry.material_rule
+        source_status = "manual" if first_entry.material_rule_id is None else "stale"
+        applicable_materials.append(
+            {
+                "material_key": material_key,
+                "rule_id": first_entry.material_rule_id,
+                "material_id": first_entry.material_id,
+                "material_name": first_entry.material.name,
+                "sku": first_entry.material.sku,
+                "unit_qty_per_unit": rule.unit_qty_per_unit if rule else None,
+                "unit": first_entry.unit or (rule.unit if rule else None) or first_entry.material.unit,
+                "notes": rule.notes if rule else None,
+                "source_status": source_status,
+                "source_label": _material_source_label(source_status, rule_exists=rule is not None, applies=False),
+                "applicability": _manual_material_applicability(source_status != "stale"),
+                "mode": _material_mode_for_entries(entries),
+                "bom_entries": _serialize_material_bom_entries(
+                    material=first_entry.material,
+                    unit=first_entry.unit or (rule.unit if rule else None) or first_entry.material.unit,
+                    entries=entries,
+                    flat_subtypes=flat_subtypes,
+                ),
             }
         )
 
@@ -2155,8 +2474,31 @@ def _material_mode_for_entries(entries: list[ProjectBomEntry]) -> str:
     return MaterialMode.PER_SUBTYPE.value if any(entry.subtype_id is not None for entry in entries) else MaterialMode.GENERAL.value
 
 
+def _material_source_label(source_status: str, *, rule_exists: bool, applies: bool) -> str | None:
+    if source_status == "missing":
+        return "Defined in catalog but not added to this instance."
+    if source_status == "manual":
+        return "Added directly to this project instance."
+    if source_status == "stale":
+        if not rule_exists:
+            return "Catalog material rule was removed after this project row was created."
+        if not applies:
+            return "Catalog material rule no longer applies to this instance."
+    return None
+
+
+def _manual_material_applicability(applies: bool) -> dict:
+    return {
+        "applies": applies,
+        "matched_groups": [],
+        "groups": [],
+    }
+
+
 def _serialize_material_bom_entries(
-    rule: ComponentMaterialRule,
+    *,
+    material: Material,
+    unit: str | None,
     entries: list[ProjectBomEntry],
     flat_subtypes: list[dict],
 ) -> list[dict]:
@@ -2171,7 +2513,7 @@ def _serialize_material_bom_entries(
                         subtype_id=subtype["id"],
                         subtype_name=subtype["name"],
                         subtype_depth=subtype["depth"],
-                        unit=rule.unit or rule.material.unit,
+                        unit=unit or material.unit,
                     )
                 )
                 continue
@@ -2188,7 +2530,7 @@ def _serialize_material_bom_entries(
             subtype_id=None,
             subtype_name="General",
             subtype_depth=0,
-            unit=rule.unit or rule.material.unit,
+            unit=unit or material.unit,
         )
     ]
 

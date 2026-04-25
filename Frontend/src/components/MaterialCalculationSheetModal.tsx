@@ -94,6 +94,10 @@ export function MaterialCalculationSheetModal({
   const pendingCaretRangeRef = useRef<{ start: number; end: number } | null>(null);
 
   async function loadSheet() {
+    if (material.rule_id === null) {
+      setError("Calculation sheets are available for catalog material rules.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -293,6 +297,10 @@ export function MaterialCalculationSheetModal({
   }
 
   async function handleSave() {
+    if (material.rule_id === null) {
+      setError("Calculation sheets are available for catalog material rules.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
