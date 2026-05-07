@@ -121,7 +121,6 @@ def upgrade() -> None:
         sa.Column("display_order", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("unit", sa.String(length=50), nullable=True),
         sa.Column("unit_qty_per_unit", sa.Float(), nullable=True),
-        sa.Column("notes", sa.Text(), nullable=True),
     )
 
     op.create_table(

@@ -17,34 +17,35 @@ INPUT_FILL = PatternFill(fill_type="solid", start_color="FFF7D6", end_color="FFF
 FORMULA_FILL = PatternFill(fill_type="solid", start_color="F3F4F6", end_color="F3F4F6")
 
 
-def build_materials_workbook(project_data: dict[str, Any], output_path: Path) -> None:
+def build_materials_workbook(project_data: dict[str, Any], output_path: Any) -> None:
     workbook = Workbook()
     workbook.remove(workbook.active)
 
     context_rows = list(iter_material_context_rows(project_data))
 
-    totals_sheet = workbook.create_sheet("Total Materials")
+    totals_sheet = workbook.create_sheet("Total Materiales")
     _populate_total_materials_sheet(totals_sheet, context_rows)
 
-    context_sheet = workbook.create_sheet("By Context")
-    _populate_context_sheet(context_sheet, context_rows, quantity_key="quantity", title="Project quantities by category and instance")
+    context_sheet = workbook.create_sheet("Por Contexto")
+    _populate_context_sheet(context_sheet, context_rows, quantity_key="quantity", title="Q fabrica por categoria e instancia")
 
-    assembly_sheet = workbook.create_sheet("Assembly Kit")
+    assembly_sheet = workbook.create_sheet("Q obra")
     _populate_context_sheet(
         assembly_sheet,
         context_rows,
         quantity_key="assembly_quantity",
-        title="Assembly-kit quantities by category and instance",
+        title="Q obra por categoria e instancia",
     )
 
-    workbook.properties.title = f"{project_data['project']['name']} - Materials Workbook"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.properties.title = f"{project_data['project']['name']} - Libro de Materiales"
+    if isinstance(output_path, Path):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
 
 
 def build_cost_model_workbook(
     project_data: dict[str, Any],
-    output_path: Path,
+    output_path: Any,
     *,
     prices_by_sku: dict[str, float | None],
 ) -> None:
@@ -53,20 +54,21 @@ def build_cost_model_workbook(
 
     cost_rows = _build_cost_model_rows(project_data, prices_by_sku=prices_by_sku)
 
-    instance_sheet = workbook.create_sheet("By Instance")
+    instance_sheet = workbook.create_sheet("Por Instancia")
     _populate_cost_model_instance_sheet(instance_sheet, cost_rows, subtype_names=_flatten_subtype_names(project_data.get("subtypes", [])))
 
-    totals_sheet = workbook.create_sheet("Total Materials")
+    totals_sheet = workbook.create_sheet("Total Materiales")
     _populate_cost_model_totals_sheet(totals_sheet, cost_rows, subtype_names=_flatten_subtype_names(project_data.get("subtypes", [])))
 
-    workbook.properties.title = f"{project_data['project']['name']} - Cost Model Workbook"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.properties.title = f"{project_data['project']['name']} - Modelo de Costos"
+    if isinstance(output_path, Path):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
 
 def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> None:
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
-    ws.append(["Material", "SKU", "Quantity", "Unit"])
+    ws.append(["Material", "SKU", "Q fabrica", "Unidad"])
     _style_header_row(ws, row_index=1, column_count=4)
 
     totals: dict[str, dict[str, Any]] = {}
@@ -137,8 +139,8 @@ def _build_cost_model_rows(
             continue
         rows.append(
             {
-                "instance_name": "Auxiliary Materials",
-                "category_name": auxiliary.get("category") or "Auxiliary Materials",
+                "instance_name": "Materiales auxiliares",
+                "category_name": auxiliary.get("category") or "Materiales auxiliares",
                 "subtype_name": auxiliary.get("subtype") or "General",
                 "material_name": auxiliary.get("name") or code,
                 "sku": code,
@@ -156,13 +158,13 @@ def _populate_cost_model_instance_sheet(ws, cost_rows: list[dict[str, Any]], *, 
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
 
-    headers = ["Instance", "Category", "Subtype", "Material", "SKU", "Unit", "Quantity", "Unit Price", "Cost"]
+    headers = ["Instancia", "Categoria", "Subtipo", "Material", "SKU", "Unidad", "Q fabrica", "Precio unitario", "Costo"]
     ws.append(headers)
     _style_header_row(ws, row_index=1, column_count=len(headers))
     _set_column_widths(ws, {"A": 28, "B": 24, "C": 18, "D": 40, "E": 16, "F": 10, "G": 14, "H": 14, "I": 14})
 
     if not cost_rows:
-        ws.append(["No cost rows available for this export."])
+        ws.append(["No hay filas de costo disponibles para esta exportacion."])
         ws.merge_cells("A2:I2")
         ws["A2"].alignment = Alignment(horizontal="left", vertical="center")
         return
@@ -218,7 +220,7 @@ def _populate_cost_model_instance_sheet(ws, cost_rows: list[dict[str, Any]], *, 
 
     last_row_before_total = ws.max_row
     total_row_index = last_row_before_total + 1
-    ws.append(["", "", "", "Total General", "", "", "", "", ""])
+    ws.append(["", "", "", "Total general", "", "", "", "", ""])
     ws.cell(
         row=total_row_index,
         column=9,
@@ -238,13 +240,13 @@ def _populate_cost_model_totals_sheet(ws, cost_rows: list[dict[str, Any]], *, su
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
 
-    headers = ["SKU", "Material", "Subtype", "Unit", "Quantity", "Unit Price", "Cost"]
+    headers = ["SKU", "Material", "Subtipo", "Unidad", "Q fabrica", "Precio unitario", "Costo"]
     ws.append(headers)
     _style_header_row(ws, row_index=1, column_count=len(headers))
     _set_column_widths(ws, {"A": 16, "B": 40, "C": 18, "D": 10, "E": 14, "F": 14, "G": 14})
 
     if not cost_rows:
-        ws.append(["No cost rows available for this export."])
+        ws.append(["No hay filas de costo disponibles para esta exportacion."])
         ws.merge_cells("A2:G2")
         ws["A2"].alignment = Alignment(horizontal="left", vertical="center")
         return
@@ -268,14 +270,14 @@ def _populate_cost_model_totals_sheet(ws, cost_rows: list[dict[str, Any]], *, su
         ws.cell(row=row_index, column=3, value=subtype_name)
         ws.cell(row=row_index, column=4, value=unit)
         sum_qty_formula = (
-            f"SUMIFS('By Instance'!$G:$G,"
-            f"'By Instance'!$E:$E,A{row_index},"
-            f"'By Instance'!$C:$C,C{row_index})"
+            f"SUMIFS('Por Instancia'!$G:$G,"
+            f"'Por Instancia'!$E:$E,A{row_index},"
+            f"'Por Instancia'!$C:$C,C{row_index})"
         )
         sum_cost_formula = (
-            f"SUMIFS('By Instance'!$I:$I,"
-            f"'By Instance'!$E:$E,A{row_index},"
-            f"'By Instance'!$C:$C,C{row_index})"
+            f"SUMIFS('Por Instancia'!$I:$I,"
+            f"'Por Instancia'!$E:$E,A{row_index},"
+            f"'Por Instancia'!$C:$C,C{row_index})"
         )
         ws.cell(row=row_index, column=5, value=f'=IF({sum_qty_formula}=0,"",{sum_qty_formula})')
         ws.cell(row=row_index, column=6, value=f'=IF(OR(E{row_index}="",E{row_index}=0,G{row_index}=""),"",G{row_index}/E{row_index})')
@@ -301,7 +303,7 @@ def _populate_cost_model_totals_sheet(ws, cost_rows: list[dict[str, Any]], *, su
             _style_cost_model_total_row(ws, row_index, label_column=3, value_column=7, currency_format=currency_fmt)
 
     total_row_index = ws.max_row + 1
-    ws.append(["", "", "Total General", "", "", "", f'=SUMIFS(G2:G{data_end_row},C2:C{data_end_row},"General")'])
+    ws.append(["", "", "Total general", "", "", "", f'=SUMIFS(G2:G{data_end_row},C2:C{data_end_row},"General")'])
     _style_cost_model_total_row(ws, total_row_index, label_column=3, value_column=7, currency_format=currency_fmt)
 
 
@@ -310,22 +312,26 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
     ws.freeze_panes = "A3"
 
     ws.append([title])
-    ws.merge_cells("A1:E1")
     title_cell = ws["A1"]
     title_cell.font = Font(name="Calibri", size=12, bold=True)
     title_cell.alignment = Alignment(horizontal="left", vertical="center")
 
-    ws.append(["Material", "SKU", "Subtype", "Quantity", "Unit"])
-    _style_header_row(ws, row_index=2, column_count=5)
-
     quantity_state_key = f"{quantity_key}_state"
     visible_rows = [row for row in context_rows if _include_context_row(row, quantity_key=quantity_key, quantity_state_key=quantity_state_key)]
+    include_subtype = any((row.get("subtype") or "General") != "General" for row in visible_rows)
+    headers = ["Material", "SKU"]
+    if include_subtype:
+        headers.append("Subtipo")
+    headers.extend(["Q fabrica" if quantity_key == "quantity" else "Q obra", "Unidad"])
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+    ws.append(headers)
+    _style_header_row(ws, row_index=2, column_count=len(headers))
 
     if not visible_rows:
-        ws.append(["No rows available for this export."])
-        ws.merge_cells("A3:E3")
+        ws.append(["No hay filas disponibles para esta exportacion."])
+        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=len(headers))
         ws["A3"].alignment = Alignment(horizontal="left", vertical="center")
-        _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10})
+        _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10} if include_subtype else {"A": 42, "B": 16, "C": 14, "D": 10})
         return
 
     current_row = 3
@@ -335,7 +341,7 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
     for row in visible_rows:
         if row["category_label"] != active_category:
             ws.append([row["category_label"]])
-            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
             _style_group_row(ws, current_row, fill=CATEGORY_FILL, bold=True)
             active_category = row["category_label"]
             active_instance = None
@@ -343,18 +349,21 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
 
         if row["instance_label"] != active_instance:
             ws.append([f"  {row['instance_label']}"])
-            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=5)
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
             _style_group_row(ws, current_row, fill=INSTANCE_FILL, bold=False)
             active_instance = row["instance_label"]
             current_row += 1
 
         numeric_value = row[quantity_key] if row[quantity_state_key] == "value" else None
-        subtype_value = row["subtype"] if row["subtype"] != "General" else "General"
-        ws.append([row["material_name"], row["sku"], subtype_value, numeric_value, row["unit"]])
-        _style_data_row(ws, current_row, numeric_columns={4})
+        row_values = [row["material_name"], row["sku"]]
+        if include_subtype:
+            row_values.append(row["subtype"] if row["subtype"] != "General" else "General")
+        row_values.extend([numeric_value, row["unit"]])
+        ws.append(row_values)
+        _style_data_row(ws, current_row, numeric_columns={4 if include_subtype else 3})
         current_row += 1
 
-    _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10})
+    _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10} if include_subtype else {"A": 42, "B": 16, "C": 14, "D": 10})
 
 
 def _include_context_row(row: dict[str, Any], *, quantity_key: str, quantity_state_key: str) -> bool:

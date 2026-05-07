@@ -130,7 +130,7 @@ def render_home_page() -> str:
         <h3>What is implemented</h3>
         <ul class="clean-list">
           <li>Single normalized schema for categories, components, materials, projects, instances, links, and BOM entries.</li>
-          <li>Seeded demo dataset that demonstrates linked accessories, subtype BOM rows, and blank-versus-zero quantity behavior.</li>
+          <li>Seeded demo dataset that demonstrates linked accessories, subtype BOM rows, and blank-versus-zero Q<sub>fábrica</sub> behavior.</li>
           <li>Read-oriented JSON endpoints ready for a later typed React client.</li>
         </ul>
       </article>
@@ -735,19 +735,18 @@ def _render_catalog_attribute_editor(component: dict) -> str:
 def _render_material_rule(rule: dict) -> str:
     conditions = []
     for group in rule["conditions"]:
-        clauses = " AND ".join(
+        clauses = " Y ".join(
             _format_condition(clause)
             for clause in group["clauses"]
         )
         conditions.append(f"<span class='px-1.5 py-0.5 bg-black/40 border border-white/5 rounded text-[10px] font-mono text-zinc-400'>{escape(group['group'])}: {escape(clauses)}</span>")
-    condition_list = "".join(conditions) if conditions else "<span class='text-zinc-500 text-xs italic'>Always applies</span>"
-    unit_qty = "n/a" if rule["unit_qty_per_unit"] is None else f"{rule['unit_qty_per_unit']}"
+    condition_list = "".join(conditions) if conditions else "<span class='text-zinc-500 text-xs italic'>Siempre aplica</span>"
+    unit_qty = "n/d" if rule["unit_qty_per_unit"] is None else f"{rule['unit_qty_per_unit']}"
     
     return f"""
     <tr class="group hover:bg-white/5 transition-colors">
-        <td class="px-3 py-3 text-zinc-200 font-medium text-sm flex flex-col gap-1">
+        <td class="px-3 py-3 text-zinc-200 font-medium text-sm">
             {escape(rule['material_name'])}
-            <span class="text-[10px] text-zinc-500 font-mono">{escape(rule['notes'] or '')}</span>
         </td>
         <td class="px-3 py-3 text-zinc-500 font-mono text-xs">
             {escape(rule['sku'])} <br/> ({escape(rule['unit'] or '-')})
@@ -923,7 +922,7 @@ def _render_create_instance_modal(project_id: int, category: dict, component_opt
           
           <div class="flex flex-col gap-1.5">
             <label class="text-xs font-bold text-zinc-400 uppercase tracking-widest">Unit Amount</label>
-            <input name="unit_amount" placeholder="Optional quantity basis" class="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
+            <input name="unit_amount" placeholder="Optional Q fábrica basis" class="w-full bg-black/40 border border-white/10 rounded-lg p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono">
           </div>
           
           <div class="flex flex-col gap-1.5">
@@ -1094,16 +1093,14 @@ def _render_bom_material(material: dict) -> str:
         </div>
       </div>
       
-      {f'<div class="px-3 py-2 border-b border-white/5 text-xs text-zinc-400 bg-black/20">{escape(material["notes"])}</div>' if material['notes'] else ''}
-      
       <!-- BOM Table -->
       <div class="overflow-x-auto">
           <table class="w-full text-left border-collapse text-sm">
             <thead class="bg-black/40 border-b border-white/5">
               <tr>
                 <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtype</th>
-                <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Quantity</th>
-                <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Assembly Kit</th>
+                <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Q<sub>fábrica</sub></th>
+                <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Q<sub>obra</sub></th>
                 <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unit</th>
                 <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Source</th>
                 <th class="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Formula</th>

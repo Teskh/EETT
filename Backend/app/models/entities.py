@@ -244,7 +244,49 @@ class CatalogComponent(Base):
         cascade="all, delete-orphan",
         order_by="ComponentMaterialRule.display_order",
     )
+    media: Mapped[list["CatalogComponentMedia"]] = relationship(
+        back_populates="component",
+        cascade="all, delete-orphan",
+        order_by="CatalogComponentMedia.sort_order",
+    )
     instances: Mapped[list["ProjectInstance"]] = relationship(back_populates="component")
+
+
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40), default="image", nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    uri: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str | None] = mapped_column(String(255), default=None)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    width: Mapped[int | None] = mapped_column(Integer, default=None)
+    height: Mapped[int | None] = mapped_column(Integer, default=None)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    created_by: Mapped["User | None"] = relationship()
+    catalog_links: Mapped[list["CatalogComponentMedia"]] = relationship(back_populates="asset")
+    instance_links: Mapped[list["ProjectInstanceMedia"]] = relationship(back_populates="asset")
+
+
+class CatalogComponentMedia(Base):
+    __tablename__ = "catalog_component_media"
+    __table_args__ = (UniqueConstraint("component_id", "media_asset_id", "role"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    component_id: Mapped[int] = mapped_column(ForeignKey("catalog_components.id", ondelete="CASCADE"), nullable=False)
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id", ondelete="RESTRICT"), nullable=False)
+    role: Mapped[str] = mapped_column(String(40), default="primary", nullable=False)
+    caption: Mapped[str | None] = mapped_column(String(255), default=None)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    component: Mapped[CatalogComponent] = relationship(back_populates="media")
+    asset: Mapped[MediaAsset] = relationship(back_populates="catalog_links")
 
 
 class CatalogAttributeDefinition(Base):
@@ -343,7 +385,6 @@ class ComponentMaterialRule(Base):
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     unit: Mapped[str | None] = mapped_column(String(50), default=None)
     unit_qty_per_unit: Mapped[float | None] = mapped_column(Float, default=None)
-    notes: Mapped[str | None] = mapped_column(Text, default=None)
 
     component: Mapped[CatalogComponent] = relationship(back_populates="material_rules")
     material: Mapped[Material] = relationship(back_populates="component_rules")
@@ -589,12 +630,14 @@ class ProjectInstanceMedia(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    media_asset_id: Mapped[int | None] = mapped_column(ForeignKey("media_assets.id", ondelete="RESTRICT"), default=None)
     kind: Mapped[str] = mapped_column(String(40), default="image", nullable=False)
     uri: Mapped[str] = mapped_column(String(255), nullable=False)
     caption: Mapped[str | None] = mapped_column(String(255), default=None)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     instance: Mapped[ProjectInstance] = relationship(back_populates="media")
+    asset: Mapped[MediaAsset | None] = relationship(back_populates="instance_links")
 
 
 class ProjectInstanceAttributeGroup(Base):

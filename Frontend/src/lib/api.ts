@@ -1,5 +1,9 @@
 import type {
   ActivityGroup,
+  BackupCreateResponse,
+  BackupRecord,
+  BackupRestoreResponse,
+  BackupSettings,
   CatalogAttribute,
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
@@ -73,10 +77,11 @@ function mergeHeaders(...headerSets: Array<HeadersInit | undefined>): Headers {
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
+  const hasJsonBody = Boolean(init?.body) && !(typeof FormData !== "undefined" && init?.body instanceof FormData);
   const headers = mergeHeaders(
     {
       Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
     },
     init?.headers,
   );
@@ -212,6 +217,30 @@ export const api = {
       method: "DELETE",
     });
   },
+  getBackups() {
+    return request<BackupRecord[]>("/api/v1/backups");
+  },
+  createBackup(label: string | null) {
+    return request<BackupCreateResponse>("/api/v1/backups", {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    });
+  },
+  getBackupSettings() {
+    return request<BackupSettings>("/api/v1/backups/settings");
+  },
+  updateBackupSettings(payload: Pick<BackupSettings, "enabled" | "interval_minutes" | "retention_count">) {
+    return request<BackupSettings>("/api/v1/backups/settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  restoreBackup(filename: string) {
+    return request<BackupRestoreResponse>("/api/v1/backups/restore", {
+      method: "POST",
+      body: JSON.stringify({ filename, force_disconnect: true }),
+    });
+  },
   getCatalog(categoryId?: number | null) {
     const query = categoryId ? `?category_id=${categoryId}` : "";
     return request<CatalogPageData>(`/api/v1/catalog${query}`);
@@ -257,9 +286,30 @@ export const api = {
       body: JSON.stringify({ rules }),
     });
   },
+  updateComponentMedia(componentId: number, mediaAssetId: number | null, caption?: string | null) {
+    return request<MutationResult>(`/api/v1/catalog/components/${componentId}/media`, {
+      method: "PUT",
+      body: JSON.stringify({ media_asset_id: mediaAssetId, caption: caption ?? null }),
+    });
+  },
+  getMediaAssets() {
+    return request<{ assets: import("./types").MediaAsset[] }>("/api/v1/media/assets");
+  },
+  uploadMediaAsset(file: File) {
+    const body = new FormData();
+    body.append("file", file);
+    return request<import("./types").MediaAsset>("/api/v1/media/assets", {
+      method: "POST",
+      body,
+    });
+  },
   searchCatalogMaterials(query: string, limit = 12) {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return request<CatalogMaterialSearchResponse>(`/api/v1/catalog/materials/search?${params.toString()}`);
+  },
+  searchMaterialDashboardMaterials(query: string, limit = 10) {
+    const params = new URLSearchParams({ q: query, limit: String(limit) });
+    return request<CatalogMaterialSearchResponse>(`/api/v1/dashboard/materials/search?${params.toString()}`);
   },
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");

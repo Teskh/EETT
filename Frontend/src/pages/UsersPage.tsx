@@ -86,7 +86,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
     try {
       setData(await api.getUsers());
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load users.");
+      setError(err instanceof ApiError ? err.message : "No se pudieron cargar los usuarios.");
     } finally {
       setLoading(false);
     }
@@ -105,7 +105,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
       setCreateForm(initialCreateForm);
       await loadUsers();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not create user.");
+      setError(err instanceof ApiError ? err.message : "No se pudo crear el usuario.");
     } finally {
       setCreateSaving(false);
     }
@@ -131,14 +131,14 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
       setEditForm(null);
       await loadUsers();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not update user.");
+      setError(err instanceof ApiError ? err.message : "No se pudo actualizar el usuario.");
     } finally {
       setEditSaving(false);
     }
   }
 
   async function handleDeleteUser(userId: number) {
-    const confirmed = window.confirm("Delete this user?");
+    const confirmed = window.confirm("¿Eliminar este usuario?");
     if (!confirmed) {
       return;
     }
@@ -151,7 +151,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
       }
       await loadUsers();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not delete user.");
+      setError(err instanceof ApiError ? err.message : "No se pudo eliminar el usuario.");
     }
   }
 
@@ -160,10 +160,10 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
       <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-6">
         <form className="liquid-glass rounded-2xl p-6 flex flex-col gap-4" onSubmit={handleCreateUser}>
           <div>
-            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Sysadmin Only</p>
-            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">User editor</h2>
+            <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Solo Sysadmin</p>
+            <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Editor de usuarios</h2>
             <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2">
-              Add internal accounts, assign legacy-aligned roles, and keep the reserved <span className="font-mono">sysadmin</span> account as the only user-admin entry point.
+              Agrega cuentas internas, asigna roles alineados con el sistema anterior y mantén la cuenta reservada <span className="font-mono">sysadmin</span> como único punto de entrada para administración de usuarios.
             </p>
           </div>
 
@@ -171,26 +171,26 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
             <input
               value={createForm.username}
               onChange={(event) => setCreateForm((current) => ({ ...current, username: event.target.value }))}
-              placeholder="Username"
+              placeholder="Usuario"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
             />
             <input
               value={createForm.display_name}
               onChange={(event) => setCreateForm((current) => ({ ...current, display_name: event.target.value }))}
-              placeholder="Display name"
+              placeholder="Nombre visible"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
             />
             <input
               value={createForm.email}
               onChange={(event) => setCreateForm((current) => ({ ...current, email: event.target.value }))}
-              placeholder="Email"
+              placeholder="Correo"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
             />
             <input
               type="password"
               value={createForm.password}
               onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
-              placeholder="Password"
+              placeholder="Contraseña"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
             />
           </div>
@@ -211,7 +211,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
               checked={createForm.is_active}
               onChange={(event) => setCreateForm((current) => ({ ...current, is_active: event.target.checked }))}
             />
-            Active user
+            Usuario activo
           </label>
 
           <button
@@ -219,22 +219,22 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
             disabled={createSaving}
             className="px-4 py-3 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-xl text-sm font-bold transition-all"
           >
-            {createSaving ? "Creating..." : "Create User"}
+            {createSaving ? "Creando..." : "Crear usuario"}
           </button>
         </form>
 
         <section className="liquid-glass rounded-2xl p-6 flex flex-col gap-4 min-h-[600px]">
           <div className="flex items-center justify-between gap-4">
             <div>
-              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Directory</p>
-              <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Internal users</h2>
+              <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Directorio</p>
+              <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Usuarios internos</h2>
             </div>
             <button
               type="button"
               onClick={() => void loadUsers()}
               className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold"
             >
-              Refresh
+              Actualizar
             </button>
           </div>
 
@@ -243,7 +243,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
           ) : null}
 
           {loading ? (
-            <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">Loading users...</div>
+            <div className="rounded-2xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">Cargando usuarios...</div>
           ) : data ? (
             <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_420px] gap-6">
               <div className="space-y-3">
@@ -259,7 +259,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                           </span>
                           {!user.is_active ? (
                             <span className="rounded-full border border-amber-300/60 bg-amber-200/50 dark:bg-amber-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-amber-800 dark:text-amber-300">
-                              Inactive
+                              Inactivo
                             </span>
                           ) : null}
                         </div>
@@ -281,7 +281,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                           }}
                           className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold"
                         >
-                          Edit
+                          Editar
                         </button>
                         {user.username !== "sysadmin" ? (
                           <button
@@ -289,7 +289,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                             onClick={() => void handleDeleteUser(user.id)}
                             className="px-3 py-2 rounded-lg border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-800 dark:text-red-200"
                           >
-                            Delete
+                            Eliminar
                           </button>
                         ) : null}
                       </div>
@@ -302,30 +302,30 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                 {editingUserId !== null && editForm ? (
                   <form className="flex flex-col gap-4" onSubmit={handleUpdateUser}>
                     <div>
-                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Edit User</p>
+                      <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-1">Editar Usuario</p>
                       <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
                         {data.users.find((user) => user.id === editingUserId)?.username}
-                        {editingUserId !== null && data.users.find((user) => user.id === editingUserId)?.username === currentUsername ? " (current session)" : ""}
+                        {editingUserId !== null && data.users.find((user) => user.id === editingUserId)?.username === currentUsername ? " (sesión actual)" : ""}
                       </h3>
                     </div>
 
                     <input
                       value={editForm.display_name}
                       onChange={(event) => setEditForm((current) => (current ? { ...current, display_name: event.target.value } : current))}
-                      placeholder="Display name"
+                      placeholder="Nombre visible"
                       className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
                     />
                     <input
                       value={editForm.email}
                       onChange={(event) => setEditForm((current) => (current ? { ...current, email: event.target.value } : current))}
-                      placeholder="Email"
+                      placeholder="Correo"
                       className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
                     />
                     <input
                       type="password"
                       value={editForm.password}
                       onChange={(event) => setEditForm((current) => (current ? { ...current, password: event.target.value } : current))}
-                      placeholder="New password (leave blank to keep)"
+                      placeholder="Nueva contraseña (dejar en blanco para conservar)"
                       className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
                     />
 
@@ -345,7 +345,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                         checked={editForm.is_active}
                         onChange={(event) => setEditForm((current) => (current ? { ...current, is_active: event.target.checked } : current))}
                       />
-                      Active user
+                      Usuario activo
                     </label>
 
                     <div className="flex gap-3">
@@ -354,7 +354,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                         disabled={editSaving}
                         className="px-4 py-3 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-xl text-sm font-bold transition-all"
                       >
-                        {editSaving ? "Saving..." : "Save Changes"}
+                        {editSaving ? "Guardando..." : "Guardar cambios"}
                       </button>
                       <button
                         type="button"
@@ -364,13 +364,13 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                         }}
                         className="px-4 py-3 rounded-xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-sm font-semibold"
                       >
-                        Cancel
+                        Cancelar
                       </button>
                     </div>
                   </form>
                 ) : (
                   <div className="h-full flex items-center justify-center text-center text-sm text-zinc-500 dark:text-zinc-400">
-                    Select a user to edit role assignments, activity state, or password.
+                    Selecciona un usuario para editar roles, estado de actividad o contraseña.
                   </div>
                 )}
               </div>

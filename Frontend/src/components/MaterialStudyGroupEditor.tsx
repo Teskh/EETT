@@ -178,14 +178,14 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
       onChanged(response.group_id);
       selectGroup(response.group_id);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not save material group.");
+      setError(err instanceof ApiError ? err.message : "No se pudo guardar el grupo de materiales.");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete() {
-    if (!selectedGroup || !window.confirm(`Delete group "${selectedGroup.name}"?`)) {
+    if (!selectedGroup || !window.confirm(`¿Eliminar el grupo "${selectedGroup.name}"?`)) {
       return;
     }
     setDeleting(true);
@@ -195,27 +195,27 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
       onChanged(null);
       selectGroup("new");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not delete material group.");
+      setError(err instanceof ApiError ? err.message : "No se pudo eliminar el grupo de materiales.");
     } finally {
       setDeleting(false);
     }
   }
 
   return (
-    <Modal open={open} title="Material Groups" kicker="Group Editor" onClose={onClose} panelClassName="max-w-6xl">
+    <Modal open={open} title="Grupos de Materiales" kicker="Editor de Grupos" onClose={onClose} panelClassName="max-w-6xl">
       <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50/70 p-4 dark:bg-white/[0.03]">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">Saved groups</h4>
-              <p className="mt-1 text-xs text-zinc-500">{groups.length} shared studies</p>
+              <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">Grupos guardados</h4>
+              <p className="mt-1 text-xs text-zinc-500">{groups.length} estudios compartidos</p>
             </div>
             <button
               type="button"
               onClick={() => selectGroup("new")}
               className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
             >
-              New
+              Nuevo
             </button>
           </div>
 
@@ -235,13 +235,13 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                     }`}
                   >
                     <div className="text-sm font-semibold">{group.name}</div>
-                    <div className="mt-1 text-[11px] text-zinc-500">{group.member_count} members • {group.study_unit}</div>
+                    <div className="mt-1 text-[11px] text-zinc-500">{group.member_count} miembros • {group.study_unit}</div>
                   </button>
                 );
               })
             ) : (
               <div className="rounded-xl border border-dashed border-black/10 px-3 py-6 text-sm text-zinc-500 dark:border-white/10">
-                No groups yet.
+                Aún no hay grupos.
               </div>
             )}
           </div>
@@ -250,7 +250,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
         <section className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Name</span>
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Nombre</span>
               <input
                 value={editorState.name}
                 onChange={(event) => setEditorState((current) => ({ ...current, name: event.target.value }))}
@@ -259,7 +259,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
               />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Study Unit</span>
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Unidad de Estudio</span>
               <input
                 value={editorState.study_unit}
                 onChange={(event) => setEditorState((current) => ({ ...current, study_unit: event.target.value }))}
@@ -270,20 +270,20 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
           </div>
 
           <label className="block">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Description</span>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Descripción</span>
             <textarea
               value={editorState.description}
               onChange={(event) => setEditorState((current) => ({ ...current, description: event.target.value }))}
               rows={3}
               className="w-full rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
-              placeholder="Explain how the normalized unit should be interpreted."
+              placeholder="Explica cómo se debe interpretar la unidad normalizada."
             />
           </label>
 
           <div className="rounded-2xl border border-black/10 dark:border-white/10">
             <div className="border-b border-black/10 px-4 py-3 dark:border-white/10">
-              <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">Members</h4>
-              <p className="mt-1 text-xs text-zinc-500">Each factor means 1 source unit equals X study units.</p>
+              <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">Miembros</h4>
+              <p className="mt-1 text-xs text-zinc-500">Cada factor significa que 1 unidad de origen equivale a X unidades de estudio.</p>
             </div>
 
             <div className="p-4">
@@ -292,14 +292,14 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                   value={searchValue}
                   onChange={(event) => setSearchValue(event.target.value)}
                   className="w-full rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
-                  placeholder="Search SKU or material name to add"
+                  placeholder="Buscar SKU o nombre de material para agregar"
                 />
                 {(searchLoading || visibleSearchResults.length > 0) && searchValue.trim().length >= 2 ? (
                   <div className="absolute z-10 mt-2 w-full overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl dark:border-white/10 dark:bg-zinc-900">
                     {searchLoading ? (
-                      <div className="px-4 py-3 text-sm text-zinc-500">Searching...</div>
+                      <div className="px-4 py-3 text-sm text-zinc-500">Buscando...</div>
                     ) : !visibleSearchResults.length ? (
-                      <div className="px-4 py-3 text-sm text-zinc-500">All matching SKUs are already in this group.</div>
+                      <div className="px-4 py-3 text-sm text-zinc-500">Todos los SKU coincidentes ya están en este grupo.</div>
                     ) : (
                       visibleSearchResults.map((result) => (
                         <button
@@ -316,7 +316,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                             </div>
                           </div>
                           <span className="rounded-full border border-black/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500 dark:border-white/10">
-                            Add
+                            Agregar
                           </span>
                         </button>
                       ))
@@ -339,7 +339,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                             {member.sku}
                           </span>
                         </div>
-                        <div className="mt-1 text-xs text-zinc-500">{member.unit || "No unit"}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{member.unit || "Sin unidad"}</div>
                       </div>
                       <label className="block">
                         <span className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Factor</span>
@@ -363,14 +363,14 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                           }
                           className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
                         >
-                          Remove
+                          Eliminar
                         </button>
                       </div>
                     </div>
                   ))
                 ) : (
                   <div className="rounded-2xl border border-dashed border-black/10 px-4 py-8 text-sm text-zinc-500 dark:border-white/10">
-                    Add at least one SKU to define the group.
+                    Agrega al menos un SKU para definir el grupo.
                   </div>
                 )}
               </div>
@@ -385,7 +385,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-zinc-500">
-              Group metrics are normalized for analytics only. Procurement fields remain intentionally blank.
+              Las métricas del grupo se normalizan solo para análisis. Los campos de compras quedan intencionalmente en blanco.
             </div>
             <div className="flex gap-3">
               {selectedGroup ? (
@@ -395,7 +395,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                   disabled={deleting || saving}
                   className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/20"
                 >
-                  {deleting ? "Deleting..." : "Delete"}
+                  {deleting ? "Eliminando..." : "Eliminar"}
                 </button>
               ) : null}
               <button
@@ -403,7 +403,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                 onClick={onClose}
                 className="rounded-xl border border-black/10 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10"
               >
-                Close
+                Cerrar
               </button>
               <button
                 type="button"
@@ -411,7 +411,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                 disabled={saving || deleting}
                 className="rounded-xl bg-accent-500 px-4 py-3 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-400 disabled:opacity-60"
               >
-                {saving ? "Saving..." : selectedGroup ? "Save Changes" : "Create Group"}
+                {saving ? "Guardando..." : selectedGroup ? "Guardar cambios" : "Crear grupo"}
               </button>
             </div>
           </div>

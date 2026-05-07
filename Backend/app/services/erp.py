@@ -17,6 +17,14 @@ VISIBLE_PURCHASE_ORDER_STATUSES: tuple[str, ...] = (
     APPROVED_PURCHASE_ORDER_STATUS,
     PENDING_PURCHASE_ORDER_STATUS,
 )
+PURCHASE_ORDER_DETAIL_PRICE_COLUMNS: tuple[str, ...] = (
+    "PrecioUnit",
+    "PrecioUnitario",
+    "PreUni",
+    "PreUniMB",
+    "Precio",
+    "ValorUnitario",
+)
 
 
 def erp_search_available(settings: Settings) -> bool:
@@ -278,6 +286,11 @@ def get_material_procurement_details(
                 default=(None, None, None, None, None),
                 label=f"purchase orders for {normalized_sku}",
             )
+            purchase_orders = _safe_erp_lookup(
+                lambda: _get_purchase_order_lines_for_products_batch(po_cursor, [normalized_sku]).get(normalized_sku, []),
+                default=[],
+                label=f"purchase order lines for {normalized_sku}",
+            )
             average_price = _safe_erp_lookup(
                 lambda: _get_average_prices_for_products_batch(pricing_cursor, [normalized_sku], today_ddmmyyyy).get(normalized_sku),
                 default=None,
@@ -316,6 +329,7 @@ def get_material_procurement_details(
                 "last_purchase_order_estimated_delivery": _serialize_datetime(estimated_delivery),
                 "last_purchase_order_status_code": po_status_code,
                 "last_purchase_order_is_approved": po_status_code == APPROVED_PURCHASE_ORDER_STATUS if po_status_code else None,
+                "purchase_orders": purchase_orders,
                 "movement_quantity_30d": movement_quantity_30d,
             }
     except Exception as exc:
@@ -540,7 +554,116 @@ def _get_last_purchase_orders_for_products_batch(
     status_placeholders = ",".join(["?"] * len(VISIBLE_PURCHASE_ORDER_STATUSES))
     cursor.execute(
         f"""
-        WITH RankedPOs AS (
+        WITH VisiblePOs AS (
+            SELECT
+                c.fechaOC,
+                c.numoc,
+                c.FecFinalOC,
+                RTRIM(LTRIM(c.CodEstado)) AS CodEstado,
+                c.NumInterOc AS OCNumInterOc,
+                d.NumLinea,
+                RTRIM(LTRIM(d.CodProd)) AS CodProd,
+                d.cantidad AS cantidadOrdenadaDetalle
+            FROM softland.owordencom c
+            INNER JOIN softland.owordendet d ON d.numinteroc = c.numinteroc
+            WHERE RTRIM(LTRIM(d.codprod)) IN ({placeholders})
+              AND RTRIM(LTRIM(c.CodEstado)) IN ({status_placeholders})
+        ),
+        RankedPOs AS (
+            SELECT
+                *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY CodProd
+                    ORDER BY fechaOC DESC, numoc DESC, NumLinea ASC
+                ) AS rn
+            FROM VisiblePOs
+        ),
+        LastPOBase AS (
+            SELECT * FROM RankedPOs WHERE rn = 1
+        ),
+        LinePending AS (
+            SELECT
+                v.CodProd,
+                v.fechaOC,
+                v.numoc,
+                v.NumLinea,
+                v.OCNumInterOc,
+                v.cantidadOrdenadaDetalle,
+                COALESCE(SUM(b.ingresada), 0) AS cantidadIngresadaMovim,
+                COALESCE(softland.ow_fdblRecepNoInvOC(v.OCNumInterOc, v.NumLinea, v.CodProd), 0) AS cantidadRecepcionNoInv
+            FROM VisiblePOs v
+            LEFT OUTER JOIN softland.ow_vsnpMovimIWDetalleOC b
+                ON b.numoc = v.numoc AND b.numlinea = v.NumLinea AND b.codprod = v.CodProd
+            GROUP BY
+                v.CodProd,
+                v.fechaOC,
+                v.numoc,
+                v.NumLinea,
+                v.OCNumInterOc,
+                v.cantidadOrdenadaDetalle
+        ),
+        RecentPending AS (
+            SELECT
+                CodProd,
+                SUM(
+                    CASE
+                        WHEN cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv) > 0
+                        THEN cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv)
+                        ELSE 0
+                    END
+                ) AS pendingPurchaseQuantity
+            FROM LinePending
+            WHERE fechaOC >= DATEADD(MONTH, -4, CONVERT(date, GETDATE()))
+            GROUP BY CodProd
+        )
+        SELECT
+            lpo.CodProd,
+            lpo.fechaOC,
+            lpo.numoc,
+            lpo.FecFinalOC,
+            lpo.CodEstado,
+            COALESCE(rp.pendingPurchaseQuantity, 0) AS pendingPurchaseQuantity
+        FROM LastPOBase lpo
+        LEFT JOIN RecentPending rp ON rp.CodProd = lpo.CodProd
+        """,
+        [*product_codes, *VISIBLE_PURCHASE_ORDER_STATUSES],
+    )
+    for row in cursor.fetchall():
+        code = (getattr(row, "CodProd", None) or "").strip().upper()
+        if not code:
+            continue
+        pending_quantity = getattr(row, "pendingPurchaseQuantity", None)
+        if pending_quantity is None:
+            ordered = float(getattr(row, "cantidadOrdenadaDetalle", 0.0) or 0.0)
+            entered_mov = float(getattr(row, "cantidadIngresadaMovim", 0.0) or 0.0)
+            entered_non_inv = float(getattr(row, "cantidadRecepcionNoInv", 0.0) or 0.0)
+            pending_quantity = max(ordered - (entered_mov + entered_non_inv), 0.0)
+        results[code] = (
+            getattr(row, "fechaOC", None),
+            str(getattr(row, "numoc", "")).strip() or None,
+            round(float(pending_quantity or 0.0), 2),
+            getattr(row, "FecFinalOC", None),
+            (getattr(row, "CodEstado", None) or "").strip() or None,
+        )
+    return results
+
+
+def _get_purchase_order_lines_for_products_batch(
+    cursor,
+    product_codes: Sequence[str],
+    *,
+    limit: int = 10,
+) -> dict[str, list[dict[str, Any]]]:
+    if not product_codes:
+        return {}
+
+    results: dict[str, list[dict[str, Any]]] = {code: [] for code in product_codes}
+    placeholders = ",".join(["?"] * len(product_codes))
+    unit_price_column = _get_purchase_order_detail_unit_price_column(cursor)
+    unit_price_expression = f"d.{unit_price_column}" if unit_price_column else "NULL"
+    cursor.execute(
+        f"""
+        WITH PurchaseOrderLines AS (
             SELECT
                 c.fechaOC,
                 c.numoc,
@@ -550,6 +673,13 @@ def _get_last_purchase_orders_for_products_batch(
                 d.NumLinea,
                 RTRIM(LTRIM(d.CodProd)) AS CodProd,
                 d.cantidad AS cantidadOrdenadaDetalle,
+                {unit_price_expression} AS precioUnitario,
+                CASE
+                    WHEN RTRIM(LTRIM(c.CodEstado)) IN (?,?)
+                     AND c.fechaOC >= DATEADD(MONTH, -4, CONVERT(date, GETDATE()))
+                    THEN 1
+                    ELSE 0
+                END AS countedInPending,
                 ROW_NUMBER() OVER (
                     PARTITION BY RTRIM(LTRIM(d.CodProd))
                     ORDER BY c.fechaOC DESC, c.numoc DESC, d.NumLinea ASC
@@ -557,50 +687,86 @@ def _get_last_purchase_orders_for_products_batch(
             FROM softland.owordencom c
             INNER JOIN softland.owordendet d ON d.numinteroc = c.numinteroc
             WHERE RTRIM(LTRIM(d.codprod)) IN ({placeholders})
-              AND RTRIM(LTRIM(c.CodEstado)) IN ({status_placeholders})
-        ),
-        LastPOBase AS (
-            SELECT * FROM RankedPOs WHERE rn = 1
         )
         SELECT
-            lpo.CodProd,
-            lpo.fechaOC,
-            lpo.numoc,
-            lpo.FecFinalOC,
-            lpo.CodEstado,
-            lpo.cantidadOrdenadaDetalle,
+            pol.CodProd,
+            pol.fechaOC,
+            pol.numoc,
+            pol.FecFinalOC,
+            pol.CodEstado,
+            pol.NumLinea,
+            pol.cantidadOrdenadaDetalle,
+            pol.precioUnitario,
             COALESCE(SUM(b.ingresada), 0) AS cantidadIngresadaMovim,
-            COALESCE(softland.ow_fdblRecepNoInvOC(lpo.OCNumInterOc, lpo.NumLinea, lpo.CodProd), 0) AS cantidadRecepcionNoInv
-        FROM LastPOBase lpo
+            COALESCE(softland.ow_fdblRecepNoInvOC(pol.OCNumInterOc, pol.NumLinea, pol.CodProd), 0) AS cantidadRecepcionNoInv,
+            pol.countedInPending
+        FROM PurchaseOrderLines pol
         LEFT OUTER JOIN softland.ow_vsnpMovimIWDetalleOC b
-            ON b.numoc = lpo.numoc AND b.numlinea = lpo.NumLinea AND b.codprod = lpo.CodProd
+            ON b.numoc = pol.numoc AND b.numlinea = pol.NumLinea AND b.codprod = pol.CodProd
+        WHERE pol.rn <= ?
         GROUP BY
-            lpo.CodProd,
-            lpo.fechaOC,
-            lpo.numoc,
-            lpo.FecFinalOC,
-            lpo.CodEstado,
-            lpo.cantidadOrdenadaDetalle,
-            lpo.OCNumInterOc,
-            lpo.NumLinea
+            pol.CodProd,
+            pol.fechaOC,
+            pol.numoc,
+            pol.FecFinalOC,
+            pol.CodEstado,
+            pol.NumLinea,
+            pol.cantidadOrdenadaDetalle,
+            pol.precioUnitario,
+            pol.OCNumInterOc,
+            pol.countedInPending
+        ORDER BY pol.CodProd, pol.fechaOC DESC, pol.numoc DESC, pol.NumLinea ASC
         """,
-        [*product_codes, *VISIBLE_PURCHASE_ORDER_STATUSES],
+        [APPROVED_PURCHASE_ORDER_STATUS, PENDING_PURCHASE_ORDER_STATUS, *product_codes, limit],
     )
     for row in cursor.fetchall():
         code = (getattr(row, "CodProd", None) or "").strip().upper()
         if not code:
             continue
         ordered = float(getattr(row, "cantidadOrdenadaDetalle", 0.0) or 0.0)
-        entered_mov = float(getattr(row, "cantidadIngresadaMovim", 0.0) or 0.0)
-        entered_non_inv = float(getattr(row, "cantidadRecepcionNoInv", 0.0) or 0.0)
-        results[code] = (
-            getattr(row, "fechaOC", None),
-            str(getattr(row, "numoc", "")).strip() or None,
-            round(ordered - (entered_mov + entered_non_inv), 2),
-            getattr(row, "FecFinalOC", None),
-            (getattr(row, "CodEstado", None) or "").strip() or None,
+        received_inventory = float(getattr(row, "cantidadIngresadaMovim", 0.0) or 0.0)
+        received_not_invoiced = float(getattr(row, "cantidadRecepcionNoInv", 0.0) or 0.0)
+        unit_price = getattr(row, "precioUnitario", None)
+        pending_quantity = round(max(ordered - (received_inventory + received_not_invoiced), 0.0), 2)
+        results.setdefault(code, []).append(
+            {
+                "date": _serialize_datetime(getattr(row, "fechaOC", None)),
+                "number": str(getattr(row, "numoc", "")).strip() or None,
+                "estimated_delivery": _serialize_datetime(getattr(row, "FecFinalOC", None)),
+                "status_code": (getattr(row, "CodEstado", None) or "").strip() or None,
+                "line_number": str(getattr(row, "NumLinea", "")).strip() or None,
+                "ordered_quantity": round(ordered, 2),
+                "unit_price": round(float(unit_price), 2) if unit_price is not None else None,
+                "received_quantity": round(received_inventory, 2),
+                "received_not_invoiced_quantity": round(received_not_invoiced, 2),
+                "pending_quantity": pending_quantity,
+                "counted_in_pending": bool(getattr(row, "countedInPending", 0)),
+            }
         )
     return results
+
+
+def _get_purchase_order_detail_unit_price_column(cursor) -> str | None:
+    try:
+        placeholders = ",".join(["?"] * len(PURCHASE_ORDER_DETAIL_PRICE_COLUMNS))
+        cursor.execute(
+            f"""
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = 'softland'
+              AND TABLE_NAME = 'owordendet'
+              AND COLUMN_NAME IN ({placeholders})
+            """,
+            list(PURCHASE_ORDER_DETAIL_PRICE_COLUMNS),
+        )
+        available = {str(getattr(row, "COLUMN_NAME", "")).strip() for row in cursor.fetchall()}
+    except Exception:
+        return None
+
+    for column in PURCHASE_ORDER_DETAIL_PRICE_COLUMNS:
+        if column in available:
+            return column
+    return None
 
 
 def _get_outgoing_quantities_for_products_batch(

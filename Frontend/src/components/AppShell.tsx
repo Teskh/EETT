@@ -3,7 +3,7 @@ import { type ReactNode } from "react";
 import type { SessionUser } from "../lib/types";
 import type { ThemeMode } from "../lib/theme";
 
-type NavKey = "home" | "catalog" | "dashboard" | "cost-model" | "history" | "projects" | "users";
+type NavKey = "home" | "catalog" | "dashboard" | "cost-model" | "history" | "projects" | "settings";
 
 type AppShellProps = {
   title: string;
@@ -61,7 +61,7 @@ function ThemePicker({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; o
     >
       <i className={`ph-bold ${isDark ? "ph-sun" : "ph-moon"} text-xl`} />
       <div className="absolute left-full ml-4 px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-200 text-xs rounded border border-zinc-200 dark:border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-        Toggle Theme
+        Cambiar tema
       </div>
     </button>
   );
@@ -79,21 +79,21 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
             <i className="ph-bold ph-lock-key text-xl" />
           </div>
           <div className="flex flex-col gap-4 w-full px-2">
-            <NavButton href="/" icon="ph-rocket" label="Launcher" active={activeNav === "home"} onNavigate={onNavigate} />
+            <NavButton href="/" icon="ph-rocket" label="Inicio" active={activeNav === "home"} onNavigate={onNavigate} />
             {currentUser.permissions.catalog_edit ? (
-              <NavButton href="/catalog" icon="ph-database" label="Database Editor" active={activeNav === "catalog"} onNavigate={onNavigate} />
+              <NavButton href="/catalog" icon="ph-database" label="Editor de Base de Datos" active={activeNav === "catalog"} onNavigate={onNavigate} />
             ) : null}
             {currentUser.permissions.material_dashboard ? (
-              <NavButton href="/dashboard/materials" icon="ph-chart-line-up" label="Material Dashboard" active={activeNav === "dashboard"} onNavigate={onNavigate} />
+              <NavButton href="/dashboard/materials" icon="ph-chart-line-up" label="Panel de Materiales" active={activeNav === "dashboard"} onNavigate={onNavigate} />
             ) : null}
-            <NavButton href="/cost-model" icon="ph-chart-pie-slice" label="Cost Model" active={activeNav === "cost-model"} onNavigate={onNavigate} />
-            <NavButton href="/history" icon="ph-clock-counter-clockwise" label="Change History" active={activeNav === "history"} onNavigate={onNavigate} />
-            <NavButton href="/projects" icon="ph-kanban" label="Projects" active={activeNav === "projects"} onNavigate={onNavigate} />
-            {currentUser.permissions.user_admin ? (
-              <NavButton href="/users" icon="ph-users-three" label="User Editor" active={activeNav === "users"} onNavigate={onNavigate} />
-            ) : null}
+            <NavButton href="/cost-model" icon="ph-chart-pie-slice" label="Modelo de Costos" active={activeNav === "cost-model"} onNavigate={onNavigate} />
+            <NavButton href="/history" icon="ph-clock-counter-clockwise" label="Historial de Cambios" active={activeNav === "history"} onNavigate={onNavigate} />
+            <NavButton href="/projects" icon="ph-kanban" label="Proyectos" active={activeNav === "projects"} onNavigate={onNavigate} />
           </div>
           <div className="mt-auto w-full px-2 space-y-4">
+            {currentUser.permissions.user_admin ? (
+              <NavButton href="/settings" icon="ph-gear-six" label="Configuracion" active={activeNav === "settings"} onNavigate={onNavigate} />
+            ) : null}
             <ThemePicker themeMode={themeMode} onThemeModeChange={onThemeModeChange} />
           </div>
         </nav>
@@ -117,7 +117,7 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
                 onClick={() => void onLogout()}
                 className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold text-zinc-900 dark:text-zinc-100 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
               >
-                Log Out
+                Cerrar sesión
               </button>
             </div>
           </header>

@@ -149,12 +149,12 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
 
   async function downloadExportArtifact(job: ExportJob) {
     if (!job.artifact_uri) {
-      throw new Error("Export finished without an artifact.");
+      throw new Error("La exportación terminó sin archivo.");
     }
 
     const response = await fetch(job.artifact_uri, { credentials: "same-origin" });
     if (!response.ok) {
-      throw new Error("Could not download export artifact.");
+      throw new Error("No se pudo descargar el archivo exportado.");
     }
 
     const blob = await response.blob();
@@ -171,7 +171,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
 
   async function openExportArtifact(job: ExportJob) {
     if (!job.artifact_uri) {
-      throw new Error("Export finished without an artifact.");
+      throw new Error("La exportación terminó sin archivo.");
     }
     if (INLINE_EXPORT_KINDS.has(job.kind)) {
       window.open(job.artifact_uri, "_blank", "noopener,noreferrer");
@@ -222,7 +222,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     try {
       setData(await api.getProjects());
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not load projects.";
+      const message = err instanceof ApiError ? err.message : "No se pudieron cargar los proyectos.";
       setError(message);
     } finally {
       setLoading(false);
@@ -250,7 +250,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
           setSubtypeProject(detail);
         }
       } catch (err) {
-        const message = err instanceof ApiError ? err.message : "Could not load project subtypes.";
+        const message = err instanceof ApiError ? err.message : "No se pudieron cargar los subtipos del proyecto.";
         if (active) {
           setError(message);
           setSubtypeProject(null);
@@ -282,7 +282,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
         await loadProjects();
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create project.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear el proyecto.";
       setError(message);
     } finally {
       setSaving(false);
@@ -309,7 +309,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       await api.createProjectSubtype(subtypeModal.projectId, { name: name.trim(), parent_id: parentId });
       await refreshSubtypeProject(subtypeModal.projectId);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create subtype.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear el subtipo.";
       setError(message);
     } finally {
       setPendingSubtypeId(null);
@@ -326,7 +326,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       await api.updateProjectSubtype(subtypeModal.projectId, subtypeId, { name });
       await refreshSubtypeProject(subtypeModal.projectId);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not rename subtype.";
+      const message = err instanceof ApiError ? err.message : "No se pudo renombrar el subtipo.";
       setError(message);
     } finally {
       setPendingSubtypeId(null);
@@ -337,7 +337,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     if (!subtypeModal) {
       return;
     }
-    const confirmed = window.confirm("Delete this subtype and all nested subtype rows?");
+    const confirmed = window.confirm("¿Eliminar este subtipo y todas sus filas anidadas?");
     if (!confirmed) {
       return;
     }
@@ -347,7 +347,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       await api.deleteProjectSubtype(subtypeModal.projectId, subtypeId);
       await refreshSubtypeProject(subtypeModal.projectId);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not delete subtype.";
+      const message = err instanceof ApiError ? err.message : "No se pudo eliminar el subtipo.";
       setError(message);
     } finally {
       setPendingSubtypeId(null);
@@ -361,11 +361,11 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       const job = await api.requestProjectExport(projectId, { kind, payload });
       if (job.status !== "completed") {
         const payloadError = typeof job.payload.error === "string" ? job.payload.error : null;
-        throw new Error(payloadError || "Export did not complete successfully.");
+        throw new Error(payloadError || "La exportación no se completó correctamente.");
       }
       await openExportArtifact(job);
     } catch (err) {
-      const message = err instanceof ApiError || err instanceof Error ? err.message : "Could not export file.";
+      const message = err instanceof ApiError || err instanceof Error ? err.message : "No se pudo exportar el archivo.";
       setError(message);
     } finally {
       setExportingJob(null);
@@ -401,7 +401,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     try {
       await api.updateProjectStatus(draggingProject.projectId, { status: targetStatus });
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not update project status.";
+      const message = err instanceof ApiError ? err.message : "No se pudo actualizar el estado del proyecto.";
       setData(previousData);
       setError(message);
     } finally {
@@ -417,8 +417,8 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
             type="button"
             onClick={() => setCreateModalOpen(true)}
             className="h-10 w-10 rounded-full border border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/5 text-zinc-700 dark:text-zinc-200 hover:bg-white dark:hover:bg-white/10 hover:border-accent-500/40 transition-colors flex items-center justify-center"
-            aria-label="Create project"
-            title="Create project"
+            aria-label="Crear proyecto"
+            title="Crear proyecto"
           >
             <i className="ph-bold ph-plus text-sm" />
           </button>
@@ -430,7 +430,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       ) : null}
 
       {loading ? (
-        <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-500">Loading project board...</div>
+        <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-500">Cargando tablero de proyectos...</div>
       ) : data ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {orderedStatuses.map((status) => {
@@ -502,7 +502,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                         </div>
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
-                            <i className="ph-bold ph-stack" /> {project.instance_count} instances
+                            <i className="ph-bold ph-stack" /> {project.instance_count} instancias
                           </div>
                           <div className="flex items-center gap-2">
                             <button
@@ -510,17 +510,17 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                               disabled={!currentUser.permissions.project_edit}
                               className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 disabled:opacity-50 disabled:hover:bg-zinc-50 dark:disabled:hover:bg-white/5"
                               onClick={() => setSubtypeModal({ projectId: project.id, projectName: project.name })}
-                              title={currentUser.permissions.project_edit ? "Manage project subtypes" : "This role cannot edit project subtypes"}
+                              title={currentUser.permissions.project_edit ? "Administrar subtipos del proyecto" : "Este rol no puede editar subtipos del proyecto"}
                             >
-                              Subtypes
+                              Subtipos
                             </button>
                             <details className="relative">
                               <summary
                                 className="list-none px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 cursor-pointer flex items-center gap-1.5"
-                                aria-label={`Export options for ${project.name}`}
+                                aria-label={`Opciones de exportación para ${project.name}`}
                               >
                                 <i className="ph-bold ph-file-arrow-down" />
-                                Export
+                                Exportar
                                 <i className="ph-bold ph-caret-down" />
                               </summary>
                               <div className="absolute right-0 top-[calc(100%+0.5rem)] z-20 min-w-56 rounded-xl border border-black/10 dark:border-white/10 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-xl shadow-xl p-2">
@@ -537,10 +537,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                   }}
                                 >
                                   <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "commercial_pdf") ? "Generating PDF..." : "Commercial PDF (.pdf)"}
+                                    {isExporting(project.id, "commercial_pdf") ? "Generando PDF..." : "PDF Comercial (.pdf)"}
                                   </span>
                                   <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Opens the client-facing PDF in a new browser tab.
+                                    Abre el PDF para cliente en una nueva pestaña del navegador.
                                   </span>
                                 </button>
                                 <button
@@ -556,10 +556,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                   }}
                                 >
                                   <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "full_technical_pdf") ? "Generating PDF..." : "Full Technical PDF (.pdf)"}
+                                    {isExporting(project.id, "full_technical_pdf") ? "Generando PDF..." : "PDF Técnico Completo (.pdf)"}
                                   </span>
                                   <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Opens the technical PDF with full descriptions, installation notes, and materials.
+                                    Abre el PDF técnico con descripciones completas, notas de instalación y materiales.
                                   </span>
                                 </button>
                                 <button
@@ -575,10 +575,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                   }}
                                 >
                                   <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "detailed_material_pdf") ? "Generating PDF..." : "Detailed Materials PDF (.pdf)"}
+                                    {isExporting(project.id, "detailed_material_pdf") ? "Generando PDF..." : "PDF Detallado de Materiales (.pdf)"}
                                   </span>
                                   <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Opens the category-grouped materials PDF with stock, PO, and consumption detail.
+                                    Abre el PDF de materiales agrupado por categoría con detalle de stock, OC y consumo.
                                   </span>
                                 </button>
                                 <button
@@ -594,10 +594,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                   }}
                                 >
                                   <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "materials_workbook") ? "Generating workbook..." : "Materials Workbook (.xlsx)"}
+                                    {isExporting(project.id, "materials_workbook") ? "Generando libro..." : "Libro de Materiales (.xlsx)"}
                                   </span>
                                   <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Downloads the workbook through the browser download flow.
+                                    Descarga el libro mediante el flujo de descarga del navegador.
                                   </span>
                                 </button>
                                 {currentUser.permissions.cost_model_export ? (
@@ -614,10 +614,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                     }}
                                   >
                                     <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                      {isExporting(project.id, "cost_model_workbook") ? "Generating workbook..." : "Cost Model Workbook (.xlsx)"}
+                                      {isExporting(project.id, "cost_model_workbook") ? "Generando libro..." : "Libro de Modelo de Costos (.xlsx)"}
                                     </span>
                                     <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                      Downloads the formula-based cost model workbook with instance subtotals and auxiliary items.
+                                      Descarga el libro de modelo de costos basado en fórmulas con subtotales de instancias e ítems auxiliares.
                                     </span>
                                   </button>
                                 ) : null}
@@ -629,7 +629,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                     ))
                   ) : (
                     <div className="text-center p-6 border border-dashed border-black/10 dark:border-white/10 rounded-xl text-xs font-mono text-zinc-500">
-                      No projects
+                      Sin proyectos
                     </div>
                   )}
                 </div>
@@ -641,8 +641,8 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
 
       <Modal
         open={createModalOpen}
-        title="Create Project"
-        kicker="Project"
+        title="Crear Proyecto"
+        kicker="Proyecto"
         onClose={() => {
           if (saving) {
             return;
@@ -658,7 +658,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
               value={form.name}
               onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
               required
-              placeholder="Project Name"
+              placeholder="Nombre del proyecto"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono placeholder-zinc-500"
             />
             <select
@@ -666,9 +666,9 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
               onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}
               className="w-full bg-black/5 dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             >
-              <option value="template">Project Template</option>
-              <option value="execution">Execution Project</option>
-              <option value="finished">Finished Project</option>
+              <option value="template">Plantilla de Proyecto</option>
+              <option value="execution">Proyecto en Ejecución</option>
+              <option value="finished">Proyecto Terminado</option>
             </select>
           </div>
           <div className="flex justify-end">
@@ -677,7 +677,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
               disabled={saving}
               className="px-4 py-2.5 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-all flex justify-center items-center gap-2"
             >
-              <i className="ph-bold ph-plus" /> {saving ? "Creating..." : "Create Project"}
+              <i className="ph-bold ph-plus" /> {saving ? "Creando..." : "Crear proyecto"}
             </button>
           </div>
         </form>
@@ -685,14 +685,14 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
 
       <Modal
         open={subtypeModal !== null}
-        title={subtypeModal?.projectName || "Project Subtypes"}
-        kicker="Subtype Manager"
+        title={subtypeModal?.projectName || "Subtipos del Proyecto"}
+        kicker="Administrador de Subtipos"
         onClose={() => setSubtypeModal(null)}
         panelClassName="max-w-3xl"
       >
         <div className="flex items-center justify-between gap-3 mb-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Manage the project subtype hierarchy from the board instead of inside the project workspace.
+            Administra la jerarquía de subtipos del proyecto desde el tablero en vez de hacerlo dentro del espacio del proyecto.
           </p>
           <button
             type="button"
@@ -700,13 +700,13 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
             onClick={() => void handleCreateSubtype(null)}
             className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold disabled:opacity-50"
           >
-            Add Root Subtype
+            Agregar subtipo raíz
           </button>
         </div>
 
         {subtypeLoading ? (
           <div className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
-            Loading subtypes...
+            Cargando subtipos...
           </div>
         ) : subtypeProject ? (
           <ul className="space-y-2">
@@ -723,13 +723,13 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
               ))
             ) : (
               <li className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
-                No subtype breakdown defined.
+                No hay desglose de subtipos definido.
               </li>
             )}
           </ul>
         ) : (
           <div className="rounded-xl border border-dashed border-black/10 dark:border-white/10 p-6 text-sm text-zinc-500">
-            Could not load subtypes.
+            No se pudieron cargar los subtipos.
           </div>
         )}
       </Modal>

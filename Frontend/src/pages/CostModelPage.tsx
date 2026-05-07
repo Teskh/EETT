@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { Modal } from "../components/Modal";
+import { FactoryQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import {
@@ -485,7 +486,7 @@ function getSubtypeLabel(row: CostModelRow, subtypeId: number | null) {
   if (subtypeId === null) {
     return "General";
   }
-  return row.subtypes.find((entry) => entry.subtype_id === subtypeId)?.subtype_name ?? "Subtype";
+  return row.subtypes.find((entry) => entry.subtype_id === subtypeId)?.subtype_name ?? "Subtipo";
 }
 
 function buildHistoricalStockSeries(
@@ -784,7 +785,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
         }
       } catch (err) {
         if (active) {
-          setError(err instanceof ApiError ? err.message : "Could not load projects.");
+          setError(err instanceof ApiError ? err.message : "No se pudieron cargar los proyectos.");
           setProjectsBoard(null);
         }
       } finally {
@@ -818,7 +819,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       const data = await api.getCostModel(selectedProjectId);
       setView(data);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load cost model.");
+      setError(err instanceof ApiError ? err.message : "No se pudo cargar el modelo de costos.");
     } finally {
       setLoading(false);
     }
@@ -1078,7 +1079,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       if (previousView) {
         setView(previousView);
       }
-      setError(err instanceof ApiError ? err.message : "Could not save adjustment.");
+      setError(err instanceof ApiError ? err.message : "No se pudo guardar el ajuste.");
     } finally {
       setSavingKey(null);
     }
@@ -1105,7 +1106,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       if (previousView) {
         setView(previousView);
       }
-      setError(err instanceof ApiError ? err.message : "Could not remove adjustment.");
+      setError(err instanceof ApiError ? err.message : "No se pudo quitar el ajuste.");
     } finally {
       setSavingKey(null);
     }
@@ -1114,7 +1115,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   if (projectsLoading || loading) {
     return (
       <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950">
-        <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading cost model...</div>
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">Cargando modelo de costos...</div>
       </section>
     );
   }
@@ -1122,10 +1123,10 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     return (
       <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950">
         <div className="max-w-md text-center">
-          <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Cost Model</p>
-          <h2 className="text-xl font-medium text-zinc-900 dark:text-white">No projects available</h2>
+          <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Modelo de Costos</p>
+          <h2 className="text-xl font-medium text-zinc-900 dark:text-white">No hay proyectos disponibles</h2>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-            Create a project first to load cost tallies, subtype adjustments, and consumption studies.
+            Crea primero un proyecto para cargar totales de costo, ajustes por subtipo y estudios de consumo.
           </p>
         </div>
       </section>
@@ -1174,7 +1175,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       <div className="flex flex-col gap-3">
         <input
           type="text"
-          placeholder="Filter by SKU or material..."
+          placeholder="Filtrar por SKU o material..."
           value={searchTerm}
           onChange={(event) => setSearchTerm(event.target.value)}
           className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-500 focus:outline-none focus:border-accent-500/50 font-mono"
@@ -1186,20 +1187,20 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
             onChange={(event) => setViewBySubtype(event.target.checked)}
             className="accent-accent-500"
           />
-          View by subtype
+          Ver por subtipo
         </label>
         <p className="text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-          Shows or hides the General and subtype quantity columns in the table. The tallies below always stay split by bucket.
+          Muestra u oculta las columnas de <FactoryQuantityLabel /> General y por subtipo en la tabla. Los totales de abajo siempre permanecen separados por grupo.
         </p>
       </div>
 
       <div className="mt-2">
-        <SummaryMetric label="Visible materials" value={formatNumber(sortedRows.length, 0)} />
+        <SummaryMetric label="Materiales visibles" value={formatNumber(sortedRows.length, 0)} />
       </div>
 
       {subtypeColumns.length > 0 && totals ? (
         <div className="space-y-1 mt-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Tallies in view</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Totales en vista</p>
           <div className="flex flex-wrap gap-2 pb-1">
             {subtypeColumns.map((column) => {
               const key = column.id === null ? "__none__" : String(column.id);
@@ -1265,7 +1266,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                     }
                   />
                   <SortableHeader
-                    label="Unit price"
+                    label="Precio unitario"
                     align="right"
                     active={sort.key === "price"}
                     direction={sort.direction}
@@ -1278,7 +1279,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                     }
                   />
                   <SortableHeader
-                    label="Qty"
+                    label={<FactoryQuantityLabel />}
                     align="right"
                     active={sort.key === "quantity"}
                     direction={sort.direction}
@@ -1323,7 +1324,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                       ))
                     : null}
                   <SortableHeader
-                    label="Cost"
+                    label="Costo"
                     align="right"
                     active={sort.key === "cost"}
                     direction={sort.direction}
@@ -1376,7 +1377,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
 }
 
 type SummaryMetricProps = {
-  label: string;
+  label: ReactNode;
   value: string;
   emphasis?: boolean;
 };
@@ -1466,7 +1467,7 @@ function SortableHeader({
   align = "left",
   onClick,
 }: {
-  label: string;
+  label: ReactNode;
   active: boolean;
   direction: 1 | -1;
   align?: "left" | "right";
@@ -1610,7 +1611,7 @@ function ConsumptionStudyWrapper({
         });
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setFetchError(err instanceof ApiError ? err.message : "Could not load house types.");
+          setFetchError(err instanceof ApiError ? err.message : "No se pudieron cargar los tipos de vivienda.");
           setHouseTypes([]);
           onSelectedHouseTypeIdChange(null);
         }
@@ -1692,7 +1693,7 @@ function ConsumptionStudyWrapper({
         }
       } catch (err) {
         if (!cancelled) {
-          setFetchError(err instanceof ApiError ? err.message : "Could not load consumption data.");
+          setFetchError(err instanceof ApiError ? err.message : "No se pudieron cargar los datos de consumo.");
           if (!cachedDetail) {
             setDetail(null);
           }
@@ -2037,10 +2038,10 @@ function ConsumptionStudyWrapper({
           </div>
           <div className="flex-1 min-w-0 flex items-center justify-center xl:border-l xl:border-black/5 xl:dark:border-white/5 xl:pl-6 bg-zinc-50/50 dark:bg-black/10 rounded-xl p-6">
              <div className="text-center max-w-md">
-              <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-3">Consumption Study</p>
-              <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">Select a SKU to pin its graph</h2>
+              <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-3">Estudio de Consumo</p>
+              <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">Selecciona un SKU para fijar su gráfico</h2>
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                The inline graph follows the focused material and becomes the source used for historic consumption overrides.
+                El gráfico en línea sigue el material enfocado y se convierte en la fuente usada para ajustes históricos de consumo.
               </p>
             </div>
           </div>
@@ -2064,7 +2065,7 @@ function ConsumptionStudyWrapper({
         <div className="flex-1 min-w-0 flex flex-col gap-3 xl:border-l xl:border-black/5 xl:dark:border-white/5 xl:pl-6">
           <div className="min-w-0 flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Consumption Study</p>
+              <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Estudio de Consumo</p>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-zinc-200 dark:bg-white/10 px-2.5 py-1 text-[11px] font-mono text-zinc-700 dark:text-zinc-200">
                   {target.row.sku}
@@ -2087,7 +2088,7 @@ function ConsumptionStudyWrapper({
                 onChange={(event) => onSelectedHouseTypeIdChange(event.target.value ? Number(event.target.value) : null)}
                 className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
               >
-                <option value="">Select house type…</option>
+                <option value="">Seleccionar tipo de vivienda...</option>
                 {houseTypes.map((houseType) => (
                   <option key={houseType.id} value={houseType.id}>
                     {houseType.name} ({houseType.number_of_modules}m)
@@ -2101,7 +2102,7 @@ function ConsumptionStudyWrapper({
                   value={houseRange.startDate}
                   max={houseRange.endDate}
                   onChange={(event) => handleHouseRangeStartChange(event.target.value)}
-                  aria-label="Start date"
+                  aria-label="Fecha de inicio"
                   className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                 />
                 <span className="text-[11px] text-zinc-400">-</span>
@@ -2111,7 +2112,7 @@ function ConsumptionStudyWrapper({
                   min={houseRange.startDate}
                   max={latestHouseRangeValue}
                   onChange={(event) => handleHouseRangeEndChange(event.target.value)}
-                  aria-label="End date"
+                  aria-label="Fecha de término"
                   className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                 />
                 <button
@@ -2129,7 +2130,7 @@ function ConsumptionStudyWrapper({
                   onClick={() => setSelection(null)}
                   className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.04] hover:text-zinc-900 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
                 >
-                  Reset selection
+                  Reiniciar selección
                 </button>
               ) : null}
             </div>
@@ -2139,7 +2140,7 @@ function ConsumptionStudyWrapper({
             <div className="flex flex-wrap items-center gap-4 text-[11px] text-zinc-500 mb-2">
               <div className="flex items-center gap-2">
                 <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
-                <span>Material stock</span>
+                <span>Stock de material</span>
               </div>
               {comparison?.project_comparison ? (
                 <div className="flex items-center gap-2">
@@ -2149,11 +2150,11 @@ function ConsumptionStudyWrapper({
               ) : null}
               <div className="flex items-center gap-2">
                 <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
-                <span>Remaining house starts</span>
+                <span>Inicios de vivienda restantes</span>
               </div>
               {houseSummary ? (
                 <span className="font-mono text-zinc-600 dark:text-zinc-300">
-                  {formatDate(houseSummary.start.date)} - {formatDate(houseSummary.end.date)} · {formatNumber(houseSummary.housesProduced, 0)} houses · {formatNumber(houseSummary.materialConsumed)} material
+                  {formatDate(houseSummary.start.date)} - {formatDate(houseSummary.end.date)} · {formatNumber(houseSummary.housesProduced, 0)} viviendas · {formatNumber(houseSummary.materialConsumed)} material
                 </span>
               ) : null}
             </div>
@@ -2163,7 +2164,7 @@ function ConsumptionStudyWrapper({
                 {fetchError}
               </div>
             ) : !selectedHouseTypeId ? (
-              <p className="text-xs text-zinc-500">Select a house type to load the project comparison.</p>
+              <p className="text-xs text-zinc-500">Selecciona un tipo de vivienda para cargar la comparación del proyecto.</p>
             ) : isBlockingLoad || loading ? (
               <div className="relative min-h-[220px]">
                 <TrendChartSkeleton dualSeries />
@@ -2469,9 +2470,9 @@ function ConsumptionStudyWrapper({
               </text>
               </svg>
             ) : !selectedHouseTypeId ? (
-              <p className="text-xs text-zinc-500">Select a house type to load the project comparison.</p>
+              <p className="text-xs text-zinc-500">Selecciona un tipo de vivienda para cargar la comparación del proyecto.</p>
             ) : comparison ? (
-              <div className="text-sm text-zinc-500">No house-start data available for this range and house type.</div>
+              <div className="text-sm text-zinc-500">No hay datos de inicios de vivienda para este rango y tipo de vivienda.</div>
             ) : null}
           </div>
         </div>
@@ -2484,28 +2485,28 @@ function ConsumptionStudyWrapper({
         
         <aside className="w-[320px] lg:w-[380px] shrink-0 p-4 md:p-6 overflow-y-auto border-l border-black/5 dark:border-white/5 bg-zinc-50/10 dark:bg-black/10 flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3">
-            <SummaryMetric label="Observed / house" value={formatNumber(actualConsumptionPerHouse)} emphasis />
+            <SummaryMetric label="Observado / vivienda" value={formatNumber(actualConsumptionPerHouse)} emphasis />
             <SummaryMetric
-              label={selectedHouseType ? `Defined / ${selectedHouseType.name}` : "Defined / house"}
+              label={selectedHouseType ? `Definido / ${selectedHouseType.name}` : "Definido / vivienda"}
               value={formatNumber(definedQuantityPerHouse)}
             />
-            <SummaryMetric label="Delta / house" value={formatNumber(quantityDelta)} />
-            <SummaryMetric label="Cost delta" value={formatCurrency(costDeltaPerHouse)} />
+            <SummaryMetric label="Delta / vivienda" value={formatNumber(quantityDelta)} />
+            <SummaryMetric label="Delta de costo" value={formatCurrency(costDeltaPerHouse)} />
           </div>
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.04] px-3 py-2.5 text-xs text-zinc-500 dark:text-zinc-400">
-            {selectionBounds ? "Using the selected graph range." : "Using the full visible range."}
+            {selectionBounds ? "Usando el rango seleccionado del gráfico." : "Usando el rango visible completo."}
             {deltaPercent !== null ? (
-              <div className="mt-1 font-mono text-zinc-700 dark:text-zinc-200">{formatPercent(deltaPercent)} vs model</div>
+              <div className="mt-1 font-mono text-zinc-700 dark:text-zinc-200">{formatPercent(deltaPercent)} vs modelo</div>
             ) : null}
             {selectedHouseType ? (
               <div className="mt-1 font-mono text-zinc-600 dark:text-zinc-300">
-                House type: {selectedHouseType.name}
+                Tipo de vivienda: {selectedHouseType.name}
               </div>
             ) : null}
           </div>
           <div className="flex flex-col gap-2 mt-2">
             <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-              Quantity to save
+              <FactoryQuantityLabel /> a guardar
               <input
                 type="text"
                 inputMode="decimal"
@@ -2522,21 +2523,21 @@ function ConsumptionStudyWrapper({
               className="px-3 py-1.5 rounded bg-accent-500/20 border border-accent-500/30 text-xs font-semibold text-accent-700 dark:text-accent-300 hover:bg-accent-500/30 disabled:opacity-50"
               onClick={() => void handleSaveFromRange()}
               disabled={disabled || !houseSummary || houseSummary.averageConsumptionPerHouse === null}
-              title="Save the per-house consumption computed from the selected range"
+              title="Guardar el consumo por vivienda calculado desde el rango seleccionado"
             >
-              <i className="ph-bold ph-check" /> Use selected consumption
+              <i className="ph-bold ph-check" /> Usar consumo seleccionado
             </button>
             <button
               type="button"
               className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold text-zinc-800 dark:text-zinc-100 hover:bg-black/10 dark:hover:bg-white/10 disabled:opacity-50"
               onClick={() => void handleSaveManual()}
               disabled={disabled || parseNumberInput(manualValue) === null}
-              title="Save the value entered above"
+              title="Guardar el valor ingresado arriba"
             >
-              Save manual value
+              Guardar valor manual
             </button>
             <span className="text-[10px] text-zinc-500 font-mono mt-1 text-center">
-              Saved quantity: {formatNumber(currentQuantity)} · Unit price: {formatCurrency(target.row.price)}
+              <FactoryQuantityLabel /> guardada: {formatNumber(currentQuantity)} · Precio unitario: {formatCurrency(target.row.price)}
             </span>
           </div>
         </aside>
@@ -2624,8 +2625,8 @@ function CostModelRowView({
               onOpenDetails();
             }}
             className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-accent-300"
-            title={`View ${row.material_name} details`}
-            aria-label={`View ${row.material_name} details`}
+            title={`Ver detalles de ${row.material_name}`}
+            aria-label={`Ver detalles de ${row.material_name}`}
           >
             <i className="ph-bold ph-info text-[11px]" />
           </button>
@@ -2636,7 +2637,7 @@ function CostModelRowView({
           ) : null}
           {rowHasOverrides ? (
             <span className="rounded-full border border-amber-300/70 bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-              override
+              ajuste
             </span>
           ) : null}
         </div>
@@ -2659,8 +2660,8 @@ function CostModelRowView({
         className={`px-4 py-3 text-right font-mono text-[11px] whitespace-nowrap ${usageDeltaClass}`}
         title={
           usageMetric
-            ? `Usage: ${formatNumber(usageMetric.material_per_house)} / house; expected: ${formatNumber(usageMetric.predicted_quantity_per_house)} / house`
-            : "No usage comparison available for this material and date range"
+            ? `Uso: ${formatNumber(usageMetric.material_per_house)} / vivienda; esperado: ${formatNumber(usageMetric.predicted_quantity_per_house)} / vivienda`
+            : "No hay comparación de uso disponible para este material y rango de fechas"
         }
       >
         {formatPercent(usageDelta)}
@@ -2776,24 +2777,24 @@ function AdjustableQuantityCell({
           }
           title={
             isOverridden
-              ? `Adjusted from ${formatNumber(estimated)} to ${formatNumber(effective)}`
-              : "Estimated from BOM"
+              ? `Ajustado de ${formatNumber(estimated)} a ${formatNumber(effective)}`
+              : "Estimado desde BOM"
           }
         >
           {formatNumber(effective)}
         </button>
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={`Edit Quantity: ${row.sku}`}>
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={<>Editar <FactoryQuantityLabel />: {row.sku}</>}>
         <div className="p-4 flex flex-col gap-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             {row.material_name}
-            {` (Bucket: ${getSubtypeLabel(row, subtypeId)})`}
+            {` (Grupo: ${getSubtypeLabel(row, subtypeId)})`}
           </p>
 
           <div className="flex flex-col gap-2">
             <label className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-              Quantity
+              <FactoryQuantityLabel />
             </label>
             <input
               autoFocus
@@ -2824,7 +2825,7 @@ function AdjustableQuantityCell({
                 }}
                 disabled={saving}
               >
-                Revert to {formatNumber(estimated)}
+                Revertir a {formatNumber(estimated)}
               </button>
             ) : (
               <div />
@@ -2836,7 +2837,7 @@ function AdjustableQuantityCell({
                 onClick={() => setModalOpen(false)}
                 disabled={saving}
               >
-                Cancel
+                Cancelar
               </button>
               <button
                 type="button"
@@ -2844,7 +2845,7 @@ function AdjustableQuantityCell({
                 onClick={() => void handleCommit()}
                 disabled={saving}
               >
-                Save
+                Guardar
               </button>
             </div>
           </div>
@@ -2881,19 +2882,19 @@ function DetailsModal({ row, onClose }: { row: CostModelRow | null; onClose: () 
     <Modal
       open={row !== null}
       title={row ? `${row.sku} — ${row.material_name}` : ""}
-      kicker="Per-instance breakdown"
+      kicker="Desglose por instancia"
       onClose={onClose}
       panelClassName="max-w-3xl"
     >
       {row ? (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-3 gap-4 text-xs">
-            <Stat label="Unit" value={row.unit || "—"} />
-            <Stat label="Unit price" value={formatCurrency(row.price)} />
-            <Stat label="Estimated sum" value={formatNumber(row.estimated_total_quantity)} />
+            <Stat label="Unidad" value={row.unit || "—"} />
+            <Stat label="Precio unitario" value={formatCurrency(row.price)} />
+            <Stat label={<>Suma <FactoryQuantityLabel /> estimada</>} value={formatNumber(row.estimated_total_quantity)} />
           </div>
           {grouped.length === 0 ? (
-            <p className="text-xs text-zinc-500">No instance-level data available for this material.</p>
+            <p className="text-xs text-zinc-500">No hay datos por instancia disponibles para este material.</p>
           ) : (
             grouped.map((group) => (
               <section
@@ -2903,7 +2904,7 @@ function DetailsModal({ row, onClose }: { row: CostModelRow | null; onClose: () 
                 <header className="px-4 py-2 bg-zinc-50 dark:bg-white/5 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
                   <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{group.subtypeName}</span>
                   <span className="text-[10px] font-mono text-zinc-500">
-                    {group.instances.length} instance{group.instances.length === 1 ? "" : "s"}
+                    {group.instances.length} instancia{group.instances.length === 1 ? "" : "s"}
                   </span>
                 </header>
                 <ul className="divide-y divide-black/5 dark:divide-white/5">
@@ -2932,7 +2933,7 @@ function DetailsModal({ row, onClose }: { row: CostModelRow | null; onClose: () 
                         }
                       >
                         {instance.quantity_state === "blank"
-                          ? "blank"
+                          ? "en blanco"
                           : instance.quantity_state === "zero"
                             ? "0"
                             : formatNumber(instance.quantity)}
@@ -2949,7 +2950,7 @@ function DetailsModal({ row, onClose }: { row: CostModelRow | null; onClose: () 
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value }: { label: ReactNode; value: string }) {
   return (
     <div className="rounded-lg border border-black/10 dark:border-white/10 px-3 py-2">
       <p className="text-[10px] uppercase tracking-widest font-semibold text-zinc-500">{label}</p>

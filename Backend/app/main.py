@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from datetime import date
 import mimetypes
@@ -8,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from sqlalchemy import select
-from fastapi import Body, Depends, FastAPI, Form, Header, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,11 +20,19 @@ from app.api_models import (
     ActivityGroupModel,
     ApprovalModel,
     AttributeValueInputModel,
+    BackupCreateRequest,
+    BackupCreateResponse,
+    BackupRecordModel,
+    BackupRestoreRequest,
+    BackupRestoreResponse,
+    BackupSettingsModel,
+    BackupSettingsUpdateRequest,
     CatalogCategoryCreateRequest,
     CatalogComponentMutationResultModel,
     CatalogCategoryLinksUpdateRequest,
     CatalogComponentAttributesReplaceRequest,
     CatalogComponentCreateRequest,
+    CatalogComponentMediaUpdateRequest,
     CatalogComponentMaterialsReplaceRequest,
     CatalogComponentUpdateRequest,
     CatalogMaterialSearchResponse,
@@ -58,6 +68,8 @@ from app.api_models import (
     MaterialStudyGroupPayloadModel,
     MaterialOccurrenceUpdateRequest,
     MaterialModeResponse,
+    MediaAssetListResponse,
+    MediaAssetModel,
     ManagedUserModel,
     MutationResultModel,
     NotificationModel,
@@ -86,6 +98,7 @@ from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
 from app.models import Project, ProjectExportJob
 from app.seed import seed_demo_data_if_empty
+from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
     authenticate_user,
@@ -111,6 +124,7 @@ from app.services.catalog import (
     replace_component_material_rules,
     replace_component_attributes,
     search_material_candidates,
+    set_component_primary_media,
     update_attribute_definition,
     update_component,
 )
@@ -152,6 +166,13 @@ from app.services.production_dashboard import (
     get_material_dashboard_house_types,
 )
 from app.services.exports import execute_project_export, get_project_export_job_for_artifact, get_project_export_jobs, request_project_export, resolve_artifact_path
+from app.services.media import (
+    create_media_asset_from_upload,
+    get_media_asset,
+    list_media_assets,
+    resolve_media_storage_path,
+    serialize_media_asset,
+)
 from app.services.projects import (
     apply_catalog_value_to_instance_field,
     apply_instance_value_to_catalog_field,
@@ -183,6 +204,10 @@ from app.services.public_api import list_project_public_skus, list_public_projec
 from app.services.user_admin import create_user, delete_user, list_users, serialize_role_catalog, serialize_user, update_user
 from app.ui import render_catalog_page, render_home_page, render_project_detail_page, render_projects_page
 
+
+logger = logging.getLogger(__name__)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     engine = create_engine_for_url(
@@ -196,6 +221,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expire_on_commit=False,
     )
 
+    async def _run_backup_scheduler() -> None:
+        poll_seconds = max(settings.backup_scheduler_poll_seconds, 10)
+        while True:
+            try:
+                settings_data = backup_service.load_backup_settings(settings)
+                if backup_service.is_backup_due(settings_data):
+                    await asyncio.to_thread(backup_service.create_backup, settings, "scheduled")
+            except Exception as exc:  # pragma: no cover - defensive against scheduler errors
+                logger.warning("Backup scheduler error: %s", exc)
+            await asyncio.sleep(poll_seconds)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if settings.require_schema and not schema_is_ready(engine):
@@ -203,9 +239,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Database schema is missing. Run `alembic upgrade head` against the configured PostgreSQL database before starting the app."
             )
         settings.export_output_dir.mkdir(parents=True, exist_ok=True)
+        settings.media_gallery_dir.mkdir(parents=True, exist_ok=True)
+        settings.backup_dir.mkdir(parents=True, exist_ok=True)
         if settings.seed_demo_data:
             seed_demo_data_if_empty(session_factory)
-        yield
+        backup_task: asyncio.Task | None = None
+        if settings.backup_scheduler_enabled:
+            backup_task = asyncio.create_task(_run_backup_scheduler())
+            app.state.backup_task = backup_task
+        try:
+            yield
+        finally:
+            if backup_task is not None:
+                backup_task.cancel()
+                try:
+                    await backup_task
+                except asyncio.CancelledError:
+                    pass
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
@@ -363,6 +413,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             filename=artifact_path.name,
             content_disposition_type="inline" if is_pdf else "attachment",
         )
+
+    @app.get("/api/v1/media/assets", response_model=MediaAssetListResponse)
+    async def list_media_assets_v1(
+        kind: str = "image",
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        return {"assets": [serialize_media_asset(asset) for asset in list_media_assets(session, kind=kind)]}
+
+    @app.post("/api/v1/media/assets", response_model=MediaAssetModel)
+    async def upload_media_asset_v1(
+        file: UploadFile = File(...),
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        try:
+            asset = create_media_asset_from_upload(
+                session,
+                settings=app.state.settings,
+                file=file.file,
+                original_filename=file.filename,
+                content_type=file.content_type,
+                actor_user=current_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return serialize_media_asset(asset)
+
+    @app.get("/api/v1/media/assets/{asset_id}/content", response_class=FileResponse)
+    async def download_media_asset_v1(
+        asset_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        asset = get_media_asset(session, asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        try:
+            asset_path = resolve_media_storage_path(settings=app.state.settings, storage_key=asset.storage_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Media asset not found") from exc
+        if not asset_path.is_file():
+            raise HTTPException(status_code=404, detail="Media asset file not found")
+        return FileResponse(asset_path, media_type=asset.content_type, filename=asset.original_filename or asset_path.name)
 
     @app.get("/catalog", response_class=HTMLResponse)
     async def catalog(
@@ -606,6 +700,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def user_editor_page() -> str:
         return serve_frontend_app(render_home_page())
 
+    @app.get("/settings", response_class=HTMLResponse)
+    async def settings_page() -> str:
+        return serve_frontend_app(render_home_page())
+
     @app.get("/history", response_class=HTMLResponse)
     async def history_page() -> str:
         return serve_frontend_app(render_home_page())
@@ -809,6 +907,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="User not found")
         return {"ok": True, "deleted_id": user_id}
 
+    @app.get("/api/v1/backups", response_model=list[BackupRecordModel])
+    async def list_backups_api(request: Request, current_user=Depends(get_actor_user)):
+        require_user_admin(current_user)
+        return backup_service.list_backups(request.app.state.settings)
+
+    @app.post("/api/v1/backups", response_model=BackupCreateResponse, status_code=201)
+    async def create_backup_api(
+        payload: BackupCreateRequest,
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            backup, backup_settings, pruned = backup_service.create_backup(request.app.state.settings, payload.label)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"backup": backup, "settings": backup_settings, "pruned": pruned}
+
+    @app.get("/api/v1/backups/settings", response_model=BackupSettingsModel)
+    async def get_backup_settings_api(request: Request, current_user=Depends(get_actor_user)):
+        require_user_admin(current_user)
+        return backup_service.load_backup_settings(request.app.state.settings)
+
+    @app.put("/api/v1/backups/settings", response_model=BackupSettingsModel)
+    async def update_backup_settings_api(
+        payload: BackupSettingsUpdateRequest,
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            return backup_service.update_backup_settings(
+                request.app.state.settings,
+                payload.model_dump(exclude_unset=True),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/backups/restore", response_model=BackupRestoreResponse)
+    async def restore_backup_api(
+        payload: BackupRestoreRequest,
+        request: Request,
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        try:
+            result = backup_service.restore_backup(
+                request.app.state.settings,
+                payload.filename,
+                force_disconnect=payload.force_disconnect,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return result
+
     @app.get("/api/v1/catalog", response_model=CatalogResponse)
     async def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_catalog_edit(current_user)
@@ -873,6 +1030,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             installation=payload.installation,
             unit_type=payload.unit_type,
             component_type=payload.component_type,
+        )
+        if component is None:
+            raise HTTPException(status_code=404, detail="Catalog component not found")
+        return {
+            "ok": True,
+            "category_id": component.category_id,
+            "component_id": component.id,
+            "component": get_catalog_component_data(session, component.id),
+        }
+
+    @app.put("/api/v1/catalog/components/{component_id}/media", response_model=CatalogComponentMutationResultModel)
+    async def update_catalog_component_media_v1(
+        component_id: int,
+        payload: CatalogComponentMediaUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_catalog_edit(current_user)
+        if payload.media_asset_id is not None and get_media_asset(session, payload.media_asset_id) is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        component = set_component_primary_media(
+            session,
+            component_id=component_id,
+            media_asset_id=payload.media_asset_id,
+            caption=payload.caption,
         )
         if component is None:
             raise HTTPException(status_code=404, detail="Catalog component not found")
@@ -1134,6 +1316,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
+        if payload.media_asset_id is not None and get_media_asset(session, payload.media_asset_id) is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
         try:
             instance = create_project_instance(
                 session,
@@ -1148,6 +1332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 unit_amount=payload.unit_amount,
                 attribute_values=parse_attribute_values_rows(payload.attribute_values),
                 selected_material_rule_ids=payload.selected_material_rule_ids,
+                media_asset_id=payload.media_asset_id,
                 actor_user=current_user,
                 mutation_batch_id=mutation_batch_id,
             )
@@ -1174,6 +1359,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
+        if payload.media_asset_id is not None and get_media_asset(session, payload.media_asset_id) is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
         instance = update_project_instance(
             session,
             project=project,
@@ -1185,6 +1372,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             installation=payload.installation,
             unit_amount=payload.unit_amount,
             attribute_values=parse_attribute_values_rows(payload.attribute_values),
+            media_asset_id=payload.media_asset_id,
+            update_media=payload.clear_media or payload.media_asset_id is not None,
             actor_user=current_user,
             mutation_batch_id=mutation_batch_id,
         )
@@ -1942,6 +2131,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/materials/search", response_model=CatalogMaterialSearchResponse)
+    async def search_material_dashboard_materials_v1(
+        request: Request,
+        q: str,
+        limit: int = 10,
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        capped_limit = max(1, min(limit, 20))
+        settings: Settings = request.app.state.settings
+        return {
+            "results": search_erp_material_candidates(q, settings, limit=capped_limit),
+            "live_erp_available": erp_search_available(settings),
+        }
 
     @app.get("/api/v1/dashboard/materials/cecos", response_model=MaterialDashboardCecoResponse)
     def material_dashboard_cecos_v1(

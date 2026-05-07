@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     seed_demo_data: bool = True
     require_schema: bool = True
     export_output_dir: Path = Field(default_factory=lambda: REPO_ROOT / "output" / "exports")
+    media_gallery_dir: Path = Field(default_factory=lambda: REPO_ROOT / "output" / "media_gallery")
+    backup_dir: Path = Field(default_factory=lambda: REPO_ROOT / "output" / "backups")
+    backup_admin_db: str = "postgres"
+    pg_dump_path: str = "pg_dump"
+    pg_restore_path: str = "pg_restore"
+    backup_scheduler_enabled: bool = True
+    backup_scheduler_poll_seconds: int = 60
     session_secret: str = "spec-sheets-internal-session-secret"
     session_cookie_name: str = "spec_sheets_session"
     allow_trusted_user_header: bool = False

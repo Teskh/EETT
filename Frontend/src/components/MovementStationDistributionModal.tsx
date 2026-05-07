@@ -1,4 +1,5 @@
 import { Modal } from "./Modal";
+import { FactoryQuantityLabel } from "./QuantityLabels";
 
 type StationDistributionMovement = {
   quantity: number;
@@ -99,7 +100,7 @@ export function MovementStationDistributionModal({
   const unassignedEntry = entries.find((entry) => entry.isUnassigned) || null;
   const radius = 78;
   const circumference = 2 * Math.PI * radius;
-  const resolvedUnitLabel = unitLabel || "units";
+  const resolvedUnitLabel = unitLabel || "unidades";
   let strokeOffset = 0;
 
   return (
@@ -179,7 +180,7 @@ export function MovementStationDistributionModal({
           <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-black/5 bg-zinc-100/70 px-4 py-3 text-[10px] font-bold uppercase tracking-[0.12em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.04]">
             <div>Estación</div>
             <div className="text-right">Participación</div>
-            <div className="text-right">Cantidad</div>
+            <div className="text-right"><FactoryQuantityLabel /></div>
           </div>
 
           <div className="max-h-[440px] divide-y divide-black/5 overflow-y-auto dark:divide-white/5">

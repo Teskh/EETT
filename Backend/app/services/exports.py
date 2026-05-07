@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 import re
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -19,6 +21,13 @@ from app.services.export_projection import (
 )
 from app.services.projects import get_project_view_data
 from app.services.projects import get_project_with_details
+
+
+class ExportArtifact(NamedTuple):
+    content: bytes
+    filename: str
+    media_type: str
+    inline: bool
 
 
 def get_project_export_jobs(session: Session, project_id: int) -> list[dict]:
@@ -86,41 +95,35 @@ def execute_project_export(
                 artifact_uri = _build_commercial_pdf_export(
                     session,
                     project_id=job.project_id,
-                    output_dir=settings.export_output_dir,
                     job_id=job.id,
                     static_dir=BACKEND_DIR / "app" / "static",
+                    media_gallery_dir=settings.media_gallery_dir,
                 )
             case ExportKind.MATERIALS_WORKBOOK:
                 artifact_uri = _build_materials_workbook_export(
                     session,
                     project_id=job.project_id,
-                    output_dir=settings.export_output_dir,
                     job_id=job.id,
                 )
             case ExportKind.COST_MODEL_WORKBOOK:
                 artifact_uri = _build_cost_model_workbook_export(
                     session,
                     project_id=job.project_id,
-                    output_dir=settings.export_output_dir,
                     job_id=job.id,
-                    settings=settings,
                 )
             case ExportKind.FULL_TECHNICAL_PDF:
                 artifact_uri = _build_full_technical_pdf_export(
                     session,
                     project_id=job.project_id,
-                    output_dir=settings.export_output_dir,
                     job_id=job.id,
                     static_dir=BACKEND_DIR / "app" / "static",
+                    media_gallery_dir=settings.media_gallery_dir,
                 )
             case ExportKind.DETAILED_MATERIAL_PDF:
                 artifact_uri = _build_detailed_material_pdf_export(
                     session,
                     project_id=job.project_id,
-                    output_dir=settings.export_output_dir,
                     job_id=job.id,
-                    settings=settings,
-                    show_prices=_should_show_prices(job.requested_by),
                 )
             case _:
                 raise NotImplementedError(f"Export kind '{job.export_kind.value}' is not implemented yet")
@@ -210,6 +213,7 @@ def _build_commercial_pdf_export(
     output_dir: Path,
     job_id: int,
     static_dir: Path,
+    media_gallery_dir: Path,
 ) -> str:
     from app.services.export_pdfs import build_commercial_pdf
 
@@ -218,7 +222,7 @@ def _build_commercial_pdf_export(
     if project is None or project_data is None:
         raise ValueError("Project not found")
 
-    commercial_sections = build_commercial_export_sections(project, project_data, static_dir=static_dir)
+    commercial_sections = build_commercial_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
     artifact_name = f"{job_id}-{_slugify(project_data['project']['name'])}-commercial.pdf"
     artifact_path = output_dir / artifact_name
     build_commercial_pdf({"project": project_data["project"], "sections": commercial_sections}, artifact_path)
@@ -232,6 +236,7 @@ def _build_full_technical_pdf_export(
     output_dir: Path,
     job_id: int,
     static_dir: Path,
+    media_gallery_dir: Path,
 ) -> str:
     from app.services.export_pdfs import build_full_technical_pdf
 
@@ -240,7 +245,7 @@ def _build_full_technical_pdf_export(
     if project is None or project_data is None:
         raise ValueError("Project not found")
 
-    sections = build_full_technical_export_sections(project, project_data, static_dir=static_dir)
+    sections = build_full_technical_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
     artifact_name = f"{job_id}-{_slugify(project_data['project']['name'])}-full-technical.pdf"
     artifact_path = output_dir / artifact_name
     build_full_technical_pdf({"project": project_data["project"], "sections": sections}, artifact_path)
@@ -412,7 +417,12 @@ def _load_cost_model_price_map(
     settings: Settings,
     project_data: dict[str, object],
 ) -> dict[str, float | None]:
-    from app.services.erp import _get_average_prices_for_products_batch, _open_connection, erp_search_available
+    from app.services.erp import (
+        _get_average_prices_for_products_batch,
+        _get_purchase_order_lines_for_products_batch,
+        _open_connection,
+        erp_search_available,
+    )
 
     unique_skus: list[str] = []
     seen_skus: set[str] = set()
@@ -435,7 +445,10 @@ def _load_cost_model_price_map(
         return {}
 
     prices = {
-        cache.sku.strip().upper(): cache.average_price
+        cache.sku.strip().upper(): _select_cost_model_price(
+            cache.average_price,
+            cache.last_purchase_price,
+        )
         for cache in session.scalars(select(ErpMaterialCache).order_by(ErpMaterialCache.sku)).all()
         if cache.sku
     }
@@ -451,13 +464,44 @@ def _load_cost_model_price_map(
                 unique_skus,
                 datetime.utcnow().strftime("%d/%m/%Y"),
             )
+            for sku, value in live_prices.items():
+                if _is_positive_price(value):
+                    price_map[sku] = value
+
+            missing_price_skus = [sku for sku in unique_skus if not _is_positive_price(price_map.get(sku))]
+            if missing_price_skus:
+                purchase_order_lines = _get_purchase_order_lines_for_products_batch(
+                    connection.cursor(),
+                    missing_price_skus,
+                )
+                for sku, lines in purchase_order_lines.items():
+                    purchase_order_price = _select_purchase_order_price(lines)
+                    if purchase_order_price is not None:
+                        price_map[sku] = purchase_order_price
     except Exception:
         return price_map
 
-    for sku, value in live_prices.items():
-        if value is not None:
-            price_map[sku] = value
     return price_map
+
+
+def _select_cost_model_price(average_price: float | None, last_purchase_price: float | None) -> float | None:
+    if _is_positive_price(average_price):
+        return average_price
+    if _is_positive_price(last_purchase_price):
+        return last_purchase_price
+    return average_price if average_price is not None else last_purchase_price
+
+
+def _is_positive_price(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _select_purchase_order_price(lines: list[dict[str, Any]]) -> float | None:
+    for line in lines:
+        unit_price = line.get("unit_price")
+        if _is_positive_price(unit_price):
+            return unit_price
+    return None
 
 
 def _should_show_prices(user: User | None) -> bool:

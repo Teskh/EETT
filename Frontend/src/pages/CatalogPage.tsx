@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { CatalogAttributeEditor } from "../components/CatalogAttributeEditor";
 import { CatalogMaterialRuleEditor } from "../components/CatalogMaterialRuleEditor";
+import { MediaPicker } from "../components/MediaPicker";
+import { FactoryQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import type {
   CatalogAttribute,
@@ -11,6 +13,7 @@ import type {
   CatalogTreeNode,
   CreateCategoryRequest,
   CreateComponentRequest,
+  MediaAsset,
   UpdateComponentRequest,
 } from "../lib/types";
 
@@ -45,7 +48,7 @@ const initialComponentForm: CreateComponentRequest = {
 
 function formatCondition(rule: CatalogMaterialRule) {
   if (!rule.conditions.length) {
-    return <span className="text-zinc-500 text-xs italic">Always applies</span>;
+    return <span className="text-zinc-500 text-xs italic">Siempre aplica</span>;
   }
   return rule.conditions.map((group) => {
     const clauses = group.clauses
@@ -54,7 +57,7 @@ function formatCondition(rule: CatalogMaterialRule) {
           .filter(Boolean)
           .join(" "),
       )
-      .join(" AND ");
+      .join(" Y ");
     return (
       <span key={`${rule.sku}-${group.group}`} className="px-1.5 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
         {group.group}: {clauses}
@@ -108,7 +111,7 @@ function CatalogTree({
                     <i className={`${active ? "ph-fill ph-folder-open text-accent-600 dark:text-accent-400" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} />
                     {node.name}
                   </span>
-                  <span className="font-mono text-[10px] text-zinc-500">{node.component_count} items</span>
+                  <span className="font-mono text-[10px] text-zinc-500">{node.component_count} ítems</span>
                 </button>
               ) : (
                 <button
@@ -181,7 +184,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
   }
 
   async function handleDeleteComponent() {
-    const confirmed = window.confirm("Delete this catalog component?");
+    const confirmed = window.confirm("¿Eliminar este componente del catálogo?");
     if (!confirmed) {
       return;
     }
@@ -218,6 +221,18 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
     }
   }
 
+  async function handleMediaChange(asset: MediaAsset | null) {
+    setSaving(true);
+    try {
+      const result = await api.updateComponentMedia(component.id, asset?.id ?? null);
+      if (result.component) {
+        onComponentSaved(result.component);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="border-b border-black/10 dark:border-white/10 last:border-0">
       <div 
@@ -245,30 +260,30 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                 : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10"
             }`}
           >
-            {component.type === "accessory" ? "ACCESSORY" : "ITEM"}
+            {component.type === "accessory" ? "ACCESORIO" : "ÍTEM"}
           </span>
           <div
             className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 group-hover:bg-zinc-100 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
           >
-            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Details
+            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Detalles
           </div>
         </div>
       </div>
       {expanded ? (
         <div className="border-t border-black/5 dark:border-white/5 bg-white dark:bg-black/40 p-4">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">{component.description || "No description provided."}</p>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">{component.description || "Sin descripción."}</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div className="flex flex-col gap-4">
               <form className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
                 <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-                  <i className="ph-bold ph-pencil-simple text-zinc-500" /> Edit Component
+                  <i className="ph-bold ph-pencil-simple text-zinc-500" /> Editar Componente
                 </h6>
                 <div className="flex gap-2">
                   <input
                     value={form.name}
                     onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
                     required
-                    placeholder="Name"
+                    placeholder="Nombre"
                     className="w-2/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                   <input
@@ -284,13 +299,13 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                     onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))}
                     className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   >
-                    <option value="item">Item</option>
-                    <option value="accessory">Accessory</option>
+                    <option value="item">Ítem</option>
+                    <option value="accessory">Accesorio</option>
                   </select>
                   <input
                     value={form.unit_type || ""}
                     onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))}
-                    placeholder="Unit type"
+                    placeholder="Tipo de unidad"
                     className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                   />
                 </div>
@@ -298,34 +313,41 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                   value={form.description || ""}
                   onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                   rows={2}
-                  placeholder="Description"
+                  placeholder="Descripción"
                   className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
                   value={form.short_description || ""}
                   onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))}
                   rows={2}
-                  placeholder="Short description"
+                  placeholder="Descripción corta"
                   className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
                   value={form.installation || ""}
                   onChange={(event) => setForm((current) => ({ ...current, installation: event.target.value }))}
                   rows={2}
-                  placeholder="Installation"
+                  placeholder="Instalación"
                   className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <div className="flex justify-between items-center mt-2">
                   <button className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
-                    {saving ? "Saving..." : "Save changes"}
+                    {saving ? "Guardando..." : "Guardar cambios"}
                   </button>
                 </div>
               </form>
 
+              <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3">
+                <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
+                  <i className="ph-bold ph-image text-zinc-500" /> Imagen de Catálogo
+                </h6>
+                <MediaPicker value={component.media[0] || null} onChange={(asset) => void handleMediaChange(asset)} compact />
+              </div>
+
               <div className="flex items-center justify-between bg-red-100 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg p-3">
-                <span className="text-[10px] text-red-700 dark:text-red-400 font-mono">Deletion blocked if in use.</span>
+                <span className="text-[10px] text-red-700 dark:text-red-400 font-mono">La eliminación se bloquea si está en uso.</span>
                 <button className="px-2 py-1 bg-red-200 dark:bg-red-500/20 hover:bg-red-300 dark:bg-red-500/30 text-red-700 dark:text-red-300 rounded text-xs font-semibold transition-colors flex items-center gap-1" type="button" onClick={() => void handleDeleteComponent()}>
-                  <i className="ph-bold ph-trash" /> Delete
+                  <i className="ph-bold ph-trash" /> Eliminar
                 </button>
               </div>
             </div>
@@ -334,7 +356,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
               <div className="space-y-5">
                 <div>
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <i className="ph-bold ph-list-dashes text-zinc-600" /> Base Attributes
+                    <i className="ph-bold ph-list-dashes text-zinc-600" /> Atributos Base
                   </h6>
                   <CatalogAttributeEditor
                     initialAttributes={component.base_attributes}
@@ -344,7 +366,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                 </div>
                 <div>
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Attributes
+                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Atributos de Uso
                   </h6>
                   <CatalogAttributeEditor
                     initialAttributes={component.usage_attributes}
@@ -359,7 +381,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
           <div>
             <div className="mb-3 flex items-center justify-between gap-3">
               <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                <i className="ph-bold ph-boxes text-zinc-600" /> Material Rules
+                <i className="ph-bold ph-boxes text-zinc-600" /> Reglas de Materiales
               </h6>
               <button
                 type="button"
@@ -367,31 +389,30 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                 className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 rounded text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2"
               >
                 <i className="ph-bold ph-sliders-horizontal" />
-                Manage materials
+                Administrar materiales
               </button>
             </div>
             <table className="w-full text-left border-collapse text-sm border border-black/10 dark:border-white/10 rounded overflow-hidden">
               <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
                 <tr>
                   <th className="px-3 py-2 text-zinc-500 font-medium w-1/3">Material</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium w-1/4">SKU / Unit</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium text-right w-1/4">Qty Per Unit</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium text-right">Conditions</th>
+                  <th className="px-3 py-2 text-zinc-500 font-medium w-1/4">SKU / Unidad</th>
+                  <th className="px-3 py-2 text-zinc-500 font-medium text-right w-1/4"><FactoryQuantityLabel /> por unidad</th>
+                  <th className="px-3 py-2 text-zinc-500 font-medium text-right">Condiciones</th>
                 </tr>
               </thead>
               <tbody className="bg-zinc-50 dark:bg-white/5 divide-y divide-white/5">
                 {component.material_rules.length ? (
                   component.material_rules.map((rule) => (
                     <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">
-                      <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm flex flex-col gap-1">
+                      <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm">
                         {rule.material_name}
-                        <span className="text-[10px] text-zinc-500 font-mono">{rule.notes || ""}</span>
                       </td>
                       <td className="px-3 py-3 text-zinc-500 font-mono text-xs">
                         {rule.sku} <br /> ({rule.unit || "-"})
                       </td>
                       <td className="px-3 py-3 text-right font-mono text-sm text-accent-700 dark:text-accent-400">
-                        {rule.unit_qty_per_unit ?? "n/a"}
+                        {rule.unit_qty_per_unit ?? "n/d"}
                       </td>
                       <td className="px-3 py-3 text-right">
                         <div className="flex flex-wrap justify-end gap-1">{formatCondition(rule)}</div>
@@ -401,7 +422,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                 ) : (
                   <tr>
                     <td colSpan={4} className="py-4 text-center text-zinc-500 font-mono text-xs">
-                      No material rules defined.
+                      No hay reglas de materiales definidas.
                     </td>
                   </tr>
                 )}
@@ -525,7 +546,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
       const next = await api.getCatalog(categoryId);
       setData(next);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not load catalog.";
+      const message = err instanceof ApiError ? err.message : "No se pudo cargar el catálogo.";
       setError(message);
     } finally {
       setLoading(false);
@@ -563,7 +584,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
         await loadCatalog();
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create category.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear la categoría.";
       setError(message);
     } finally {
       setSavingCategory(false);
@@ -587,7 +608,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
         setData((current) => (current ? upsertSelectedComponent(current, result.component as CatalogComponent) : current));
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create component.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear el componente.";
       setError(message);
     } finally {
       setSavingComponent(false);
@@ -604,7 +625,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
       await api.updateCategoryLinks(data.selected.id, selectedLinks);
       setData((current) => (current ? patchSelectedLinks(current, selectedLinks) : current));
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not save linked-category rules.";
+      const message = err instanceof ApiError ? err.message : "No se pudieron guardar las reglas de categorías vinculadas.";
       setError(message);
     } finally {
       setSavingLinks(false);
@@ -619,14 +640,14 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
         <div className="liquid-glass rounded-2xl p-4 flex flex-col h-[500px]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-              <i className="ph-bold ph-tree-structure" /> Taxonomy
+              <i className="ph-bold ph-tree-structure" /> Taxonomía
             </h2>
             <i className="ph-bold ph-magnifying-glass text-zinc-600" />
           </div>
           <input
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value.toLowerCase())}
-            placeholder="Filter categories..."
+            placeholder="Filtrar categorías..."
             className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
           <div className="flex-1 overflow-y-auto pr-2">
@@ -638,7 +659,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                 onSelect={(nextCategoryId) => onNavigate(`/catalog?category_id=${nextCategoryId}`)}
               />
             ) : (
-              <p className="text-xs text-zinc-500 font-mono">Loading categories...</p>
+              <p className="text-xs text-zinc-500 font-mono">Cargando categorías...</p>
             )}
           </div>
         </div>
@@ -646,13 +667,13 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
         {data ? (
           <div className="liquid-glass rounded-2xl p-5 flex flex-col gap-4">
             <div className="flex justify-between items-end mb-2">
-              <span className="text-xs text-zinc-500 uppercase tracking-widest font-bold">Total Scope</span>
+              <span className="text-xs text-zinc-500 uppercase tracking-widest font-bold">Alcance Total</span>
               <i className="ph-bold ph-chart-bar text-zinc-600 dark:text-zinc-400" />
             </div>
             {[
-              ["Categories", data.summary.categories],
-              ["Components", data.summary.components],
-              ["Materials", data.summary.materials],
+              ["Categorías", data.summary.categories],
+              ["Componentes", data.summary.components],
+              ["Materiales", data.summary.materials],
             ].map(([label, value]) => (
               <div key={label} className="flex flex-col gap-1 border-b border-black/5 dark:border-white/5 pb-3 last:border-0 last:pb-0">
                 <div className="flex justify-between items-end">
@@ -671,7 +692,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
         ) : null}
 
         {loading ? (
-          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">Loading catalog...</div>
+          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">Cargando catálogo...</div>
         ) : selected && data ? (
           <div className="flex flex-col gap-6">
             <div className="flex items-end justify-between border-b border-black/10 dark:border-white/10 pb-4">
@@ -682,14 +703,14 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     {selected.scope}
                   </span>
                 </h2>
-                <p className="text-sm text-zinc-500 mt-1">{selected.description || "No description provided."}</p>
+                <p className="text-sm text-zinc-500 mt-1">{selected.description || "Sin descripción."}</p>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="liquid-glass rounded-xl p-5">
                 <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <i className="ph-bold ph-folders text-zinc-600 dark:text-zinc-400" /> Children
+                  <i className="ph-bold ph-folders text-zinc-600 dark:text-zinc-400" /> Subcategorías
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {selected.child_categories.length ? (
@@ -704,13 +725,13 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       </button>
                     ))
                   ) : (
-                    <p className="text-xs text-zinc-500 font-mono">No child categories.</p>
+                    <p className="text-xs text-zinc-500 font-mono">No hay subcategorías.</p>
                   )}
                 </div>
               </div>
               <div className="liquid-glass rounded-xl p-5 border-accent-500/20">
                 <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <i className="ph-bold ph-link text-accent-600 dark:text-accent-500" /> Linked Categories
+                  <i className="ph-bold ph-link text-accent-600 dark:text-accent-500" /> Categorías Vinculadas
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {selected.linked_categories.length ? (
@@ -720,7 +741,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       </div>
                     ))
                   ) : (
-                    <p className="text-xs text-zinc-500 font-mono">None</p>
+                    <p className="text-xs text-zinc-500 font-mono">Ninguna</p>
                   )}
                 </div>
               </div>
@@ -729,21 +750,21 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <form className="liquid-glass rounded-xl p-5 flex flex-col gap-4" onSubmit={handleCreateCategory}>
                 <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-folder-plus text-zinc-600 dark:text-zinc-400 mr-2" /> Add Child Category
+                  <i className="ph-bold ph-folder-plus text-zinc-600 dark:text-zinc-400 mr-2" /> Agregar Subcategoría
                 </h3>
                 <div className="space-y-3">
                   <input
                     value={categoryForm.name}
                     onChange={(event) => setCategoryForm((current) => ({ ...current, name: event.target.value }))}
                     required
-                    placeholder="Category Name"
+                    placeholder="Nombre de categoría"
                     className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                   <textarea
                     value={categoryForm.description || ""}
                     onChange={(event) => setCategoryForm((current) => ({ ...current, description: event.target.value }))}
                     rows={2}
-                    placeholder="Description"
+                    placeholder="Descripción"
                     className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                   <select
@@ -751,9 +772,9 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     onChange={(event) => setCategoryForm((current) => ({ ...current, scope: event.target.value }))}
                     className="w-full bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   >
-                    <option value="item">Item</option>
-                    <option value="accessory">Accessory</option>
-                    <option value="mixed">Mixed</option>
+                    <option value="item">Ítem</option>
+                    <option value="accessory">Accesorio</option>
+                    <option value="mixed">Mixto</option>
                   </select>
                 </div>
                 <button
@@ -761,13 +782,13 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                   disabled={savingCategory}
                   className="mt-auto px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                 >
-                  {savingCategory ? "Creating..." : "Create Category"}
+                  {savingCategory ? "Creando..." : "Crear categoría"}
                 </button>
               </form>
 
               <form className="liquid-glass rounded-xl p-5 flex flex-col gap-4" onSubmit={handleCreateComponent}>
                 <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-cube text-zinc-600 dark:text-zinc-400 mr-2" /> Add Component
+                  <i className="ph-bold ph-cube text-zinc-600 dark:text-zinc-400 mr-2" /> Agregar Componente
                 </h3>
                 <div className="space-y-3">
                   <div className="flex gap-2">
@@ -775,7 +796,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       value={componentForm.name}
                       onChange={(event) => setComponentForm((current) => ({ ...current, name: event.target.value }))}
                       required
-                      placeholder="Name"
+                      placeholder="Nombre"
                       className="w-2/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     />
                     <input
@@ -791,13 +812,13 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       onChange={(event) => setComponentForm((current) => ({ ...current, component_type: event.target.value }))}
                       className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     >
-                      <option value="item">Item</option>
-                      <option value="accessory">Accessory</option>
+                      <option value="item">Ítem</option>
+                      <option value="accessory">Accesorio</option>
                     </select>
                     <input
                       value={componentForm.unit_type || ""}
                       onChange={(event) => setComponentForm((current) => ({ ...current, unit_type: event.target.value }))}
-                      placeholder="Unit (m2, set)"
+                      placeholder="Unidad (m2, set)"
                       className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                     />
                   </div>
@@ -805,14 +826,14 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     value={componentForm.description || ""}
                     onChange={(event) => setComponentForm((current) => ({ ...current, description: event.target.value }))}
                     rows={2}
-                    placeholder="Description"
+                    placeholder="Descripción"
                     className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                   <textarea
                     value={componentForm.short_description || ""}
                     onChange={(event) => setComponentForm((current) => ({ ...current, short_description: event.target.value }))}
                     rows={2}
-                    placeholder="Short description"
+                    placeholder="Descripción corta"
                     className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-2 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   />
                 </div>
@@ -821,13 +842,13 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                   disabled={savingComponent}
                   className="mt-auto px-4 py-2 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-lg text-xs font-bold transition-all w-full"
                 >
-                  {savingComponent ? "Creating..." : "Create Component"}
+                  {savingComponent ? "Creando..." : "Crear componente"}
                 </button>
               </form>
 
               <div className="liquid-glass rounded-xl p-5 flex flex-col gap-4">
                 <h3 className="text-xs font-bold text-zinc-900 dark:text-zinc-200 uppercase tracking-widest">
-                  <i className="ph-bold ph-plugs text-zinc-600 dark:text-zinc-400 mr-2" /> Rules
+                  <i className="ph-bold ph-plugs text-zinc-600 dark:text-zinc-400 mr-2" /> Reglas
                 </h3>
                 <div className="flex-1 bg-white dark:bg-black/20 shadow-sm border border-black/5 dark:border-white/5 rounded-lg p-3 max-h-[200px] overflow-y-auto space-y-2">
                   {data.link_targets.length ? (
@@ -847,7 +868,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                       </label>
                     ))
                   ) : (
-                    <p className="text-xs text-zinc-500 font-mono">No targets available.</p>
+                    <p className="text-xs text-zinc-500 font-mono">No hay destinos disponibles.</p>
                   )}
                 </div>
                 <button
@@ -856,7 +877,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                   className="mt-auto px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-60 border border-black/10 dark:border-white/10 rounded-lg text-xs font-semibold text-zinc-900 dark:text-white transition-all w-full"
                   onClick={() => void handleSaveLinks()}
                 >
-                  {savingLinks ? "Saving..." : "Save Rules"}
+                  {savingLinks ? "Guardando..." : "Guardar reglas"}
                 </button>
               </div>
             </div>
@@ -864,9 +885,9 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                  <i className="ph-bold ph-stack text-zinc-600 dark:text-zinc-400" /> Components
+                  <i className="ph-bold ph-stack text-zinc-600 dark:text-zinc-400" /> Componentes
                 </h3>
-                <div className="text-xs font-mono text-zinc-500">{selected.components.length} instances</div>
+                <div className="text-xs font-mono text-zinc-500">{selected.components.length} instancias</div>
               </div>
               <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {selected.components.length ? (
@@ -884,14 +905,14 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                   ))
                 ) : (
                   <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-lg">
-                    No components yet.
+                    Aún no hay componentes.
                   </div>
                 )}
               </div>
             </div>
           </div>
         ) : (
-          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">No category selected.</div>
+          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">No hay categoría seleccionada.</div>
         )}
       </div>
     </div>

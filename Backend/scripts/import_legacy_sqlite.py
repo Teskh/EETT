@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import re
 import sqlite3
 import sys
@@ -29,6 +30,7 @@ from app.models import (
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
+    MediaAsset,
     CommentMention,
     CommentNotification,
     ComponentMaterialRule,
@@ -47,6 +49,7 @@ from app.models import (
     ProjectInstanceAttributeGroup,
     ProjectInstanceAttributeValue,
     ProjectInstanceLink,
+    ProjectInstanceMedia,
     ProjectInstanceOccurrence,
     ProjectInstanceOccurrenceAttributeValue,
     ProjectInstanceOccurrenceTarget,
@@ -56,6 +59,7 @@ from app.models import (
     SyncStatus,
     User,
 )
+from app.services.media import create_media_asset_from_upload
 from app.models.entities import (
     ApprovalStatus,
     AttributeScope,
@@ -73,6 +77,69 @@ from app.services.audit import build_activity_change, build_activity_details
 LEGACY_MATERIAL_PATTERN = re.compile(r"Material '(.+?)' \(SKU: .+?\)")
 LEGACY_UNIT_QTY_PATTERN = re.compile(r"Cantidad por unidad actualizada para '(.+?)'\.")
 LEGACY_TARGET_PATTERN = re.compile(r"^(Aplicado a .+?|Desvinculado de .+?)$", re.MULTILINE)
+
+LEGACY_ACTIVITY_TEXT_TRANSLATIONS = {
+    "Legacy activity": "Actividad heredada",
+    "Project activity": "Actividad del proyecto",
+    "Material quantities created": "Cantidades de material creadas",
+    "Material quantities removed": "Cantidades de material eliminadas",
+    "Material quantities updated": "Cantidades de material actualizadas",
+    "Material quantity created": "Cantidad de material creada",
+    "Material quantity removed": "Cantidad de material eliminada",
+    "Material quantity updated": "Cantidad de material actualizada",
+    "Assembly kit created": "Kit de montaje creado",
+    "Assembly kit removed": "Kit de montaje eliminado",
+    "Assembly kit updated": "Kit de montaje actualizado",
+    "Material conditions updated": "Condiciones de material actualizadas",
+    "Material condition added": "Condición de material agregada",
+    "Material condition removed": "Condición de material eliminada",
+    "Material condition updated": "Condición de material actualizada",
+    "Material unit quantities updated": "Cantidades unitarias de material actualizadas",
+    "Material unit quantity updated": "Cantidad unitaria de material actualizada",
+    "Materials added": "Materiales agregados",
+    "Materials removed": "Materiales eliminados",
+    "Material added": "Material agregado",
+    "Material removed": "Material eliminado",
+    "Item attributes updated": "Atributos de ítem actualizados",
+    "Item attribute updated": "Atributo de ítem actualizado",
+    "Items created": "Ítems creados",
+    "Items removed": "Ítems eliminados",
+    "Items updated": "Ítems actualizados",
+    "Item created": "Ítem creado",
+    "Item removed": "Ítem eliminado",
+    "Item updated": "Ítem actualizado",
+    "Accessory links updated": "Vínculos de accesorio actualizados",
+    "Accessory linked": "Accesorio vinculado",
+    "Accessory unlinked": "Accesorio desvinculado",
+    "Accessories created": "Accesorios creados",
+    "Accessories removed": "Accesorios eliminados",
+    "Accessories updated": "Accesorios actualizados",
+    "Accessory created": "Accesorio creado",
+    "Accessory removed": "Accesorio eliminado",
+    "Accessory updated": "Accesorio actualizado",
+}
+
+LEGACY_ACTIVITY_FIELD_TRANSLATIONS = {
+    "Value": "Valor",
+    "Quantity": "Cantidad",
+    "Assembly kit": "Kit de montaje",
+    "Quantity per unit": "Cantidad por unidad",
+    "Condition": "Condición",
+    "Name": "Nombre",
+    "Short name": "Nombre corto",
+    "Description": "Descripción",
+    "Short description": "Descripción corta",
+    "Installation": "Instalación",
+    "Unit amount": "Q_fábrica unitaria",
+}
+
+
+def translate_legacy_activity_text(value: str) -> str:
+    return LEGACY_ACTIVITY_TEXT_TRANSLATIONS.get(value, value)
+
+
+def translate_legacy_activity_field(value: str) -> str:
+    return LEGACY_ACTIVITY_FIELD_TRANSLATIONS.get(value, value)
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +167,14 @@ def parse_args() -> argparse.Namespace:
         help="Domain used for generated email addresses when importing legacy usernames.",
     )
     parser.add_argument(
+        "--legacy-image-dir",
+        default=None,
+        help=(
+            "Directory containing legacy instance images. If omitted, the importer tries common locations next to "
+            "the legacy DBs and the configured media gallery."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Run the import and print a summary, but roll back instead of committing.",
@@ -119,6 +194,10 @@ def sqlite_has_table(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def sqlite_has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    return any(row["name"] == column_name for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall())
 
 
 def fetch_all(conn: sqlite3.Connection, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -253,11 +332,15 @@ class LegacyImporter:
         main_conn: sqlite3.Connection,
         projects_conn: sqlite3.Connection,
         legacy_email_domain: str,
+        settings: Settings,
+        legacy_image_dir: Path | None,
     ) -> None:
         self.session = session
         self.main_conn = main_conn
         self.projects_conn = projects_conn
         self.legacy_email_domain = legacy_email_domain
+        self.settings = settings
+        self.legacy_image_roots = self.resolve_legacy_image_roots(legacy_image_dir)
         self.warnings: list[str] = []
         self.stats: dict[str, int] = defaultdict(int)
 
@@ -275,10 +358,126 @@ class LegacyImporter:
         self.fallback_material_rule_by_key: dict[tuple[int, int], ComponentMaterialRule] = {}
         self.bom_entry_by_key: dict[tuple[int, int, int, int | None], ProjectBomEntry] = {}
         self.activity_group_by_legacy_key: dict[tuple[int, int | None, str, str, str, str], ProjectActivityGroup] = {}
+        self.media_asset_by_legacy_path: dict[str, MediaAsset] = {}
 
     def run(self) -> None:
         self.import_catalog()
         self.import_projects()
+
+    def resolve_legacy_image_roots(self, explicit_dir: Path | None) -> list[Path]:
+        candidates: list[Path] = []
+        if explicit_dir is not None:
+            candidates.append(explicit_dir)
+
+        for conn in (self.main_conn, self.projects_conn):
+            db_file = normalize_text(conn.execute("PRAGMA database_list").fetchone()["file"])
+            if db_file:
+                db_path = Path(db_file)
+                candidates.append(db_path.parent / "database_editor" / "static" / "images")
+                candidates.append(db_path.parent / "static" / "images")
+
+        candidates.extend(
+            [
+                self.settings.media_gallery_dir,
+                REPO_ROOT / "media_gallery",
+                REPO_ROOT / "output" / "media_gallery",
+                BACKEND_DIR / "app" / "static" / "images",
+            ]
+        )
+
+        seen: set[Path] = set()
+        roots: list[Path] = []
+        for candidate in candidates:
+            resolved = candidate.expanduser().resolve()
+            if resolved in seen or not resolved.exists():
+                continue
+            seen.add(resolved)
+            roots.append(resolved)
+        return roots
+
+    def resolve_legacy_image_file(self, raw_image_path: Any) -> Path | None:
+        text = normalize_text(raw_image_path)
+        if text is None:
+            return None
+        normalized = text.replace("\\", "/").lstrip("/")
+        path_candidates: list[Path] = []
+        raw_path = Path(text).expanduser()
+        if raw_path.is_absolute():
+            path_candidates.append(raw_path)
+
+        relative_variants = [Path(normalized)]
+        for prefix in ("static/images/", "database_editor/static/images/"):
+            if normalized.startswith(prefix):
+                relative_variants.append(Path(normalized[len(prefix) :]))
+        filename = Path(normalized).name
+        if filename:
+            relative_variants.append(Path(filename))
+
+        for root in self.legacy_image_roots:
+            for relative in relative_variants:
+                if not str(relative):
+                    continue
+                path_candidates.append(root / relative)
+
+        for candidate in path_candidates:
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def import_instance_image(self, instance: ProjectInstance, row: sqlite3.Row) -> None:
+        if "image_path" not in row.keys():
+            return
+        legacy_image_path = normalize_text(row["image_path"])
+        if legacy_image_path is None:
+            return
+
+        asset = self.media_asset_by_legacy_path.get(legacy_image_path)
+        if asset is None:
+            source_path = self.resolve_legacy_image_file(legacy_image_path)
+            if source_path is None:
+                uri = legacy_image_path if legacy_image_path.startswith("/") else f"/static/images/{legacy_image_path}"
+                instance.media.append(
+                    ProjectInstanceMedia(
+                        kind="image",
+                        uri=uri,
+                        caption=Path(legacy_image_path).name,
+                        sort_order=0,
+                    )
+                )
+                instance.image_uri = uri
+                self.warnings.append(
+                    f"Legacy image '{legacy_image_path}' for instance '{instance.name}' was not found; imported URI only."
+                )
+                self.stats["image_uri_fallbacks"] += 1
+                return
+
+            with source_path.open("rb") as image_file:
+                asset = create_media_asset_from_upload(
+                    self.session,
+                    settings=self.settings,
+                    file=image_file,
+                    original_filename=source_path.name,
+                    content_type=mimetypes.guess_type(source_path.name)[0],
+                    actor_user=None,
+                    commit=False,
+                )
+            self.media_asset_by_legacy_path[legacy_image_path] = asset
+            self.stats["media_assets"] += 1
+
+        instance.media.append(
+            ProjectInstanceMedia(
+                media_asset_id=asset.id,
+                kind="image",
+                uri=asset.uri,
+                caption=asset.original_filename,
+                sort_order=0,
+            )
+        )
+        instance.image_uri = asset.uri
+        self.stats["instance_images"] += 1
 
     def import_catalog(self) -> None:
         categories = fetch_all(
@@ -346,9 +545,10 @@ class LegacyImporter:
             self.projects_conn,
             "SELECT subtype_id, project_id, parent_subtype_id, name, created_date, modified_date FROM Project_Subtypes ORDER BY project_id, subtype_id",
         )
+        item_image_column = ", image_path" if sqlite_has_column(self.projects_conn, "Item_Instances", "image_path") else ""
         item_instances = fetch_all(
             self.projects_conn,
-            "SELECT instance_id, project_id, item_id, name, short_name, description, short_description, installation, created_date, modified_date FROM Item_Instances ORDER BY project_id, instance_id",
+            f"SELECT instance_id, project_id, item_id, name, short_name, description, short_description, installation, created_date, modified_date{item_image_column} FROM Item_Instances ORDER BY project_id, instance_id",
         )
         accessory_instances = fetch_all(
             self.projects_conn,
@@ -416,6 +616,7 @@ class LegacyImporter:
                 legacy_component_key=("item", row["item_id"]),
             )
             self.instance_by_legacy_key[("item", row["instance_id"])] = instance
+            self.import_instance_image(instance, row)
             self.import_base_attribute_group(instance, item_instance_attributes.get(row["instance_id"], []))
 
         for row in accessory_instances:
@@ -1395,19 +1596,23 @@ class LegacyImporter:
     def prettify_legacy_field_name(self, value: Any) -> str:
         text = normalize_text(value)
         if not text:
-            return "Value"
+            return translate_legacy_activity_field("Value")
         aliases = {
             "short_name": "Short name",
             "short_description": "Short description",
             "unit_qty_per_unit": "Quantity per unit",
             "condition": "Condition",
+            "description": "Description",
+            "installation": "Installation",
+            "name": "Name",
+            "unit_amount": "Unit amount",
         }
         lowered = text.casefold()
         if lowered in aliases:
-            return aliases[lowered]
+            return translate_legacy_activity_field(aliases[lowered])
         if "_" in text:
-            return text.replace("_", " ").strip().capitalize()
-        return text
+            return translate_legacy_activity_field(text.replace("_", " ").strip().capitalize())
+        return translate_legacy_activity_field(text)
 
     def parse_legacy_detail_attributes(self, details: Any) -> list[tuple[str, str]]:
         text = normalize_text(details)
@@ -1523,7 +1728,7 @@ class LegacyImporter:
                 details=detail_text,
             )
             is_assembly_kit = "kit" in action_text.casefold() or "assembly kit" in (normalize_text(field_name) or "").casefold()
-            change_label = "Assembly kit" if is_assembly_kit else "Quantity"
+            change_label = translate_legacy_activity_field("Assembly kit" if is_assembly_kit else "Quantity")
             if "creación" in action_text.casefold() or action_text.casefold() == "create":
                 title = "Material quantities created"
                 headline = "Material quantity created" if not is_assembly_kit else "Assembly kit created"
@@ -1650,7 +1855,7 @@ class LegacyImporter:
                     changes.append(build_activity_change(attr_name, None, attr_value))
 
         details = build_activity_details(
-            headline=headline,
+            headline=translate_legacy_activity_text(headline),
             subject_name=subject_name,
             notes=notes,
             changes=changes,
@@ -1669,7 +1874,7 @@ class LegacyImporter:
                 "legacy_approved_date": normalize_text(row["approved_date"]),
             }
         )
-        return title, kind, subject_name, details
+        return translate_legacy_activity_text(title), kind, subject_name, details
 
     def get_or_create_legacy_activity_group(
         self,
@@ -1945,6 +2150,8 @@ def main() -> int:
                 main_conn=main_conn,
                 projects_conn=projects_conn,
                 legacy_email_domain=args.legacy_email_domain,
+                settings=settings,
+                legacy_image_dir=Path(args.legacy_image_dir) if args.legacy_image_dir else None,
             )
             try:
                 importer.run()

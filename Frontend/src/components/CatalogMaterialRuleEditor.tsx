@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Modal } from "./Modal";
+import { FactoryQuantityLabel } from "./QuantityLabels";
 import type {
   CatalogAttribute,
   CatalogComponent,
@@ -40,7 +41,6 @@ type EditableRule = {
   sku: string;
   unit: string;
   unit_qty_per_unit: string;
-  notes: string;
   conditions: EditableGroup[];
 };
 
@@ -50,12 +50,12 @@ type SearchState = {
 };
 
 const OPERATORS = [
-  { value: "=", label: "Equals" },
-  { value: "IN", label: "In list" },
-  { value: "BETWEEN", label: "Between" },
-  { value: ">", label: "Greater than" },
-  { value: "<", label: "Less than" },
-  { value: "IS NOT NULL", label: "Is not empty" },
+  { value: "=", label: "Igual a" },
+  { value: "IN", label: "En lista" },
+  { value: "BETWEEN", label: "Entre" },
+  { value: ">", label: "Mayor que" },
+  { value: "<", label: "Menor que" },
+  { value: "IS NOT NULL", label: "No está vacío" },
 ];
 
 function makeLocalId() {
@@ -71,7 +71,6 @@ function normalizeRules(rules: CatalogMaterialRule[]): EditableRule[] {
     sku: rule.sku || "",
     unit: rule.unit || "",
     unit_qty_per_unit: rule.unit_qty_per_unit === null || rule.unit_qty_per_unit === undefined ? "" : String(rule.unit_qty_per_unit),
-    notes: rule.notes || "",
     conditions: rule.conditions.map((group, groupIndex) => ({
       local_id: makeLocalId(),
       group: group.group || `group-${groupIndex + 1}`,
@@ -94,7 +93,6 @@ function makeEmptyRule(index: number): EditableRule {
     sku: "",
     unit: "",
     unit_qty_per_unit: "",
-    notes: "",
     conditions: [
       {
         local_id: makeLocalId(),
@@ -118,17 +116,17 @@ function makeEmptyClause(): EditableClause {
 function operatorLabel(operator: string) {
   switch (operator) {
     case "=":
-      return "equals";
+      return "es igual a";
     case "IN":
-      return "is in";
+      return "está en";
     case "BETWEEN":
-      return "is between";
+      return "está entre";
     case ">":
-      return "is greater than";
+      return "es mayor que";
     case "<":
-      return "is less than";
+      return "es menor que";
     case "IS NOT NULL":
-      return "is not empty";
+      return "no está vacío";
     default:
       return operator.toLowerCase();
   }
@@ -136,7 +134,7 @@ function operatorLabel(operator: string) {
 
 function summarizeRule(rule: EditableRule) {
   if (!rule.conditions.length || rule.conditions.every((group) => group.clauses.length === 0)) {
-    return `Include ${rule.sku || "this material"} on every instance.`;
+    return `Incluir ${rule.sku || "este material"} en todas las instancias.`;
   }
 
   const groups = rule.conditions
@@ -148,19 +146,19 @@ function summarizeRule(rule: EditableRule) {
             return `${clause.attribute_name} ${operatorLabel(clause.operator)}`;
           }
           if (clause.operator === "BETWEEN") {
-            return `${clause.attribute_name} ${operatorLabel(clause.operator)} ${clause.comparison_value || "?"} and ${clause.comparison_value_secondary || "?"}`;
+            return `${clause.attribute_name} ${operatorLabel(clause.operator)} ${clause.comparison_value || "?"} y ${clause.comparison_value_secondary || "?"}`;
           }
           return `${clause.attribute_name} ${operatorLabel(clause.operator)} ${clause.comparison_value || "?"}`;
         });
-      return clauses.length ? clauses.join(" and ") : null;
+      return clauses.length ? clauses.join(" y ") : null;
     })
     .filter(Boolean);
 
   if (!groups.length) {
-    return `Include ${rule.sku || "this material"} on every instance.`;
+    return `Incluir ${rule.sku || "este material"} en todas las instancias.`;
   }
 
-  return `Include ${rule.sku || "this material"} when ${groups.join(" or when ")}.`;
+  return `Incluir ${rule.sku || "este material"} cuando ${groups.join(" o cuando ")}.`;
 }
 
 function getAttributeMeta(attributeName: string, attributes: CatalogAttribute[]) {
@@ -236,7 +234,7 @@ export function CatalogMaterialRuleEditor({
           return;
         }
         setSearchResults([]);
-        setError(err instanceof Error ? err.message : "Could not search materials.");
+        setError(err instanceof Error ? err.message : "No se pudieron buscar materiales.");
       } finally {
         if (!cancelled) {
           setSearchLoading(false);
@@ -432,7 +430,6 @@ export function CatalogMaterialRuleEditor({
             sku: rule.sku.trim().toUpperCase(),
             unit: rule.unit.trim() || null,
             unit_qty_per_unit: rule.unit_qty_per_unit.trim() === "" ? null : Number(rule.unit_qty_per_unit),
-            notes: rule.notes.trim() || null,
             conditions: rule.conditions
               .map((group, groupIndex) => ({
                 group: group.group.trim() || `group-${groupIndex + 1}`,
@@ -461,7 +458,7 @@ export function CatalogMaterialRuleEditor({
           .filter((rule) => rule.material_name && rule.sku),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save material rules.");
+      setError(err instanceof Error ? err.message : "No se pudieron guardar las reglas de materiales.");
     }
   }
 
@@ -469,7 +466,7 @@ export function CatalogMaterialRuleEditor({
     return (
       <div className="absolute z-20 mt-2 w-full rounded-xl border border-black/10 bg-white p-2 shadow-xl dark:border-white/10 dark:bg-zinc-900">
         {searchLoading ? (
-          <div className="px-2 py-3 text-xs font-mono text-zinc-500">Searching materials...</div>
+          <div className="px-2 py-3 text-xs font-mono text-zinc-500">Buscando materiales...</div>
         ) : searchResults.length ? (
           <div className="flex max-h-56 flex-col overflow-y-auto">
             {searchResults.map((result) => (
@@ -496,7 +493,7 @@ export function CatalogMaterialRuleEditor({
           </div>
         ) : (
           <div className="px-2 py-3 text-xs font-mono text-zinc-500">
-            No matches for "{searchTerm}".
+            No hay coincidencias para "{searchTerm}".
           </div>
         )}
       </div>
@@ -507,7 +504,7 @@ export function CatalogMaterialRuleEditor({
     <Modal
       open={open}
       title={component.name}
-      kicker="Material rules"
+      kicker="Reglas de materiales"
       onClose={onClose}
       panelClassName="max-w-6xl"
     >
@@ -515,10 +512,10 @@ export function CatalogMaterialRuleEditor({
         <div className="flex items-start justify-between gap-4 rounded-xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-4">
           <div className="space-y-1">
             <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              Match materials to this catalog component with grouped rules. Clauses inside a group are ANDed together; groups are ORed together.
+              Relaciona materiales con este componente de catálogo usando reglas agrupadas. Las cláusulas dentro de un grupo se combinan con Y; los grupos se combinan con O.
             </p>
             <p className="text-[11px] font-mono text-zinc-500">
-              Search uses saved catalog materials first and can also surface ERP matches when the connection is configured.
+              La búsqueda usa primero los materiales guardados del catálogo y también puede mostrar coincidencias ERP cuando la conexión está configurada.
             </p>
           </div>
           <button
@@ -527,7 +524,7 @@ export function CatalogMaterialRuleEditor({
             className="shrink-0 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-3 py-2 text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors hover:bg-zinc-50 dark:hover:bg-white/5"
           >
             <i className="ph-bold ph-plus mr-1" />
-            Add material
+            Agregar material
           </button>
         </div>
 
@@ -552,7 +549,7 @@ export function CatalogMaterialRuleEditor({
                         Material {ruleIndex + 1}
                       </p>
                       <h4 className="text-base font-bold text-zinc-900 dark:text-white">
-                        {rule.material_name || "New material rule"}
+                        {rule.material_name || "Nueva regla de material"}
                       </h4>
                     </div>
                     <div className="flex items-center gap-1">
@@ -560,7 +557,7 @@ export function CatalogMaterialRuleEditor({
                         type="button"
                         onClick={() => moveRule(rule.local_id, -1)}
                         className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 px-2 py-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:bg-white/5 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-200"
-                        title="Move up"
+                        title="Mover arriba"
                       >
                         <i className="ph-bold ph-caret-up" />
                       </button>
@@ -568,7 +565,7 @@ export function CatalogMaterialRuleEditor({
                         type="button"
                         onClick={() => moveRule(rule.local_id, 1)}
                         className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 px-2 py-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:bg-white/5 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-200"
-                        title="Move down"
+                        title="Mover abajo"
                       >
                         <i className="ph-bold ph-caret-down" />
                       </button>
@@ -577,7 +574,7 @@ export function CatalogMaterialRuleEditor({
                         onClick={() => removeRule(rule.local_id)}
                         className="rounded-lg border border-red-200 bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 transition-colors hover:bg-red-200 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
                       >
-                        Remove
+                        Eliminar
                       </button>
                     </div>
                   </div>
@@ -585,13 +582,13 @@ export function CatalogMaterialRuleEditor({
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
                     <div className="relative md:col-span-4">
                       <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Material Name
+                        Nombre del material
                       </label>
                       <input
                         value={rule.material_name}
                         onChange={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
                         onFocus={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
-                        placeholder="Search ERP or existing materials"
+                        placeholder="Buscar en ERP o materiales existentes"
                         className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                       />
                       {searchOpen && searchState?.field === "material_name" ? renderSearchDropdown(rule.local_id) : null}
@@ -605,7 +602,7 @@ export function CatalogMaterialRuleEditor({
                         value={rule.sku}
                         onChange={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
                         onFocus={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
-                        placeholder="ERP code"
+                        placeholder="Código ERP"
                         className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm font-mono text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                       />
                       {searchOpen && searchState?.field === "sku" ? renderSearchDropdown(rule.local_id) : null}
@@ -613,7 +610,7 @@ export function CatalogMaterialRuleEditor({
 
                     <div className="md:col-span-2">
                       <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Unit
+                        Unidad
                       </label>
                       <input
                         value={rule.unit}
@@ -625,28 +622,15 @@ export function CatalogMaterialRuleEditor({
 
                     <div className="md:col-span-3">
                       <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Qty Per Unit
+                        <FactoryQuantityLabel /> por unidad
                       </label>
                       <input
                         value={rule.unit_qty_per_unit}
                         onChange={(event) => updateRule(rule.local_id, { unit_qty_per_unit: event.target.value })}
-                        placeholder="Optional"
+                        placeholder="Opcional"
                         className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm font-mono text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                       />
                     </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                      Notes
-                    </label>
-                    <textarea
-                      value={rule.notes}
-                      onChange={(event) => updateRule(rule.local_id, { notes: event.target.value })}
-                      rows={2}
-                      placeholder="Optional procurement or installation note"
-                      className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                    />
                   </div>
 
                   <div className="mt-3 rounded-xl border border-dashed border-black/10 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
@@ -662,7 +646,7 @@ export function CatalogMaterialRuleEditor({
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div>
                             <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                              OR group {groupIndex + 1}
+                              Grupo O {groupIndex + 1}
                             </p>
                             <input
                               value={group.group}
@@ -675,7 +659,7 @@ export function CatalogMaterialRuleEditor({
                             onClick={() => removeGroup(rule.local_id, group.local_id)}
                             className="rounded-lg border border-red-200 bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 transition-colors hover:bg-red-200 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
                           >
-                            Remove group
+                            Eliminar grupo
                           </button>
                         </div>
 
@@ -696,14 +680,14 @@ export function CatalogMaterialRuleEditor({
                               >
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                   <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                    {clauseIndex === 0 ? "If" : "And"}
+                                    {clauseIndex === 0 ? "Si" : "Y"}
                                   </span>
                                   <button
                                     type="button"
                                     onClick={() => removeClause(rule.local_id, group.local_id, clause.local_id)}
                                     className="rounded border border-black/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-white/10 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-zinc-200"
                                   >
-                                    Remove
+                                    Eliminar
                                   </button>
                                 </div>
 
@@ -719,7 +703,7 @@ export function CatalogMaterialRuleEditor({
                                     }
                                     className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-4 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                                   >
-                                    <option value="">Attribute</option>
+                                    <option value="">Atributo</option>
                                     {attributeChoices.map((attribute) => (
                                       <option key={attribute.name} value={attribute.name}>
                                         {attribute.name}
@@ -747,7 +731,7 @@ export function CatalogMaterialRuleEditor({
 
                                   {operatorNeedsNoValue ? (
                                     <div className="flex items-center rounded-lg border border-dashed border-black/10 bg-zinc-50 px-3 text-xs text-zinc-500 md:col-span-5 dark:border-white/10 dark:bg-black/10">
-                                      No comparison value required.
+                                      No se requiere valor de comparación.
                                     </div>
                                   ) : useSelectValue ? (
                                     <select
@@ -759,7 +743,7 @@ export function CatalogMaterialRuleEditor({
                                       }
                                       className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-5 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                                     >
-                                      <option value="">Value</option>
+                                      <option value="">Valor</option>
                                       {attributeMeta?.options.map((option) => (
                                         <option key={option} value={option}>
                                           {option}
@@ -775,7 +759,7 @@ export function CatalogMaterialRuleEditor({
                                             comparison_value: event.target.value,
                                           })
                                         }
-                                        placeholder="From"
+                                        placeholder="Desde"
                                         className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-2 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                                       />
                                       <input
@@ -785,7 +769,7 @@ export function CatalogMaterialRuleEditor({
                                             comparison_value_secondary: event.target.value,
                                           })
                                         }
-                                        placeholder="To"
+                                        placeholder="Hasta"
                                         className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-3 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                                       />
                                     </>
@@ -797,7 +781,7 @@ export function CatalogMaterialRuleEditor({
                                           comparison_value: event.target.value,
                                         })
                                       }
-                                      placeholder={clause.operator === "IN" ? "Comma-separated values" : "Value"}
+                                      placeholder={clause.operator === "IN" ? "Valores separados por coma" : "Valor"}
                                       className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-5 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
                                     />
                                   )}
@@ -814,7 +798,7 @@ export function CatalogMaterialRuleEditor({
                             className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:text-zinc-200 dark:hover:bg-white/5"
                           >
                             <i className="ph-bold ph-plus mr-1" />
-                            Add AND clause
+                            Agregar cláusula Y
                           </button>
                         </div>
                       </section>
@@ -826,7 +810,7 @@ export function CatalogMaterialRuleEditor({
                       className="self-start rounded-lg border border-black/10 bg-zinc-50 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10"
                     >
                       <i className="ph-bold ph-plus mr-1" />
-                      Add OR group
+                      Agregar grupo O
                     </button>
                   </div>
                 </article>
@@ -834,7 +818,7 @@ export function CatalogMaterialRuleEditor({
             })
           ) : (
             <div className="rounded-2xl border border-dashed border-black/10 p-8 text-center text-sm text-zinc-500 dark:border-white/10">
-              No material rules defined for this component.
+              No hay reglas de materiales definidas para este componente.
             </div>
           )}
         </div>
@@ -842,8 +826,8 @@ export function CatalogMaterialRuleEditor({
         <div className="flex items-center justify-between gap-3 border-t border-black/10 pt-4 dark:border-white/10">
           <p className="text-[11px] font-mono text-zinc-500">
             {liveErpAvailable
-              ? "ERP lookup is available for SKU autofill."
-              : "ERP lookup is not configured, so search is limited to saved catalog materials."}
+              ? "La búsqueda ERP está disponible para autocompletar SKU."
+              : "La búsqueda ERP no está configurada, por lo que la búsqueda se limita a materiales guardados del catálogo."}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -851,7 +835,7 @@ export function CatalogMaterialRuleEditor({
               onClick={onClose}
               className="rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-sm font-semibold text-zinc-800 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10"
             >
-              Close
+              Cerrar
             </button>
             <button
               type="button"
@@ -859,7 +843,7 @@ export function CatalogMaterialRuleEditor({
               onClick={() => void handleSave()}
               className="rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-400 disabled:opacity-60"
             >
-              {saving ? "Saving..." : "Save material rules"}
+              {saving ? "Guardando..." : "Guardar reglas de materiales"}
             </button>
           </div>
         </div>

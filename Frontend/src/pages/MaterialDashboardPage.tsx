@@ -3,6 +3,7 @@ import { memo, startTransition, useDeferredValue, useEffect, useMemo, useRef, us
 import { MaterialProjectUsageModal } from "../components/MaterialProjectUsageModal";
 import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor";
 import { MovementStationDistributionModal } from "../components/MovementStationDistributionModal";
+import { FactoryQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import {
@@ -20,6 +21,7 @@ import {
   normalizeCecos,
 } from "../lib/materialDashboardCacheKeys";
 import type {
+  CatalogMaterialSearchResult,
   MaterialDashboardCeco,
   MaterialDashboardData,
   MaterialDashboardDetailData,
@@ -36,6 +38,7 @@ import type {
   MaterialDashboardMovementDetail,
   MaterialDashboardMovementData,
   MaterialDashboardMovementPoint,
+  MaterialDashboardPurchaseOrderLine,
   MaterialStudyGroupListResponse,
   MaterialStudyGroupRow,
   ProjectSummary,
@@ -183,6 +186,17 @@ type DashboardDetailLike = MaterialDashboardDetailData | MaterialDashboardGroupD
 type DashboardHistoryLike = MaterialDashboardMovementData | MaterialDashboardGroupMovementData;
 type DashboardHistoryDetailLike = MaterialDashboardMovementDetail | MaterialDashboardGroupMovementDetail;
 type DashboardHouseComparisonLike = MaterialDashboardHouseComparisonData | MaterialDashboardGroupHouseComparisonData;
+
+function materialSearchResultToDashboardRow(result: CatalogMaterialSearchResult): MaterialDashboardListRow {
+  return {
+    sku: result.sku,
+    material_name: result.name || result.sku,
+    unit: result.unit,
+    last_movement_date: null,
+    movement_quantity_60d: 0,
+    movement_count_60d: 0,
+  };
+}
 
 function isGroupRow(value: DashboardSelectionRow | null): value is MaterialStudyGroupRow {
   return Boolean(value && "group_id" in value);
@@ -1057,6 +1071,77 @@ function MetricRow({ label, value }: { label: string; value: React.ReactNode }) 
   );
 }
 
+function PurchaseOrderHoverValue({
+  value,
+  purchaseOrders,
+}: {
+  value: React.ReactNode;
+  purchaseOrders: MaterialDashboardPurchaseOrderLine[];
+}) {
+  return (
+    <div className="group/oc relative inline-flex justify-end">
+      <button
+        type="button"
+        className="rounded px-1.5 py-0.5 -mr-1 text-sm font-semibold text-zinc-900 underline decoration-dotted underline-offset-4 outline-none transition-colors hover:bg-black/5 focus:bg-black/5 dark:text-white dark:hover:bg-white/10 dark:focus:bg-white/10"
+      >
+        {value}
+      </button>
+      <div className="pointer-events-auto absolute right-0 top-full z-40 mt-2 hidden w-[600px] max-w-[calc(100vw-2rem)] rounded-lg border border-black/10 bg-white p-3 text-left shadow-2xl group-hover/oc:block group-focus-within/oc:block dark:border-white/10 dark:bg-zinc-950">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">Últimas OC</div>
+          <div className="text-[10px] font-medium text-zinc-500">Cuenta: AP/PE últimos 4 meses</div>
+        </div>
+        {purchaseOrders.length ? (
+          <div className="max-h-80 overflow-y-auto">
+            <div className="grid grid-cols-[0.8fr_0.9fr_0.5fr_0.7fr_0.6fr_0.7fr_0.7fr_0.7fr] gap-2 border-b border-black/10 pb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-zinc-500 dark:border-white/10">
+              <span>Fecha / Ent.</span>
+              <span>OC</span>
+              <span>Estado</span>
+              <span className="text-right">Precio</span>
+              <span className="text-right">Ord.</span>
+              <span className="text-right">Rec.</span>
+              <span className="text-right">No inv.</span>
+              <span className="text-right">Pend.</span>
+            </div>
+            <div className="divide-y divide-black/5 dark:divide-white/10">
+              {purchaseOrders.map((order, index) => {
+                const received = (order.received_quantity ?? 0) + (order.received_not_invoiced_quantity ?? 0);
+                const muted = !order.counted_in_pending;
+                return (
+                  <div
+                    key={`${order.number || "oc"}-${order.line_number || index}-${index}`}
+                    className={`grid grid-cols-[0.8fr_0.9fr_0.5fr_0.7fr_0.6fr_0.7fr_0.7fr_0.7fr] gap-2 py-1.5 text-xs ${
+                      muted ? "text-zinc-400 dark:text-zinc-600" : "text-zinc-800 dark:text-zinc-100"
+                    }`}
+                  >
+                    <span>
+                      <span className="block">{formatDate(order.date)}</span>
+                      {order.estimated_delivery ? <span className="block text-[10px] opacity-75">Ent. {formatDate(order.estimated_delivery)}</span> : null}
+                    </span>
+                    <span className="truncate font-mono" title={order.line_number ? `${order.number || ""} línea ${order.line_number}` : order.number || ""}>
+                      {order.number || "N/D"}
+                    </span>
+                    <span>{order.status_code || "N/D"}</span>
+                    <span className="text-right tabular-nums">{formatCurrency(order.unit_price)}</span>
+                    <span className="text-right tabular-nums">{formatNumber(order.ordered_quantity)}</span>
+                    <span className="text-right tabular-nums" title={`Recibido total: ${formatNumber(received)}`}>
+                      {formatNumber(order.received_quantity)}
+                    </span>
+                    <span className="text-right tabular-nums">{formatNumber(order.received_not_invoiced_quantity)}</span>
+                    <span className="text-right tabular-nums font-semibold">{formatNumber(order.pending_quantity)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="py-3 text-xs font-medium text-zinc-500">No hay OC recientes para este material.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MetricTabbedRow({
   label,
   values,
@@ -1266,26 +1351,34 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
 const MaterialResultsList = memo(function MaterialResultsList({
   loading,
   rows,
+  erpRows,
+  erpLoading,
+  erpError,
   hasMore,
   movementWindowDays,
   economicMetricsBySku,
   selectedMaterialSku,
   onSelect,
+  onSelectErpMaterial,
 }: {
   loading: boolean;
   rows: MaterialDashboardListRow[];
+  erpRows: MaterialDashboardListRow[];
+  erpLoading: boolean;
+  erpError: string | null;
   hasMore: boolean;
   movementWindowDays: number;
   economicMetricsBySku: ReadonlyMap<string, MaterialDashboardEconomicMetric>;
   selectedMaterialSku: string | null;
   onSelect: (key: string) => void;
+  onSelectErpMaterial: (row: MaterialDashboardListRow) => void;
 }) {
   if (loading) {
-    return <div className="p-10 text-center text-sm text-zinc-500">Loading materials...</div>;
+    return <div className="p-10 text-center text-sm text-zinc-500">Cargando materiales...</div>;
   }
 
-  if (!rows.length) {
-    return <div className="p-10 text-center text-sm text-zinc-500">No materials match the current filters.</div>;
+  if (!rows.length && !erpRows.length && !erpLoading && !erpError) {
+    return <div className="p-10 text-center text-sm text-zinc-500">No hay materiales que coincidan con los filtros actuales.</div>;
   }
 
   return (
@@ -1314,13 +1407,50 @@ const MaterialResultsList = memo(function MaterialResultsList({
               </div>
             </div>
             <div className="flex items-center justify-between text-xs text-zinc-500">
-              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "units"} ({movementWindowDays}d)</div>
-              <div>Last mov: {formatDate(row.last_movement_date)}</div>
+              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "unidades"} ({movementWindowDays}d)</div>
+              <div>Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
           </div>
         );
       })}
-      {hasMore ? <div className="px-4 py-3 text-[11px] font-medium text-zinc-400">Scroll to load more materials...</div> : null}
+      {hasMore ? <div className="px-4 py-3 text-[11px] font-medium text-zinc-400">Desplázate para cargar más materiales...</div> : null}
+      {erpLoading ? <div className="px-4 py-3 text-xs font-medium text-zinc-500">Buscando en ERP...</div> : null}
+      {erpError ? <div className="px-4 py-3 text-xs font-medium text-red-600 dark:text-red-400">{erpError}</div> : null}
+      {erpRows.length ? (
+        <div className="bg-zinc-50/80 dark:bg-white/[0.02]">
+          <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">ERP sin movimiento en rango</div>
+          <div className="divide-y divide-black/5 dark:divide-white/5">
+            {erpRows.map((row) => {
+              const active = row.sku === selectedMaterialSku;
+              return (
+                <div
+                  key={`erp-${row.sku}`}
+                  onClick={() => onSelectErpMaterial(row)}
+                  className={`cursor-pointer p-4 transition-colors ${
+                    active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
+                  }`}
+                >
+                  {active ? <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" /> : null}
+                  <div className="flex justify-between items-start gap-4 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <h4 className={`text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`}>
+                        {row.material_name}
+                      </h4>
+                    </div>
+                    <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                      {row.sku}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-zinc-500">
+                    <div>{row.unit || "Sin unidad"}</div>
+                    <div>Sin movimiento en este rango</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 });
@@ -1339,7 +1469,7 @@ const CecoResultsList = memo(function CecoResultsList({
   onToggle: (code: string) => void;
 }) {
   if (!rows.length) {
-    return <div className="py-6 text-sm text-zinc-500 text-center">No cost centers match.</div>;
+    return <div className="py-6 text-sm text-zinc-500 text-center">No hay centros de costo coincidentes.</div>;
   }
 
   return (
@@ -1390,7 +1520,7 @@ const CecoResultsList = memo(function CecoResultsList({
           </label>
         );
       })}
-      {hasMore ? <div className="px-2 py-3 text-[11px] font-medium text-zinc-400">Scroll to load more CECOs...</div> : null}
+      {hasMore ? <div className="px-2 py-3 text-[11px] font-medium text-zinc-400">Desplázate para cargar más CECOs...</div> : null}
     </div>
   );
 });
@@ -1407,7 +1537,7 @@ const GroupResultsList = memo(function GroupResultsList({
   onSelect: (key: string) => void;
 }) {
   if (!rows.length) {
-    return <div className="p-10 text-center text-sm text-zinc-500">No groups match the current filters.</div>;
+    return <div className="p-10 text-center text-sm text-zinc-500">No hay grupos que coincidan con los filtros actuales.</div>;
   }
 
   return (
@@ -1470,11 +1600,11 @@ function MovementBreakdownList({
   return (
     <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Movement Breakdown</h4>
+        <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Desglose de Movimientos</h4>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
           <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(movements.length, 0)} movs.</span>
           <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(uniqueCecos, 0)} CECOs</span>
-          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(totalQuantity)} qty</span>
+          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(totalQuantity)} cant.</span>
         </div>
       </div>
 
@@ -1500,11 +1630,11 @@ function MovementBreakdownList({
                   </button>
                 ) : null}
               </div>
-              <div className="text-left md:text-right">Cantidad</div>
+              <div className="text-left md:text-right"><FactoryQuantityLabel /></div>
             </div>
             <div className="flex-1 divide-y divide-black/5 overflow-y-auto dark:divide-white/5">
               {movements.map((movement, index) => {
-                const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "No CECO"} - ${movement.ceco_name}` : movement.ceco ?? "No CECO";
+                const cecoLabel = movement.ceco_name ? `${movement.ceco ?? "Sin CECO"} - ${movement.ceco_name}` : movement.ceco ?? "Sin CECO";
                 const titleParts = [
                   `Fecha: ${formatDate(movement.date)}`,
                   `Cantidad: ${formatNumber(movement.quantity)}`,
@@ -1528,7 +1658,7 @@ function MovementBreakdownList({
                         </span>
                       ) : null}
                       <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
-                        {movement.ceco ?? "No CECO"}
+                        {movement.ceco ?? "Sin CECO"}
                       </span>
                       {movement.movement_internal_number ? (
                         <span className="rounded-full border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
@@ -1538,7 +1668,7 @@ function MovementBreakdownList({
                     </div>
                     <p className="mt-1 truncate text-xs text-zinc-500">
                       {"material_name" in movement ? `${movement.material_name} • ` : ""}
-                      {movement.ceco_name || "No CECO description"}
+                      {movement.ceco_name || "Sin descripción de CECO"}
                       {movement.line_count > 0 ? ` • ${formatNumber(movement.line_count, 0)} lineas SKU` : ""}
                     </p>
                   </div>
@@ -1649,10 +1779,10 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
             </svg>
           </div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-3">Pinned Graph</p>
-          <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">No study selected</h2>
+          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-3">Gráfico Fijado</p>
+          <h2 className="text-xl font-medium text-zinc-900 dark:text-white mb-2">No hay estudio seleccionado</h2>
           <p className="text-sm text-zinc-500">
-            Select a material or group from the list to analyze normalized movement history and stock trends.
+            Selecciona un material o grupo de la lista para analizar el historial de movimientos normalizado y las tendencias de stock.
           </p>
         </div>
       </section>
@@ -1880,7 +2010,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
     <section className="flex-1 flex flex-col h-full bg-white dark:bg-zinc-950 overflow-hidden">
       <div className="p-6 md:p-8 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-6">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Pinned Graph</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Gráfico Fijado</p>
           <div className="flex min-w-0 items-start gap-3">
             <h2 className="min-w-0 flex-1 break-words text-3xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
             {canInspectProjectUsage ? (
@@ -1888,8 +2018,8 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                 type="button"
                 onClick={() => onInspectProjectUsage?.()}
                 className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-accent-300"
-                title="View where this material is specified in the selected project"
-                aria-label={`View ${selected.material_name} usage in the selected project`}
+                title="Ver dónde se especifica este material en el proyecto seleccionado"
+                aria-label={`Ver uso de ${selected.material_name} en el proyecto seleccionado`}
               >
                 <i className="ph-bold ph-info text-sm" />
               </button>
@@ -1898,7 +2028,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
             <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selectedBadge}</span>
             {selectedUnitLabel ? <span>&bull; {selectedUnitLabel}</span> : null}
-            {groupSelection ? <span>&bull; {formatNumber(selectedGroup?.member_count, 0)} members</span> : null}
+            {groupSelection ? <span>&bull; {formatNumber(selectedGroup?.member_count, 0)} miembros</span> : null}
           </p>
           {groupSelection && detailMembers.length ? (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -1916,7 +2046,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
         <div className="flex gap-6 items-end">
           <div className="text-right">
             <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
-              {selectedHouseType ? "Cons./House" : "Stock on Hand"}
+              {selectedHouseType ? "Cons./Vivienda" : "Stock Disponible"}
             </div>
             <div className="flex items-center justify-end gap-2">
                 <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
@@ -1953,7 +2083,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           {selectedHouseType && projectComparisonInRange ? <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" /> : null}
           {selectedHouseType && projectComparisonInRange ? (
             <div className="text-right">
-              <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proj./House</div>
+              <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Proy./Vivienda</div>
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
                 {formatNumber(projectComparisonInRange.predicted_quantity_per_house, houseMetricDigits)}
               </div>
@@ -1965,7 +2095,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           {selectedHouseType && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
             <div className="text-right">
               <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">
-                {consumptionCostDeltaPerHouse > 0 ? "Overcost/House" : consumptionCostDeltaPerHouse < 0 ? "Savings/House" : "Cost/House"}
+                {consumptionCostDeltaPerHouse > 0 ? "Sobrecosto/Vivienda" : consumptionCostDeltaPerHouse < 0 ? "Ahorro/Vivienda" : "Costo/Vivienda"}
               </div>
               <div
                 className={`text-3xl font-light tracking-tight ${
@@ -1982,7 +2112,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           ) : null}
           <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           <div className="text-right">
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{groupSelection ? "Study Unit" : "Avg Price"}</div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{groupSelection ? "Unidad de Estudio" : "Precio Prom."}</div>
             <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
               {groupSelection ? detail?.unit || selectedGroup?.study_unit : detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"}
             </div>
@@ -1998,22 +2128,22 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
                   {selectedHouseType
                     ? isCustomSelection
-                      ? "Selected House Period"
+                      ? "Período de Viviendas Seleccionado"
                       : houseChart
-                        ? `${houseChart.points.length}-Weekday House Trend`
-                        : "House Trend"
+                        ? `Tendencia de Viviendas de ${houseChart.points.length} Días Hábiles`
+                        : "Tendencia de Viviendas"
                     : isCustomSelection
-                      ? "Selected Stock Period"
+                      ? "Período de Stock Seleccionado"
                       : stockRangeChart
-                        ? `${stockRangeChart.points.length}-Business-Day Stock Trend`
-                        : "Stock Trend"}
+                        ? `Tendencia de Stock de ${stockRangeChart.points.length} Días Hábiles`
+                        : "Tendencia de Stock"}
                 </h3>
                 <select
                   value={selectedHouseTypeId === null ? "none" : String(selectedHouseTypeId)}
                   onChange={(event) => onSelectHouseType(event.target.value === "none" ? null : Number(event.target.value))}
                   className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
                 >
-                  <option value="none">None</option>
+                  <option value="none">Ninguno</option>
                   {houseTypes.map((houseType) => (
                     <option key={houseType.id} value={houseType.id}>
                       {houseType.name}
@@ -2025,7 +2155,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   onChange={(event) => onSelectProject(event.target.value ? Number(event.target.value) : null)}
                   className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
                 >
-                  <option value="">No project</option>
+                  <option value="">Sin proyecto</option>
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}
@@ -2038,7 +2168,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     value={houseRange.startDate}
                     max={houseRange.endDate}
                     onChange={(event) => handleHouseRangeStartChange(event.target.value)}
-                    aria-label="Start date"
+                    aria-label="Fecha de inicio"
                     className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                   />
                   <span className="text-[11px] text-zinc-400">-</span>
@@ -2048,7 +2178,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     min={houseRange.startDate}
                     max={latestHouseRangeValue}
                     onChange={(event) => handleHouseRangeEndChange(event.target.value)}
-                    aria-label="End date"
+                    aria-label="Fecha de término"
                     className="w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]"
                   />
                   <button
@@ -2065,7 +2195,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   <div className="mt-1 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
                     <div className="flex items-center gap-2">
                       <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
-                      <span>Material stock</span>
+                      <span>Stock de material</span>
                     </div>
                     {projectComparisonInRange ? (
                       <div className="flex items-center gap-2">
@@ -2075,18 +2205,18 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                     ) : null}
                     <div className="flex items-center gap-2">
                       <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
-                      <span>Remaining house starts</span>
+                      <span>Inicios de vivienda restantes</span>
                     </div>
                   </div>
                 </>
               ) : (
                 <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
-                  Click and drag across the curve to inspect the stock variation and average weekday consumption. Weekend days are omitted.
+                  Haz clic y arrastra sobre la curva para revisar la variación de stock y el consumo promedio en días hábiles. Se omiten los fines de semana.
                 </p>
               )}
-              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing cached ERP data...</p> : null}
+              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando datos ERP en caché...</p> : null}
               {houseComparisonRefreshing && selectedHouseType ? (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Refreshing house-start comparison...</p>
+                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando comparación de inicios de vivienda...</p>
               ) : null}
               {houseComparisonError && selectedHouseType ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
             </div>
@@ -2285,7 +2415,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   </text>
                 </svg>
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No movement history available for this study.</div>
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No hay historial de movimientos disponible para este estudio.</div>
               )
             ) : isHouseBlockingLoad ? (
                 <TrendChartSkeleton dualSeries />
@@ -2603,7 +2733,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   </text>
                 </svg>
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No house-start data available for this range and house type.</div>
+                <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No hay datos de inicios de vivienda para este rango y tipo de vivienda.</div>
               )}
           </div>
 
@@ -2618,12 +2748,27 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
 
         <div className="p-6 md:p-8 bg-zinc-50/50 dark:bg-white/[0.02] flex flex-col gap-6">
           <div>
-            <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Procurement Metrics</h3>
+            <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Métricas de Compras</h3>
             <div className="space-y-3">
-              <MetricRow label="Mov period" value={formatNumber(selected.movement_quantity_60d)} />
-              <MetricRow label="Pend. OC" value={detail ? formatNumber(detail.pending_purchase_quantity) : detailLoading ? "..." : "—"} />
+              <MetricRow label="Período mov." value={formatNumber(selected.movement_quantity_60d)} />
               <MetricRow
-                label="Lead time"
+                label="Pend. OC"
+                value={
+                  detail ? (
+                    !groupSelection && !isGroupDetail(detail) ? (
+                      <PurchaseOrderHoverValue value={formatNumber(detail.pending_purchase_quantity)} purchaseOrders={detail.purchase_orders || []} />
+                    ) : (
+                      formatNumber(detail.pending_purchase_quantity)
+                    )
+                  ) : detailLoading ? (
+                    "..."
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <MetricRow
+                label="Plazo"
                 value={
                   !detail ? (detailLoading ? "..." : "—") : isEditingLeadTimeMode ? (
                     <select
@@ -2638,16 +2783,16 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                       }}
                       className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
                     >
-                      <option value="worst">Worst</option>
-                      <option value="median">Median</option>
-                      <option value="average">Average</option>
+                      <option value="worst">Peor</option>
+                      <option value="median">Mediana</option>
+                      <option value="average">Promedio</option>
                     </select>
                   ) : (
                     <button
                       type="button"
                       onClick={() => setIsEditingLeadTimeMode(true)}
                       className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                      title="Click to choose the lead time metric used on this page"
+                      title="Haz clic para elegir la métrica de plazo usada en esta página"
                     >
                       {leadTimeReference ? `${formatNumber(leadTimeReference.days, getLeadTimeDigits(leadTimeReference.source))} d` : "—"}
                       <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">
@@ -2677,17 +2822,17 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                         }}
                         className="w-24 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-right text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
                       />
-                      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                      <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">semanas</span>
                     </div>
                   ) : (
                     <button
                       type="button"
                       onClick={() => setIsEditingBufferWeeks(true)}
                       className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                      title="Click to edit stock buffer in weeks"
+                      title="Haz clic para editar el colchón de stock en semanas"
                     >
                       {formatNumber(bufferWeeks)}
-                      <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">weeks</span>
+                      <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">semanas</span>
                     </button>
                   )
                 }
@@ -2709,13 +2854,13 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
                   <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">Nueva OC</div>
                   <div className="text-right">
                     <div className="text-xs text-zinc-500">
-                      <span className="font-medium">historic:</span>{" "}
+                      <span className="font-medium">histórico:</span>{" "}
                       <span className={getPurchaseOrderUrgencyClasses(purchaseOrderEstimate?.purchaseOrderDate)}>
                         {formatCondensedDate(purchaseOrderEstimate?.purchaseOrderDate)}
                       </span>
                     </div>
                     <div className="text-xs text-zinc-500 mt-0.5">
-                      <span className="font-medium">estimated:</span>{" "}
+                      <span className="font-medium">estimado:</span>{" "}
                       <span className={getPurchaseOrderUrgencyClasses(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}>
                         {formatCondensedDate(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}
                       </span>
@@ -2768,6 +2913,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [showAllSelectedCecos, setShowAllSelectedCecos] = useState(false);
   const [materialSearchInput, setMaterialSearchInput] = useState("");
   const [materialSearch, setMaterialSearch] = useState("");
+  const [erpMaterialSearchRows, setErpMaterialSearchRows] = useState<MaterialDashboardListRow[]>([]);
+  const [erpMaterialSearchLoading, setErpMaterialSearchLoading] = useState(false);
+  const [erpMaterialSearchError, setErpMaterialSearchError] = useState<string | null>(null);
+  const [externalMaterialRows, setExternalMaterialRows] = useState<Record<string, MaterialDashboardListRow>>({});
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT_STATE);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
@@ -2904,7 +3053,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     : currentGroupHouseComparisonKey
       ? groupHouseComparisonCache[currentGroupHouseComparisonKey] || null
       : null;
-  const selectedMaterialRow = (data?.materials || []).find((row) => row.sku === selectedMaterialSku) || null;
+  const selectedMaterialRow =
+    (data?.materials || []).find((row) => row.sku === selectedMaterialSku) ||
+    (selectedMaterialSku ? externalMaterialRows[selectedMaterialSku] || null : null);
   const selectedGroupRow = (groupData?.groups || []).find((row) => row.group_id === selectedGroupId) || null;
   const selectedRow = selectedMaterialRow || selectedGroupRow;
   const selectedDetailLike = selectedMaterialRow ? selectedDetail : selectedGroupRow ? selectedGroupDetail : null;
@@ -3116,7 +3267,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           return;
         }
         if (!hasCached) {
-          setError(err instanceof ApiError ? err.message : "Could not load dashboard materials.");
+          setError(err instanceof ApiError ? err.message : "No se pudieron cargar los materiales del panel.");
           setSelectedKey((current) => (current?.startsWith("material:") ? null : current));
         }
       } finally {
@@ -3172,7 +3323,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         void setMaterialDashboardCacheValue(currentGroupDashboardKey, response);
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setError((current) => current || (err instanceof ApiError ? err.message : "Could not load material groups."));
+          setError((current) => current || (err instanceof ApiError ? err.message : "No se pudieron cargar los grupos de materiales."));
         }
       }
     }
@@ -3222,7 +3373,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHistoryError(err instanceof ApiError ? err.message : "Could not load material detail.");
+          setHistoryError(err instanceof ApiError ? err.message : "No se pudo cargar el detalle del material.");
         }
       } finally {
         if (!cancelled) {
@@ -3273,7 +3424,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHistoryError(err instanceof ApiError ? err.message : "Could not load material group detail.");
+          setHistoryError(err instanceof ApiError ? err.message : "No se pudo cargar el detalle del grupo de materiales.");
         }
       } finally {
         if (!cancelled) {
@@ -3381,7 +3532,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHistoryError(err instanceof ApiError ? err.message : "Could not load movement history.");
+          setHistoryError(err instanceof ApiError ? err.message : "No se pudo cargar el historial de movimientos.");
         }
       } finally {
         if (!cancelled) {
@@ -3436,7 +3587,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHistoryError(err instanceof ApiError ? err.message : "Could not load material group history.");
+          setHistoryError(err instanceof ApiError ? err.message : "No se pudo cargar el historial del grupo de materiales.");
         }
       } finally {
         if (!cancelled) {
@@ -3507,7 +3658,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHouseComparisonError(err instanceof ApiError ? err.message : "Could not load house-start comparison.");
+          setHouseComparisonError(err instanceof ApiError ? err.message : "No se pudo cargar la comparación de inicios de vivienda.");
         }
       } finally {
         if (!cancelled) {
@@ -3569,7 +3720,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setHouseComparisonError(err instanceof ApiError ? err.message : "Could not load group house-start comparison.");
+          setHouseComparisonError(err instanceof ApiError ? err.message : "No se pudo cargar la comparación de inicios de vivienda del grupo.");
         }
       } finally {
         if (!cancelled) {
@@ -3630,7 +3781,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }
       } catch (err) {
         if (!cancelled && !hasCached) {
-          setEconomicMetricsError(err instanceof ApiError ? err.message : "Could not load economic metrics.");
+          setEconomicMetricsError(err instanceof ApiError ? err.message : "No se pudieron cargar las métricas económicas.");
         }
       } finally {
         if (!cancelled) {
@@ -3646,6 +3797,42 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   const normalizedMaterialSearch = deferredMaterialSearch.trim().toLowerCase();
   const isMaterialSearchPending = materialSearchInput !== deferredMaterialSearch;
+  useEffect(() => {
+    const query = deferredMaterialSearch.trim();
+    if (activeTab !== "materials" || query.length < 2) {
+      setErpMaterialSearchRows([]);
+      setErpMaterialSearchError(null);
+      setErpMaterialSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setErpMaterialSearchLoading(true);
+    setErpMaterialSearchError(null);
+    async function loadErpMaterialSearch() {
+      try {
+        const response = await api.searchMaterialDashboardMaterials(query, 10);
+        if (cancelled) {
+          return;
+        }
+        setErpMaterialSearchRows(response.results.map(materialSearchResultToDashboardRow));
+      } catch (err) {
+        if (!cancelled) {
+          setErpMaterialSearchRows([]);
+          setErpMaterialSearchError(err instanceof ApiError ? err.message : "No se pudo buscar materiales en ERP.");
+        }
+      } finally {
+        if (!cancelled) {
+          setErpMaterialSearchLoading(false);
+        }
+      }
+    }
+    void loadErpMaterialSearch();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, deferredMaterialSearch]);
+
   const fallbackMaterialSort: { key: BaseSortKey; direction: 1 | -1 } = isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : sort;
   const groupSort: { key: BaseSortKey; direction: 1 | -1 } = isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : sort;
   const rows = useMemo(
@@ -3690,6 +3877,20 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         }),
     [currentEconomicMetrics, data?.materials, economicMetricsBySku, fallbackMaterialSort, normalizedMaterialSearch, sort],
   );
+  const erpOnlyRows = useMemo(() => {
+    if (!normalizedMaterialSearch) {
+      return [];
+    }
+    const movementSkus = new Set((data?.materials || []).map((row) => row.sku));
+    const seen = new Set<string>();
+    return erpMaterialSearchRows.filter((row) => {
+      if (movementSkus.has(row.sku) || seen.has(row.sku)) {
+        return false;
+      }
+      seen.add(row.sku);
+      return true;
+    });
+  }, [data?.materials, erpMaterialSearchRows, normalizedMaterialSearch]);
   const groupRows = useMemo(
     () =>
       (groupData?.groups || [])
@@ -3738,15 +3939,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   }
 
   const materialSortOptions: Array<{ key: SortKey; label: string }> = [
-    { key: "last_movement_date", label: "Last ERP movement" },
-    { key: "movement_quantity_60d", label: "Movement quantity" },
-    { key: "movement_count_60d", label: "Movement count" },
-    { key: "material_name", label: "Material name" },
+    { key: "last_movement_date", label: "Último movimiento ERP" },
+    { key: "movement_quantity_60d", label: "Cantidad de movimiento" },
+    { key: "movement_count_60d", label: "Conteo de movimientos" },
+    { key: "material_name", label: "Nombre de material" },
     { key: "sku", label: "SKU" },
     ...(materialEconomicSortAvailable
       ? [
-          { key: "consumption_cost_delta_per_house" as const, label: "Cost delta / house" },
-          { key: "consumption_delta_percent" as const, label: "Delta % / house" },
+          { key: "consumption_cost_delta_per_house" as const, label: "Delta de costo / vivienda" },
+          { key: "consumption_delta_percent" as const, label: "Delta % / vivienda" },
         ]
       : []),
   ];
@@ -3783,12 +3984,17 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     if (!selectedProjectId) {
       return;
     }
-    const projectName = projectOptions.find((project) => project.id === selectedProjectId)?.name || "Selected project";
+    const projectName = projectOptions.find((project) => project.id === selectedProjectId)?.name || "Proyecto seleccionado";
     setProjectUsageTarget({
       projectId: selectedProjectId,
       projectName,
       material: row,
     });
+  }
+
+  function handleSelectErpMaterial(row: MaterialDashboardListRow) {
+    setExternalMaterialRows((current) => ({ ...current, [row.sku]: row }));
+    setSelectedKey(`material:${row.sku}`);
   }
 
   useEffect(() => {
@@ -3823,10 +4029,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         {/* Header and Tabs */}
         <div className="p-4 lg:p-6 pb-0 border-b border-black/5 dark:border-white/5 flex flex-col gap-4">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Filters</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Filtros</p>
             <div className="flex items-end justify-between mb-4">
-              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">ERP Activity</h2>
-              <div className="text-xs text-zinc-500">Updated: {formatDate(activeTab === "groups" ? groupData?.generated_at : data?.generated_at)}</div>
+              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Actividad ERP</h2>
+              <div className="text-xs text-zinc-500">Actualizado: {formatDate(activeTab === "groups" ? groupData?.generated_at : data?.generated_at)}</div>
             </div>
           </div>
 
@@ -3836,7 +4042,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
               onClick={() => setActiveTab("materials")}
               className={`pb-3 text-sm font-semibold transition-colors relative ${activeTab === "materials" ? "text-accent-600 dark:text-accent-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
             >
-              Materials
+              Materiales
               {activeTab === "materials" ? (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500 rounded-t-full" />
               ) : null}
@@ -3846,7 +4052,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
               onClick={() => setActiveTab("groups")}
               className={`pb-3 text-sm font-semibold transition-colors relative ${activeTab === "groups" ? "text-accent-600 dark:text-accent-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
             >
-              Groups
+              Grupos
               {activeTab === "groups" ? (
                 <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500 rounded-t-full" />
               ) : null}
@@ -3856,7 +4062,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
               onClick={() => setActiveTab("cecos")}
               className={`pb-3 text-sm font-semibold transition-colors relative flex items-center gap-2 ${activeTab === "cecos" ? "text-accent-600 dark:text-accent-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"}`}
             >
-              Cost Centers
+              Centros de Costo
               {normalizedSelectedCecoCodes.length > 0 ? (
                 <span className="bg-accent-100 dark:bg-accent-500/20 text-accent-700 dark:text-accent-400 text-[10px] px-1.5 py-0.5 rounded-full">
                   {normalizedSelectedCecoCodes.length}
@@ -3877,7 +4083,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 <SidebarSearchInput
                   value={materialSearchInput}
                   pending={isMaterialSearchPending}
-                  placeholder="SKU or material name"
+                  placeholder="SKU o nombre de material"
                   onChange={handleMaterialSearchChange}
                 />
                 <div className="flex gap-2">
@@ -3886,14 +4092,14 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     onClick={handleReload}
                     className="flex-1 rounded-xl bg-accent-500 text-zinc-950 font-semibold text-sm px-4 py-2 hover:bg-accent-400 transition-colors shadow-sm"
                   >
-                    Reload
+                    Recargar
                   </button>
                   <button
                     type="button"
                     onClick={handleResetCecoFilter}
                     className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-medium px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/10 transition-colors shadow-sm"
                   >
-                    Reset CECO Filter
+                    Reiniciar filtro CECO
                   </button>
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
@@ -3915,18 +4121,18 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     type="button"
                     onClick={() => setSort((current) => ({ ...current, direction: current.direction === 1 ? -1 : 1 }))}
                     className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-white/10 shadow-sm"
-                    title={sort.direction === -1 ? "Descending" : "Ascending"}
+                    title={sort.direction === -1 ? "Descendente" : "Ascendente"}
                   >
                     {sort.direction === -1 ? "Desc" : "Asc"}
                   </button>
                 </div>
                 {!materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
-                    Select a house type and project to show savings and overcost per house in the list, and sort by it.
+                    Selecciona un tipo de vivienda y proyecto para mostrar ahorro y sobrecosto por vivienda en la lista, y ordenar por ese dato.
                   </div>
                 ) : null}
                 {materialEconomicSortAvailable && economicMetricsLoading && !currentEconomicMetrics ? (
-                  <div className="text-[11px] text-amber-600 dark:text-amber-500">Calculating per-house savings and overcost for the selected range...</div>
+                  <div className="text-[11px] text-amber-600 dark:text-amber-500">Calculando ahorro y sobrecosto por vivienda para el rango seleccionado...</div>
                 ) : null}
                 {error ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div> : null}
                 {historyError ? <div className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{historyError}</div> : null}
@@ -3947,11 +4153,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 <MaterialResultsList
                   loading={loading}
                   rows={visibleMaterialRows}
+                  erpRows={erpOnlyRows}
+                  erpLoading={erpMaterialSearchLoading}
+                  erpError={erpMaterialSearchError}
                   hasMore={hasMoreMaterialRows}
                   movementWindowDays={data?.movement_window_days || currentDashboardMovementDays}
                   economicMetricsBySku={economicMetricsBySku}
                   selectedMaterialSku={selectedMaterialSku}
                   onSelect={setSelectedKey}
+                  onSelectErpMaterial={handleSelectErpMaterial}
                 />
               </div>
             </div>
@@ -3961,7 +4171,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 <SidebarSearchInput
                   value={materialSearchInput}
                   pending={isMaterialSearchPending}
-                  placeholder="Group name"
+                  placeholder="Nombre del grupo"
                   onChange={handleMaterialSearchChange}
                 />
                 <div className="flex gap-2">
@@ -3970,7 +4180,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     onClick={handleReload}
                     className="flex-1 rounded-xl bg-accent-500 text-zinc-950 font-semibold text-sm px-4 py-2 hover:bg-accent-400 transition-colors shadow-sm"
                   >
-                    Reload
+                    Recargar
                   </button>
                   {canEditGroups ? (
                     <button
@@ -3978,7 +4188,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                       onClick={() => setGroupEditorOpen(true)}
                       className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-medium px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/10 transition-colors shadow-sm"
                     >
-                      Manage Groups
+                      Administrar grupos
                     </button>
                   ) : null}
                 </div>
@@ -4005,7 +4215,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   value={cecoSearch}
                   onChange={(event) => setCecoSearch(event.target.value)}
                   className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
-                  placeholder="Search CECO..."
+                  placeholder="Buscar CECO..."
                 />
 
                 <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
@@ -4019,7 +4229,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                           : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
                       }`}
                     >
-                      All But Selected
+                      Todos excepto seleccionados
                     </button>
                     <button
                       type="button"
@@ -4030,22 +4240,22 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                           : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
                       }`}
                     >
-                      Only Selected
+                      Solo seleccionados
                     </button>
                   </div>
                 </div>
 
                 <p className="text-xs leading-5 text-zinc-500">
                   {cecoFilterMode === "exclude"
-                    ? "Select CECOs to hide them from the dashboard."
-                    : "Select the only CECOs that should remain visible in the dashboard."}
+                    ? "Selecciona CECOs para ocultarlos del panel."
+                    : "Selecciona los únicos CECOs que deben permanecer visibles en el panel."}
                 </p>
 
                 {normalizedSelectedCecoCodes.length > 0 ? (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-                        {cecoFilterMode === "exclude" ? "Hidden" : "Included"}
+                        {cecoFilterMode === "exclude" ? "Ocultos" : "Incluidos"}
                       </div>
                       {shouldCollapseSelectedCecos ? (
                         <button

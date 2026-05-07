@@ -221,12 +221,12 @@ def seed_demo_dataset(session: Session) -> None:
     session.add_all([anchor_screw, smart_lock_kit, laminated_glass, frame_trim, cabinet_board, silicone])
     session.flush()
 
-    always_rule = ComponentMaterialRule(component=door, material=anchor_screw, display_order=1, unit="ea", unit_qty_per_unit=8, notes="Always used on every installed door.")
-    smart_rule = ComponentMaterialRule(component=door, material=smart_lock_kit, display_order=2, unit="ea", unit_qty_per_unit=1, notes="Only applies to smart-ready door configurations.")
-    window_glass_rule = ComponentMaterialRule(component=window, material=laminated_glass, display_order=1, unit="m2", unit_qty_per_unit=1.8, notes="Only for laminated glazing selections.")
-    window_silicone_rule = ComponentMaterialRule(component=window, material=silicone, display_order=2, unit="cartridge", unit_qty_per_unit=0.25, notes="Sealant remains visible even if quantity is blank.")
-    trim_rule = ComponentMaterialRule(component=trim_kit, material=frame_trim, display_order=1, unit="m", unit_qty_per_unit=5.5, notes="Accessory material pulled through linked trim applications.")
-    cabinet_rule = ComponentMaterialRule(component=cabinet, material=cabinet_board, display_order=1, unit="sheet", unit_qty_per_unit=1.2, notes="Manual override allowed for custom cabinet layouts.")
+    always_rule = ComponentMaterialRule(component=door, material=anchor_screw, display_order=1, unit="ea", unit_qty_per_unit=8)
+    smart_rule = ComponentMaterialRule(component=door, material=smart_lock_kit, display_order=2, unit="ea", unit_qty_per_unit=1)
+    window_glass_rule = ComponentMaterialRule(component=window, material=laminated_glass, display_order=1, unit="m2", unit_qty_per_unit=1.8)
+    window_silicone_rule = ComponentMaterialRule(component=window, material=silicone, display_order=2, unit="cartridge", unit_qty_per_unit=0.25)
+    trim_rule = ComponentMaterialRule(component=trim_kit, material=frame_trim, display_order=1, unit="m", unit_qty_per_unit=5.5)
+    cabinet_rule = ComponentMaterialRule(component=cabinet, material=cabinet_board, display_order=1, unit="sheet", unit_qty_per_unit=1.2)
     session.add_all([always_rule, smart_rule, window_glass_rule, window_silicone_rule, trim_rule, cabinet_rule])
     session.flush()
 
@@ -585,10 +585,10 @@ def seed_demo_dataset(session: Session) -> None:
                 entity_id=3,
                 action="updated",
                 details=build_activity_details(
-                    headline="Material quantities changed",
+                    headline="Q_fábrica de materiales modificada",
                     subject_name="Laminated Glass Panel",
                     notes=[f"Component: {window_instance.name}"],
-                    changes=[build_activity_change("Standard quantity", "2.8", "3.2")],
+                    changes=[build_activity_change("Q_fábrica estándar", "2.8", "3.2")],
                     kind="material",
                 ),
             ),
@@ -1182,7 +1182,6 @@ def ensure_linked_accessory_demo(
         display_order=1,
         unit="l",
         unit_qty_per_unit=1.0,
-        notes="Usage quantity is coordinated from explicit occurrences rather than duplicated paint chapters.",
     )
     ensure_material_rule(
         session,
@@ -1191,7 +1190,6 @@ def ensure_linked_accessory_demo(
         display_order=1,
         unit="cartridge",
         unit_qty_per_unit=1.0,
-        notes="Sealant contexts are tracked explicitly so repeated joints remain readable in the spec sheet.",
     )
 
     door_instance = anchor_instances.get("Door A") or session.scalar(
@@ -1481,7 +1479,6 @@ def ensure_material_rule(
     display_order: int,
     unit: str | None,
     unit_qty_per_unit: float | None,
-    notes: str | None,
 ) -> ComponentMaterialRule:
     rule = session.scalar(
         select(ComponentMaterialRule).where(
@@ -1496,7 +1493,6 @@ def ensure_material_rule(
             display_order=display_order,
             unit=unit,
             unit_qty_per_unit=unit_qty_per_unit,
-            notes=notes,
         )
         session.add(rule)
         session.flush()
@@ -1504,7 +1500,6 @@ def ensure_material_rule(
         rule.display_order = display_order
         rule.unit = unit
         rule.unit_qty_per_unit = unit_qty_per_unit
-        rule.notes = notes
     return rule
 
 

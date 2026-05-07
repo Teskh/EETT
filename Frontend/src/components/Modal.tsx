@@ -1,9 +1,9 @@
-import { type PropsWithChildren, useEffect } from "react";
+import { type PropsWithChildren, type ReactNode, useEffect } from "react";
 
 type ModalProps = PropsWithChildren<{
   open: boolean;
-  title: string;
-  kicker: string;
+  title: ReactNode;
+  kicker: ReactNode;
   onClose: () => void;
   panelClassName?: string;
 }>;
@@ -38,7 +38,7 @@ export function Modal({ open, title, kicker, onClose, panelClassName, children }
         type="button"
         className="absolute inset-0 bg-zinc-950/80 backdrop-blur-sm border-0 p-0 w-full h-full cursor-default" 
         onClick={onClose} 
-        aria-label="Close modal" 
+        aria-label="Cerrar modal"
       />
       <section className={`relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-2xl p-6 z-10 ${panelClassName || ""}`}>
         <div className="flex items-start justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-6">

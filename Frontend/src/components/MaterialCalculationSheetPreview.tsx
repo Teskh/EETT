@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
+import { FactoryQuantityLabel } from "./QuantityLabels";
 import {
   DEFAULT_CALCULATION_SHEET_COLUMNS,
   DEFAULT_CALCULATION_SHEET_ROWS,
@@ -78,7 +79,7 @@ export function MaterialCalculationSheetPreview({
         if (cancelled) {
           return;
         }
-        setError(err instanceof ApiError ? err.message : "Could not load the calculation sheet.");
+        setError(err instanceof ApiError ? err.message : "No se pudo cargar la planilla de cálculo.");
         setSheet(null);
         setCellMap({});
         setRowCount(DEFAULT_CALCULATION_SHEET_ROWS);
@@ -103,7 +104,7 @@ export function MaterialCalculationSheetPreview({
   const selectedDisplayValue =
     evaluation.displayValues[selectedKey] ?? (selectedRawInput.trim() ? selectedRawInput.trim() : "");
   const selectedError = evaluation.errorValues[selectedKey] ?? null;
-  const updatedAtLabel = sheet?.updated_at ? new Date(sheet.updated_at).toLocaleString() : "Not saved yet";
+  const updatedAtLabel = sheet?.updated_at ? new Date(sheet.updated_at).toLocaleString() : "Aún no guardada";
 
   return (
     <div className="flex h-full flex-col rounded-2xl border border-black/10 bg-zinc-50/80 dark:border-white/10 dark:bg-black/20">
@@ -114,15 +115,15 @@ export function MaterialCalculationSheetPreview({
               {instanceName} | {material.sku}
             </p>
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-              Read-only preview of the saved quantity reasoning sheet for this item/material pair.
+              Vista previa de solo lectura de la planilla de razonamiento de <FactoryQuantityLabel /> guardada para este par ítem/material.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-              {sheet?.cell_count ?? 0} saved cells
+              {sheet?.cell_count ?? 0} celdas guardadas
             </span>
             <span className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-              Updated {updatedAtLabel}
+              Actualizada {updatedAtLabel}
             </span>
           </div>
         </div>
@@ -142,46 +143,46 @@ export function MaterialCalculationSheetPreview({
                 {calculationCellLabel(selectedCell.rowIndex, selectedCell.columnIndex)}
               </span>
               <span className="text-xs text-zinc-600 dark:text-zinc-400">
-                Value:{" "}
+                Valor:{" "}
                 <strong className={selectedError ? "text-red-700 dark:text-red-300" : "text-zinc-900 dark:text-zinc-100"}>
-                  {selectedDisplayValue || "Blank"}
+                  {selectedDisplayValue || "En blanco"}
                 </strong>
               </span>
             </div>
             <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              Grid size: {rowCount} x {columnCount}
+              Tamaño de grilla: {rowCount} x {columnCount}
             </span>
           </div>
           <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_180px]">
             <div>
-              <div className="mb-2 text-[11px] font-bold uppercase tracking-widest text-zinc-500">Raw Input</div>
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-widest text-zinc-500">Entrada original</div>
               <div className="min-h-[68px] rounded-xl border border-black/10 bg-zinc-50 px-4 py-3 text-sm text-zinc-900 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100">
-                {selectedRawInput || <span className="text-zinc-400 dark:text-zinc-500">Blank</span>}
+                {selectedRawInput || <span className="text-zinc-400 dark:text-zinc-500">En blanco</span>}
               </div>
             </div>
             <div>
-              <div className="mb-2 text-[11px] font-bold uppercase tracking-widest text-zinc-500">Status</div>
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-widest text-zinc-500">Estado</div>
               <div className="min-h-[68px] rounded-xl border border-black/10 bg-zinc-50 px-4 py-3 text-sm text-zinc-900 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100">
                 {selectedError ? (
                   <span className="text-red-700 dark:text-red-300">{selectedError}</span>
                 ) : selectedRawInput ? (
-                  "Formula or value loaded"
+                  "Fórmula o valor cargado"
                 ) : (
-                  <span className="text-zinc-400 dark:text-zinc-500">No saved input</span>
+                  <span className="text-zinc-400 dark:text-zinc-500">Sin entrada guardada</span>
                 )}
               </div>
             </div>
           </div>
           {sheet && sheet.cell_count === 0 ? (
             <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-              This item has no saved calculation sheet yet.
+              Este ítem aún no tiene una planilla de cálculo guardada.
             </p>
           ) : null}
         </div>
 
         <div className="overflow-auto rounded-2xl border border-black/10 bg-white dark:border-white/10 dark:bg-black/20 max-h-[52vh]">
           {loading ? (
-            <div className="p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading calculation sheet...</div>
+            <div className="p-8 text-sm text-zinc-600 dark:text-zinc-400">Cargando planilla de cálculo...</div>
           ) : (
             <table className="w-full border-collapse text-sm font-mono">
               <thead className="sticky top-0 z-10 bg-zinc-100/95 dark:bg-zinc-900/95 backdrop-blur">

@@ -1,6 +1,7 @@
 import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import { Modal } from "./Modal";
+import { FactoryQuantityLabel } from "./QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import {
   DEFAULT_CALCULATION_SHEET_COLUMNS,
@@ -43,7 +44,7 @@ function renderHighlightedEditorValue(
   referenceColorMap: Record<string, string>,
 ): ReactNode {
   if (!rawInput) {
-    return <span className="text-zinc-400 dark:text-zinc-500">Enter text, a number, or =A1+B1</span>;
+    return <span className="text-zinc-400 dark:text-zinc-500">Ingresa texto, un número o =A1+B1</span>;
   }
 
   if (!referenceMatches.length) {
@@ -95,7 +96,7 @@ export function MaterialCalculationSheetModal({
 
   async function loadSheet() {
     if (material.rule_id === null) {
-      setError("Calculation sheets are available for catalog material rules.");
+      setError("Las planillas de cálculo están disponibles para reglas de materiales del catálogo.");
       return;
     }
     setLoading(true);
@@ -112,7 +113,7 @@ export function MaterialCalculationSheetModal({
       setFocusMode("grid");
       setSavedSignature(buildSheetSignature(nextCellMap));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not load the calculation sheet.");
+      setError(err instanceof ApiError ? err.message : "No se pudo cargar la planilla de cálculo.");
     } finally {
       setLoading(false);
     }
@@ -148,7 +149,7 @@ export function MaterialCalculationSheetModal({
   }
   const isReferenceInsertionMode = focusMode === "editor" && selectedRawInput.trimStart().startsWith("=");
   const isDirty = buildSheetSignature(cellMap) !== savedSignature;
-  const updatedAtLabel = sheet?.updated_at ? new Date(sheet.updated_at).toLocaleString() : "Not saved yet";
+  const updatedAtLabel = sheet?.updated_at ? new Date(sheet.updated_at).toLocaleString() : "Aún no guardada";
 
   useEffect(() => {
     if (!open || !pendingCaretRangeRef.current) {
@@ -168,7 +169,7 @@ export function MaterialCalculationSheetModal({
   }, [open, selectedCell, selectedRawInput]);
 
   function handleClose() {
-    if (isDirty && !window.confirm("Discard unsaved calculation sheet changes?")) {
+    if (isDirty && !window.confirm("¿Descartar los cambios no guardados de la planilla de cálculo?")) {
       return;
     }
     onClose();
@@ -298,7 +299,7 @@ export function MaterialCalculationSheetModal({
 
   async function handleSave() {
     if (material.rule_id === null) {
-      setError("Calculation sheets are available for catalog material rules.");
+      setError("Las planillas de cálculo están disponibles para reglas de materiales del catálogo.");
       return;
     }
     setSaving(true);
@@ -310,7 +311,7 @@ export function MaterialCalculationSheetModal({
       setSheet(nextSheet);
       setSavedSignature(buildSheetSignature(cellMap));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Could not save the calculation sheet.");
+      setError(err instanceof ApiError ? err.message : "No se pudo guardar la planilla de cálculo.");
     } finally {
       setSaving(false);
     }
@@ -319,8 +320,8 @@ export function MaterialCalculationSheetModal({
   return (
     <Modal
       open={open}
-      title={`${material.material_name} calculation sheet`}
-      kicker="Quantity Reasoning"
+      title={`Planilla de cálculo de ${material.material_name}`}
+      kicker={<>Razonamiento de <FactoryQuantityLabel /></>}
       onClose={handleClose}
       panelClassName="!max-w-[96vw] xl:!max-w-6xl"
     >
@@ -331,18 +332,18 @@ export function MaterialCalculationSheetModal({
               {instanceName} | {material.sku}
             </p>
             <p className="text-xs text-zinc-600 dark:text-zinc-400">
-              This sheet is only for documenting quantity reasoning. It does not update the saved material quantities.
+              Esta planilla solo documenta el razonamiento de <FactoryQuantityLabel />. No actualiza la <FactoryQuantityLabel /> guardada del material.
             </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Only non-empty cells are stored. Formulas support basic arithmetic and cell references such as `=A1+B1`.
+              Solo se guardan las celdas con contenido. Las fórmulas admiten aritmética básica y referencias de celdas como `=A1+B1`.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-black/10 dark:border-white/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
-              {serializeCalculationCellMap(cellMap).length} saved cells
+              {serializeCalculationCellMap(cellMap).length} celdas guardadas
             </span>
             <span className="rounded-full border border-black/10 dark:border-white/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
-              Updated {updatedAtLabel}
+              Actualizada {updatedAtLabel}
             </span>
             <button
               type="button"
@@ -350,7 +351,7 @@ export function MaterialCalculationSheetModal({
               onFocus={handleControlFocus}
               className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold text-zinc-800 dark:text-zinc-200"
             >
-              Add rows
+              Agregar filas
             </button>
             <button
               type="button"
@@ -358,7 +359,7 @@ export function MaterialCalculationSheetModal({
               onFocus={handleControlFocus}
               className="px-3 py-2 rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs font-semibold text-zinc-800 dark:text-zinc-200"
             >
-              Add columns
+              Agregar columnas
             </button>
             <button
               type="button"
@@ -367,7 +368,7 @@ export function MaterialCalculationSheetModal({
               onFocus={handleControlFocus}
               className="px-4 py-2 rounded-lg border border-transparent bg-accent-500 text-zinc-950 text-xs font-bold disabled:opacity-60"
             >
-              {saving ? "Saving..." : "Save sheet"}
+              {saving ? "Guardando..." : "Guardar planilla"}
             </button>
           </div>
         </div>
@@ -385,16 +386,16 @@ export function MaterialCalculationSheetModal({
                 {calculationCellLabel(selectedCell.rowIndex, selectedCell.columnIndex)}
               </span>
               <span className="text-xs text-zinc-600 dark:text-zinc-400">
-                Preview:{" "}
+                Vista previa:{" "}
                 <strong className={selectedError ? "text-red-700 dark:text-red-300" : "text-zinc-900 dark:text-zinc-100"}>
-                  {selectedDisplayValue || "Blank"}
+                  {selectedDisplayValue || "En blanco"}
                 </strong>
               </span>
             </div>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">Grid size: {rowCount} x {columnCount}</span>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">Tamaño de grilla: {rowCount} x {columnCount}</span>
           </div>
           <div className="mt-3">
-            <label className="block text-[11px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Input</label>
+            <label className="block text-[11px] font-bold uppercase tracking-widest text-zinc-500 mb-2">Entrada</label>
             <div className="relative min-h-[56px] rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/30">
               <div
                 ref={editorHighlightRef}
@@ -410,21 +411,21 @@ export function MaterialCalculationSheetModal({
                 onFocus={() => setFocusMode("editor")}
                 onKeyDown={handleEditorKeyDown}
                 onScroll={syncEditorScroll}
-                placeholder="Enter text, a number, or =A1+B1"
+                placeholder="Ingresa texto, un número o =A1+B1"
                 disabled={loading}
                 rows={2}
                 className="relative z-10 block min-h-[56px] w-full resize-none overflow-auto rounded-xl bg-transparent px-4 py-3 text-sm text-transparent caret-zinc-900 dark:caret-white focus:outline-none"
               />
             </div>
             <p className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
-              `Enter` moves down, `Tab` moves right, and holding `Shift` reverses direction.
+              `Enter` baja, `Tab` avanza a la derecha y mantener `Shift` invierte la dirección.
             </p>
           </div>
         </div>
 
         <div className="overflow-auto rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 max-h-[60vh]">
           {loading ? (
-            <div className="p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading calculation sheet...</div>
+            <div className="p-8 text-sm text-zinc-600 dark:text-zinc-400">Cargando planilla de cálculo...</div>
           ) : (
             <table className="w-full border-collapse text-sm font-mono">
               <thead className="sticky top-0 z-10 bg-zinc-100/95 dark:bg-zinc-900/95 backdrop-blur">

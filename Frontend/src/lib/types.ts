@@ -24,6 +24,20 @@ export type MaterialDashboardPurchaseOrder = {
   estimated_delivery: string | null;
 };
 
+export type MaterialDashboardPurchaseOrderLine = {
+  date: string | null;
+  number: string | null;
+  estimated_delivery: string | null;
+  status_code: string | null;
+  line_number: string | null;
+  ordered_quantity: number | null;
+  unit_price: number | null;
+  received_quantity: number | null;
+  received_not_invoiced_quantity: number | null;
+  pending_quantity: number | null;
+  counted_in_pending: boolean;
+};
+
 export type MaterialDashboardListRow = {
   sku: string;
   material_name: string;
@@ -49,6 +63,7 @@ export type MaterialDashboardDetail = {
   days_of_stock_30d: number | null;
   reorder_date_recent_rate: string | null;
   last_purchase_order: MaterialDashboardPurchaseOrder;
+  purchase_orders: MaterialDashboardPurchaseOrderLine[];
 };
 
 export type MaterialDashboardData = {
@@ -188,7 +203,6 @@ export type MaterialDashboardProjectUsageItem = {
   rule_id: number | null;
   material_id: number;
   unit_qty_per_unit: number | null;
-  rule_notes: string | null;
   total_quantity: number;
   blank_quantity_count: number;
   zero_quantity_count: number;
@@ -371,6 +385,34 @@ export type UpdateUserRequest = {
   is_active: boolean;
 };
 
+export type BackupRecord = {
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+  label?: string | null;
+};
+
+export type BackupSettings = {
+  enabled: boolean;
+  interval_minutes: number;
+  retention_count: number;
+  last_backup_at: string | null;
+};
+
+export type BackupCreateResponse = {
+  backup: BackupRecord;
+  settings: BackupSettings;
+  pruned: string[];
+};
+
+export type BackupRestoreResponse = {
+  primary_db: string;
+  archived_db: string;
+  restored_from: string;
+  checkpoint_backup: BackupRecord;
+  pruned: string[];
+};
+
 export type CatalogTreeNode = {
   id: number;
   name: string;
@@ -406,7 +448,6 @@ export type CatalogMaterialRule = {
   sku: string;
   unit: string | null;
   unit_qty_per_unit: number | null;
-  notes: string | null;
   conditions: MaterialConditionGroup[];
 };
 
@@ -424,6 +465,21 @@ export type CatalogMaterialSearchResponse = {
   live_erp_available: boolean;
 };
 
+export type MediaAsset = {
+  id: number;
+  kind: string;
+  uri: string;
+  original_filename: string | null;
+  content_type: string | null;
+  byte_size: number | null;
+  sha256: string | null;
+  width: number | null;
+  height: number | null;
+  created_at: string | null;
+  caption?: string | null;
+  sort_order?: number;
+};
+
 export type CatalogComponent = {
   id: number;
   category_id: number;
@@ -437,6 +493,7 @@ export type CatalogComponent = {
   base_attributes: CatalogAttribute[];
   usage_attributes: CatalogAttribute[];
   material_rules: CatalogMaterialRule[];
+  media: MediaAsset[];
 };
 
 export type CatalogCategoryChip = {
@@ -578,7 +635,6 @@ export type InstanceMaterial = {
   sku: string;
   unit_qty_per_unit: number | null;
   unit: string | null;
-  notes: string | null;
   source_status: string;
   source_label: string | null;
   applicability: MaterialApplicability;
@@ -667,6 +723,7 @@ export type AvailableComponent = {
   base_attributes: CatalogAttribute[];
   usage_attributes: CatalogAttribute[];
   material_rules: CatalogMaterialRule[];
+  media: MediaAsset[];
 };
 
 export type ProjectInstance = {
@@ -687,7 +744,7 @@ export type ProjectInstance = {
   incoming_occurrences: UsageOccurrence[];
   materials: InstanceMaterial[];
   sync_state: SyncState;
-  media: Array<{ kind: string; uri: string; caption: string | null }>;
+  media: MediaAsset[];
   export_settings: Array<{ target: string; settings: Record<string, unknown> }>;
   material_mode: string;
 };
@@ -906,6 +963,7 @@ export type CreateProjectInstanceRequest = {
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];
   selected_material_rule_ids?: number[] | null;
+  media_asset_id?: number | null;
 };
 
 export type UpdateProjectInstanceRequest = {
@@ -916,6 +974,8 @@ export type UpdateProjectInstanceRequest = {
   installation?: string | null;
   unit_amount?: number | null;
   attribute_values?: AttributeValueInput[];
+  media_asset_id?: number | null;
+  clear_media?: boolean;
 };
 
 export type UpdateProjectOccurrenceRequest = {

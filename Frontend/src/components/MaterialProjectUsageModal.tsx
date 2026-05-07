@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Modal } from "./Modal";
 import { MaterialCalculationSheetPreview } from "./MaterialCalculationSheetPreview";
+import { FactoryQuantityLabel, WorkQuantityLabel, renderQuantityText } from "./QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import type {
   MaterialDashboardListRow,
@@ -30,7 +31,7 @@ function formatQuantity(value: number | null | undefined) {
 
 function formatUpdatedAt(value: string | null) {
   if (!value) {
-    return "Not saved";
+    return "No guardado";
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
@@ -42,7 +43,7 @@ function projectUsageItemKey(item: MaterialDashboardProjectUsageItem) {
 
 function quantityStateLabel(value: number | null, state: string) {
   if (state === "blank") {
-    return "Blank";
+    return "En blanco";
   }
   if (state === "zero") {
     return "0";
@@ -56,9 +57,6 @@ function calculationLabel(item: MaterialDashboardProjectUsageItem, breakdown: Ma
   }
   if (breakdown.calculation_explanation) {
     return breakdown.calculation_explanation;
-  }
-  if (item.rule_notes) {
-    return item.rule_notes;
   }
   return breakdown.calculation_mode;
 }
@@ -95,7 +93,7 @@ export function MaterialProjectUsageModal({
         if (cancelled) {
           return;
         }
-        setError(err instanceof ApiError ? err.message : "Could not load project usage for this material.");
+        setError(err instanceof ApiError ? err.message : "No se pudo cargar el uso de proyecto para este material.");
         setData(null);
         setSelectedItemKey(null);
       } finally {
@@ -121,8 +119,8 @@ export function MaterialProjectUsageModal({
   return (
     <Modal
       open={open}
-      title={`${material.material_name} in ${projectName}`}
-      kicker="Project Usage"
+      title={`${material.material_name} en ${projectName}`}
+      kicker="Uso en Proyecto"
       onClose={onClose}
       panelClassName="!max-w-[96vw] xl:!max-w-7xl"
     >
@@ -134,12 +132,12 @@ export function MaterialProjectUsageModal({
                 {projectName} | {material.sku}
               </p>
               <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-                Inspect which items specify this material, how each partida contributes to the total, and the saved quantity sheet for the selected item.
+                Revisa qué ítems especifican este material, cómo cada partida contribuye al total y la planilla de <FactoryQuantityLabel /> guardada para el ítem seleccionado.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                {(data?.item_count ?? 0).toString()} items
+                {(data?.item_count ?? 0).toString()} ítems
               </span>
               <span className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
                 {formatQuantity(data?.total_quantity ?? 0)} {data?.unit || material.unit || ""}
@@ -156,13 +154,13 @@ export function MaterialProjectUsageModal({
 
         {loading ? (
           <div className="rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
-            Loading project usage...
+            Cargando uso del proyecto...
           </div>
         ) : null}
 
         {!loading && data && data.items.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
-            This material is not specified anywhere in the selected project.
+            Este material no está especificado en ninguna parte del proyecto seleccionado.
           </div>
         ) : null}
 
@@ -185,32 +183,29 @@ export function MaterialProjectUsageModal({
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-zinc-900 dark:text-white">{item.instance_name}</p>
                         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                          {[item.category_name, item.component_name].filter(Boolean).join(" • ") || "No category context"}
+                          {[item.category_name, item.component_name].filter(Boolean).join(" • ") || "Sin contexto de categoría"}
                         </p>
-                        {item.rule_notes ? (
-                          <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">{item.rule_notes}</p>
-                        ) : null}
                       </div>
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                          Qty {formatQuantity(item.total_quantity)} {item.unit || material.unit || ""}
+                          <FactoryQuantityLabel /> {formatQuantity(item.total_quantity)} {item.unit || material.unit || ""}
                         </span>
                         <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                          {item.has_calculation_sheet ? `${item.calculation_sheet_cell_count} sheet cells` : "No saved sheet"}
+                          {item.has_calculation_sheet ? `${item.calculation_sheet_cell_count} celdas de planilla` : "Sin planilla guardada"}
                         </span>
                         {item.unit_qty_per_unit !== null ? (
                           <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                            Rule {formatQuantity(item.unit_qty_per_unit)} {item.unit || material.unit || ""}
+                            Regla {formatQuantity(item.unit_qty_per_unit)} {item.unit || material.unit || ""}
                           </span>
                         ) : null}
                         {item.blank_quantity_count > 0 ? (
                           <span className="rounded-full border border-amber-300/50 bg-amber-50 px-2.5 py-1 text-[11px] font-mono text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
-                            {item.blank_quantity_count} blank
+                            {item.blank_quantity_count} en blanco
                           </span>
                         ) : null}
                         {item.zero_quantity_count > 0 ? (
                           <span className="rounded-full border border-zinc-300/60 bg-zinc-100 px-2.5 py-1 text-[11px] font-mono text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-300">
-                            {item.zero_quantity_count} zero
+                            {item.zero_quantity_count} cero
                           </span>
                         ) : null}
                       </div>
@@ -221,9 +216,9 @@ export function MaterialProjectUsageModal({
                         <thead className="bg-zinc-100/70 dark:bg-white/[0.04]">
                           <tr>
                             <th className="px-3 py-2 font-semibold text-zinc-500">Partida</th>
-                            <th className="px-3 py-2 font-semibold text-zinc-500 text-right">Qty</th>
-                            <th className="px-3 py-2 font-semibold text-zinc-500 text-right">Kit</th>
-                            <th className="px-3 py-2 font-semibold text-zinc-500">Calc</th>
+                            <th className="px-3 py-2 font-semibold text-zinc-500 text-right"><FactoryQuantityLabel /></th>
+                            <th className="px-3 py-2 font-semibold text-zinc-500 text-right"><WorkQuantityLabel /></th>
+                            <th className="px-3 py-2 font-semibold text-zinc-500">Cálc.</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -237,7 +232,7 @@ export function MaterialProjectUsageModal({
                                 {quantityStateLabel(breakdown.assembly_quantity, breakdown.assembly_quantity_state)}
                               </td>
                               <td className="px-3 py-2 text-zinc-500 dark:text-zinc-400">
-                                {calculationLabel(item, breakdown)}
+                                {renderQuantityText(calculationLabel(item, breakdown))}
                               </td>
                             </tr>
                           ))}
@@ -263,16 +258,16 @@ export function MaterialProjectUsageModal({
                 />
               ) : selectedItem ? (
                 <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
-                  Calculation sheets are available for catalog material rules.
+                  Las planillas de cálculo están disponibles para reglas de materiales del catálogo.
                 </div>
               ) : (
                 <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">
-                  Select an item to preview its calculation sheet.
+                  Selecciona un ítem para previsualizar su planilla de cálculo.
                 </div>
               )}
               {selectedItem ? (
                 <p className="mt-2 px-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Selected item updated: {formatUpdatedAt(selectedItem.calculation_sheet_updated_at)}
+                  Ítem seleccionado actualizado: {formatUpdatedAt(selectedItem.calculation_sheet_updated_at)}
                 </p>
               ) : null}
             </div>

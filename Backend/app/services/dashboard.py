@@ -29,7 +29,7 @@ from app.services.erp import (
 from app.services.production_dashboard import get_material_dashboard_house_start_summary
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 4
+MATERIAL_DASHBOARD_CACHE_VERSION = 5
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -232,7 +232,6 @@ def get_material_dashboard_project_usage(
                 "unit_qty_per_unit": round(float(rule.unit_qty_per_unit), 4)
                 if rule is not None and rule.unit_qty_per_unit is not None
                 else None,
-                "rule_notes": rule.notes if rule else None,
                 "total_quantity": 0.0,
                 "blank_quantity_count": 0,
                 "zero_quantity_count": 0,
@@ -547,7 +546,7 @@ def _build_material_dashboard_detail(
     sku: str,
     *,
     cost_centers: list[str],
-    excluded_cost_centers: list[str],
+    excluded_cost_centers: list[str] | None = None,
 ) -> dict | None:
     normalized_sku = sku.strip().upper()
     if not normalized_sku:
@@ -597,6 +596,7 @@ def _build_material_dashboard_detail(
             "number": material.get("last_purchase_order_number"),
             "estimated_delivery": material.get("last_purchase_order_estimated_delivery"),
         },
+        "purchase_orders": material.get("purchase_orders") or [],
         "generated_at": datetime.utcnow().isoformat(),
     }
 
@@ -906,7 +906,7 @@ def _dashboard_bom_value_state(value: float | None) -> str:
 
 def _dashboard_bom_calculation_explanation(entry: ProjectBomEntry) -> str | None:
     if entry.calculation_mode.value == "auto" and entry.calculation_formula:
-        return f"Auto calculated from formula {entry.calculation_formula}"
+        return f"Q_fábrica calculada automáticamente con la fórmula {entry.calculation_formula}"
     if entry.calculation_mode.value == "manual":
-        return "Manually overridden quantity"
+        return "Q_fábrica sobrescrita manualmente"
     return None

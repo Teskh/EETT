@@ -137,7 +137,7 @@ def build_detailed_material_export_sections(project_data: dict[str, Any]) -> lis
     return [
         {
             "number": "",
-            "name": "All Materials",
+            "name": "Todos los materiales",
             "depth": 0,
             "hide_header": True,
             "materials": sorted(
@@ -153,6 +153,7 @@ def build_commercial_export_sections(
     project_data: dict[str, Any],
     *,
     static_dir: Path,
+    media_gallery_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     orm_instances = {instance.id: instance for instance in project.instances}
     sections: list[dict[str, Any]] = []
@@ -162,6 +163,8 @@ def build_commercial_export_sections(
         for serialized_instance in section.get("instances", []):
             orm_instance = orm_instances.get(serialized_instance["id"])
             if orm_instance is None:
+                continue
+            if _is_attached_accessory_instance(orm_instance):
                 continue
             settings = normalize_commercial_export_settings(
                 instance_type=serialized_instance["type"],
@@ -178,7 +181,12 @@ def build_commercial_export_sections(
                     "installation": serialized_instance.get("installation") if settings["installation"] else None,
                     "attributes": _commercial_attributes(serialized_instance, settings),
                     "linked_accessories": _commercial_linked_accessories(orm_instance, settings),
-                    "image_path": _resolve_media_path(serialized_instance.get("media", []), static_dir=static_dir, include_image=settings["image"]),
+                    "image_path": _resolve_media_path(
+                        serialized_instance.get("media", []),
+                        static_dir=static_dir,
+                        media_gallery_dir=media_gallery_dir,
+                        include_image=settings["image"],
+                    ),
                 }
             )
 
@@ -199,6 +207,7 @@ def build_full_technical_export_sections(
     project_data: dict[str, Any],
     *,
     static_dir: Path,
+    media_gallery_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     orm_instances = {instance.id: instance for instance in project.instances}
     sections: list[dict[str, Any]] = []
@@ -208,6 +217,8 @@ def build_full_technical_export_sections(
         for serialized_instance in section.get("instances", []):
             orm_instance = orm_instances.get(serialized_instance["id"])
             if orm_instance is None:
+                continue
+            if _is_attached_accessory_instance(orm_instance):
                 continue
             settings = normalize_full_export_settings(
                 instance_type=serialized_instance["type"],
@@ -224,7 +235,12 @@ def build_full_technical_export_sections(
                     "installation": serialized_instance.get("installation") if settings["installation"] else None,
                     "attributes": _technical_attributes(serialized_instance, settings),
                     "linked_accessories": _commercial_linked_accessories(orm_instance, {"accessory_mode": settings["accessory_mode"]}),
-                    "image_path": _resolve_media_path(serialized_instance.get("media", []), static_dir=static_dir, include_image=settings["image"]),
+                    "image_path": _resolve_media_path(
+                        serialized_instance.get("media", []),
+                        static_dir=static_dir,
+                        media_gallery_dir=media_gallery_dir,
+                        include_image=settings["image"],
+                    ),
                     "materials": _technical_materials(serialized_instance, settings),
                 }
             )
@@ -395,12 +411,10 @@ def _technical_attributes(instance: dict[str, Any], settings: dict[str, Any]) ->
     result: list[dict[str, str | None]] = []
 
     for group in instance.get("attributes", []):
-        group_label = group.get("application_label") or group.get("name")
         for value in group.get("values", []):
             row = {
                 "name": value.get("name"),
                 "value": value.get("value"),
-                "group": group_label,
             }
             if mode == "none":
                 continue
@@ -420,15 +434,17 @@ def _commercial_linked_accessories(instance: ProjectInstance, settings: dict[str
         return []
 
     accessories: list[dict[str, Any]] = []
+    accessory_by_instance_id: dict[int, dict[str, Any]] = {}
 
     for link in sorted(instance.parent_links, key=lambda item: (item.sort_order, item.id)):
         child = link.child_instance
-        accessories.append(
-            {
-                "name": child.short_name or child.name,
-                "context_label": link.application_label or None,
-                "attributes": _base_attribute_pairs(child),
-            }
+        _upsert_linked_accessory(
+            accessories,
+            accessory_by_instance_id,
+            instance_id=child.id,
+            name=child.short_name or child.name,
+            context_label=link.application_label or None,
+            attributes=_base_attribute_pairs(child),
         )
 
     seen_occurrences: set[int] = set()
@@ -440,21 +456,75 @@ def _commercial_linked_accessories(instance: ProjectInstance, settings: dict[str
         source = occurrence.source_instance
         if source.instance_type.value != "accessory":
             continue
-        accessories.append(
-            {
-                "name": source.short_name or source.name,
-                "context_label": occurrence.context_label or None,
-                "attributes": [
-                    {"name": attribute.attribute_name, "value": attribute.value}
-                    for attribute in occurrence.attribute_values
-                ],
-            }
+        occurrence_attributes = [
+            {"name": attribute.attribute_name, "value": attribute.value}
+            for attribute in occurrence.attribute_values
+        ]
+        accessory = _upsert_linked_accessory(
+            accessories,
+            accessory_by_instance_id,
+            instance_id=source.id,
+            name=source.short_name or source.name,
+            context_label=occurrence.context_label or None,
+            attributes=occurrence_attributes,
         )
+        accessory["context_label"] = accessory.get("context_label") or occurrence.context_label or None
+        accessory["attributes"] = _merge_attribute_pairs(accessory.get("attributes", []), occurrence_attributes)
 
     if mode == "summary":
         return [{"name": accessory["name"], "context_label": accessory.get("context_label"), "attributes": []} for accessory in accessories]
 
     return accessories
+
+
+def _upsert_linked_accessory(
+    accessories: list[dict[str, Any]],
+    accessory_by_instance_id: dict[int, dict[str, Any]],
+    *,
+    instance_id: int,
+    name: str,
+    context_label: str | None,
+    attributes: list[dict[str, str | None]],
+) -> dict[str, Any]:
+    accessory = accessory_by_instance_id.get(instance_id)
+    if accessory is None:
+        accessory = {
+            "name": name,
+            "context_label": context_label,
+            "attributes": attributes,
+        }
+        accessory_by_instance_id[instance_id] = accessory
+        accessories.append(accessory)
+    return accessory
+
+
+def _merge_attribute_pairs(
+    existing_attributes: list[dict[str, str | None]],
+    incoming_attributes: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    merged: list[dict[str, str | None]] = []
+    index_by_name: dict[str, int] = {}
+
+    for attribute in [*existing_attributes, *incoming_attributes]:
+        name = str(attribute.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"name": name, "value": attribute.get("value")}
+        if name in index_by_name:
+            merged[index_by_name[name]] = row
+        else:
+            index_by_name[name] = len(merged)
+            merged.append(row)
+
+    return merged
+
+
+def _is_attached_accessory_instance(instance: ProjectInstance) -> bool:
+    if instance.instance_type.value != "accessory":
+        return False
+    if instance.child_links:
+        return True
+    return any(occurrence.targets for occurrence in instance.outgoing_occurrences)
 
 
 def _base_attribute_pairs(instance: ProjectInstance) -> list[dict[str, str | None]]:
@@ -464,12 +534,24 @@ def _base_attribute_pairs(instance: ProjectInstance) -> list[dict[str, str | Non
     return [{"name": value.attribute_name, "value": value.value} for value in base_group.attribute_values]
 
 
-def _resolve_media_path(media_items: list[dict[str, Any]], *, static_dir: Path, include_image: bool) -> Path | None:
+def _resolve_media_path(
+    media_items: list[dict[str, Any]],
+    *,
+    static_dir: Path,
+    media_gallery_dir: Path | None = None,
+    include_image: bool,
+) -> Path | None:
     if not include_image:
         return None
     for media in media_items:
         if media.get("kind") != "image":
             continue
+        storage_key = str(media.get("storage_key") or "").strip()
+        if storage_key and media_gallery_dir is not None:
+            root = media_gallery_dir.resolve()
+            candidate = (root / storage_key).resolve()
+            if (root in candidate.parents or candidate == root) and candidate.is_file():
+                return candidate
         uri = str(media.get("uri") or "").strip()
         if not uri.startswith("/static/"):
             continue

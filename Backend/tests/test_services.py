@@ -53,6 +53,7 @@ from app.services.erp import (
     _calculate_delivery_time_stats,
     _get_last_purchase_orders_for_products_batch,
     _get_lead_time_samples_for_product,
+    _get_purchase_order_lines_for_products_batch,
 )
 from app.services.material_groups import (
     create_material_study_group,
@@ -298,7 +299,6 @@ class ServiceLayerTests(unittest.TestCase):
                         "sku": "MAT-001",
                         "unit": "ea",
                         "unit_qty_per_unit": 8,
-                        "notes": "Door still needs fixing hardware.",
                         "conditions": [],
                     }
                 ],
@@ -373,7 +373,6 @@ class ServiceLayerTests(unittest.TestCase):
                         "sku": "MAT-006",
                         "unit": "cartridge",
                         "unit_qty_per_unit": 0.25,
-                        "notes": "Seal perimeter after glazing adjustment.",
                         "conditions": [],
                     }
                 ]
@@ -1102,9 +1101,9 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(artifact_response.status_code, 200)
 
         workbook = load_workbook(filename=BytesIO(artifact_response.content))
-        self.assertEqual(workbook.sheetnames, ["Total Materials", "By Context", "Assembly Kit"])
+        self.assertEqual(workbook.sheetnames, ["Total Materiales", "Por Contexto", "Q obra"])
 
-        totals = workbook["Total Materials"]
+        totals = workbook["Total Materiales"]
         totals_by_sku = {
             totals.cell(row=row_index, column=2).value: totals.cell(row=row_index, column=3).value
             for row_index in range(2, totals.max_row + 1)
@@ -1116,12 +1115,12 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertAlmostEqual(float(totals_by_sku["MAT-005"]), 5.25, places=6)
         self.assertIsNone(totals_by_sku["MAT-006"])
 
-        context_values = [cell for row in workbook["By Context"].iter_rows(values_only=True) for cell in row if cell]
+        context_values = [cell for row in workbook["Por Contexto"].iter_rows(values_only=True) for cell in row if cell]
         self.assertIn("1.2. Windows", context_values)
         self.assertIn("Living Window", "".join(str(value) for value in context_values))
         self.assertIn("Laminated Glass Panel", context_values)
 
-        assembly_values = [cell for row in workbook["Assembly Kit"].iter_rows(values_only=True) for cell in row if cell]
+        assembly_values = [cell for row in workbook["Q obra"].iter_rows(values_only=True) for cell in row if cell]
         self.assertIn("Anchor Screw 5x70", assembly_values)
         self.assertIn("Smart Lock Kit", assembly_values)
 
@@ -1152,12 +1151,12 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(artifact_response.status_code, 200)
 
         workbook = load_workbook(filename=BytesIO(artifact_response.content), data_only=False)
-        self.assertEqual(workbook.sheetnames, ["By Instance", "Total Materials"])
+        self.assertEqual(workbook.sheetnames, ["Por Instancia", "Total Materiales"])
 
-        by_instance = workbook["By Instance"]
+        by_instance = workbook["Por Instancia"]
         self.assertEqual(
             [by_instance.cell(row=1, column=column_index).value for column_index in range(1, 10)],
-            ["Instance", "Category", "Subtype", "Material", "SKU", "Unit", "Quantity", "Unit Price", "Cost"],
+            ["Instancia", "Categoria", "Subtipo", "Material", "SKU", "Unidad", "Q fabrica", "Precio unitario", "Costo"],
         )
 
         auxiliary_rows = [
@@ -1167,7 +1166,7 @@ class ServiceLayerTests(unittest.TestCase):
         ]
         self.assertEqual(len(auxiliary_rows), 2)
         aux_by_sku = {row[4]: row for row in auxiliary_rows}
-        self.assertEqual(aux_by_sku["AUX-001"][0], "Auxiliary Materials")
+        self.assertEqual(aux_by_sku["AUX-001"][0], "Materiales auxiliares")
         self.assertEqual(aux_by_sku["AUX-001"][6], 1)
         self.assertEqual(aux_by_sku["AUX-001"][7], 185000)
         self.assertEqual(aux_by_sku["AUX-002"][7], 32000)
@@ -1181,40 +1180,93 @@ class ServiceLayerTests(unittest.TestCase):
         by_instance_total_general_row = next(
             row_index
             for row_index in range(2, by_instance.max_row + 1)
-            if by_instance.cell(row=row_index, column=4).value == "Total General"
+            if by_instance.cell(row=row_index, column=4).value == "Total general"
         )
         self.assertEqual(
             by_instance.cell(row=by_instance_total_general_row, column=9).value,
             f'=SUMIFS(I2:I{by_instance_total_general_row - 1},C2:C{by_instance_total_general_row - 1},"General")',
         )
 
-        totals = workbook["Total Materials"]
+        totals = workbook["Total Materiales"]
         self.assertEqual(
             [totals.cell(row=1, column=column_index).value for column_index in range(1, 8)],
-            ["SKU", "Material", "Subtype", "Unit", "Quantity", "Unit Price", "Cost"],
+            ["SKU", "Material", "Subtipo", "Unidad", "Q fabrica", "Precio unitario", "Costo"],
         )
         total_anchor_row_index = next(
             row_index
             for row_index in range(2, totals.max_row + 1)
             if totals.cell(row=row_index, column=1).value == "MAT-001"
         )
-        self.assertIn("SUMIFS('By Instance'!$G:$G", totals.cell(row=total_anchor_row_index, column=5).value)
+        self.assertIn("SUMIFS('Por Instancia'!$G:$G", totals.cell(row=total_anchor_row_index, column=5).value)
         self.assertEqual(
             totals.cell(row=total_anchor_row_index, column=6).value,
             f'=IF(OR(E{total_anchor_row_index}="",E{total_anchor_row_index}=0,G{total_anchor_row_index}=""),"",G{total_anchor_row_index}/E{total_anchor_row_index})',
         )
-        self.assertIn("SUMIFS('By Instance'!$I:$I", totals.cell(row=total_anchor_row_index, column=7).value)
+        self.assertIn("SUMIFS('Por Instancia'!$I:$I", totals.cell(row=total_anchor_row_index, column=7).value)
         total_labels = [totals.cell(row=row_index, column=3).value for row_index in range(2, totals.max_row + 1)]
-        self.assertIn("Total General", total_labels)
+        self.assertIn("Total general", total_labels)
         totals_total_general_row = next(
             row_index
             for row_index in range(2, totals.max_row + 1)
-            if totals.cell(row=row_index, column=3).value == "Total General"
+            if totals.cell(row=row_index, column=3).value == "Total general"
         )
         self.assertEqual(
             totals.cell(row=totals_total_general_row, column=7).value,
             f'=SUMIFS(G2:G{totals_total_general_row - 1},C2:C{totals_total_general_row - 1},"General")',
         )
+
+    @patch("app.services.exports._get_purchase_order_lines_for_products_batch")
+    @patch("app.services.exports._get_average_prices_for_products_batch")
+    @patch("app.services.exports._open_connection")
+    @patch("app.services.exports.erp_search_available")
+    def test_cost_model_workbook_export_uses_purchase_order_price_when_average_price_is_zero(
+        self,
+        erp_search_available_mock,
+        open_connection_mock,
+        average_prices_mock,
+        purchase_order_lines_mock,
+    ) -> None:
+        with self.session_factory() as session:
+            cache = session.scalar(select(ErpMaterialCache).where(ErpMaterialCache.sku == "MAT-001"))
+            self.assertIsNotNone(cache)
+            cache.average_price = 0
+            cache.last_purchase_price = None
+            session.commit()
+
+        class _DummyConnection:
+            def cursor(self):
+                return object()
+
+        class _DummyContextManager:
+            def __enter__(self):
+                return _DummyConnection()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        erp_search_available_mock.return_value = True
+        open_connection_mock.return_value = _DummyContextManager()
+        average_prices_mock.return_value = {"MAT-001": 0.0}
+        purchase_order_lines_mock.return_value = {"MAT-001": [{"unit_price": 9876.0}]}
+
+        create_export = self.client.post(
+            "/api/v1/projects/2/exports",
+            headers={"X-Spec-Sheets-User": "ot"},
+            json={"kind": "cost_model_workbook", "payload": {}},
+        )
+        self.assertEqual(create_export.status_code, 200)
+
+        artifact_response = self.client.get(create_export.json()["artifact_uri"], headers={"X-Spec-Sheets-User": "ot"})
+        self.assertEqual(artifact_response.status_code, 200)
+
+        workbook = load_workbook(filename=BytesIO(artifact_response.content), data_only=False)
+        by_instance = workbook["Por Instancia"]
+        anchor_row_index = next(
+            row_index
+            for row_index in range(2, by_instance.max_row + 1)
+            if by_instance.cell(row=row_index, column=5).value == "MAT-001"
+        )
+        self.assertEqual(by_instance.cell(row=anchor_row_index, column=8).value, 9876)
 
     def test_cost_model_view_returns_consolidated_rows_with_aggregate_and_per_subtype_adjustments(self) -> None:
         view_response = self.client.get(
@@ -1357,6 +1409,49 @@ class ServiceLayerTests(unittest.TestCase):
         rows_by_sku = {row["sku"]: row for row in view_response.json()["rows"]}
         self.assertEqual(rows_by_sku["MAT-001"]["price"], 4321.0)
         self.assertEqual(average_prices_mock.call_count, 1)
+
+    @patch("app.services.cost_model._get_purchase_order_lines_for_products_batch")
+    @patch("app.services.cost_model._get_average_prices_for_products_batch")
+    @patch("app.services.cost_model._open_connection")
+    @patch("app.services.cost_model.erp_search_available")
+    def test_cost_model_view_uses_purchase_order_price_when_average_price_is_zero(
+        self,
+        erp_search_available_mock,
+        open_connection_mock,
+        average_prices_mock,
+        purchase_order_lines_mock,
+    ) -> None:
+        with self.session_factory() as session:
+            cache = session.scalar(select(ErpMaterialCache).where(ErpMaterialCache.sku == "MAT-001"))
+            self.assertIsNotNone(cache)
+            cache.average_price = 0
+            cache.last_purchase_price = None
+            session.commit()
+
+        class _DummyConnection:
+            def cursor(self):
+                return object()
+
+        class _DummyContextManager:
+            def __enter__(self):
+                return _DummyConnection()
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        erp_search_available_mock.return_value = True
+        open_connection_mock.return_value = _DummyContextManager()
+        average_prices_mock.return_value = {"MAT-001": 0.0}
+        purchase_order_lines_mock.return_value = {"MAT-001": [{"unit_price": 9876.0}]}
+
+        view_response = self.client.get(
+            "/api/v1/projects/2/cost-model",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(view_response.status_code, 200)
+
+        rows_by_sku = {row["sku"]: row for row in view_response.json()["rows"]}
+        self.assertEqual(rows_by_sku["MAT-001"]["price"], 9876.0)
 
     def test_cost_model_view_endpoint_denies_viewer_edits_but_allows_read(self) -> None:
         view_response = self.client.get(
@@ -2480,11 +2575,90 @@ class ErpLeadTimeSampleTests(unittest.TestCase):
         result = _get_last_purchase_orders_for_products_batch(cursor, ["ERP-001"])
 
         self.assertIn("RTRIM(LTRIM(c.CodEstado)) IN (?,?)", cursor.sql)
+        self.assertIn("RecentPending", cursor.sql)
+        self.assertIn("DATEADD(MONTH, -4, CONVERT(date, GETDATE()))", cursor.sql)
         self.assertEqual(cursor.params[-2:], ["AP", "PE"])
         self.assertEqual(
             result["ERP-001"],
             (date(2026, 4, 10), "OC-123", 5.0, None, "PE"),
         )
+
+    def test_last_purchase_orders_use_recent_pending_sum(self) -> None:
+        row = SimpleNamespace(
+            CodProd="ERP-001",
+            fechaOC=date(2026, 4, 10),
+            numoc="OC-123",
+            FecFinalOC=date(2026, 4, 30),
+            CodEstado="AP",
+            pendingPurchaseQuantity=14.75,
+        )
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [row]
+
+        result = _get_last_purchase_orders_for_products_batch(FakeCursor(), ["ERP-001"])
+
+        self.assertEqual(
+            result["ERP-001"],
+            (date(2026, 4, 10), "OC-123", 14.75, date(2026, 4, 30), "AP"),
+        )
+
+    def test_purchase_order_lines_include_receipts_and_count_flag(self) -> None:
+        rows = [
+            SimpleNamespace(
+                CodProd="ERP-001",
+                fechaOC=date(2026, 4, 10),
+                numoc="OC-123",
+                FecFinalOC=date(2026, 4, 30),
+                CodEstado="AP",
+                NumLinea=1,
+                cantidadOrdenadaDetalle=20.0,
+                precioUnitario=1234.5,
+                cantidadIngresadaMovim=4.0,
+                cantidadRecepcionNoInv=1.5,
+                countedInPending=1,
+            ),
+            SimpleNamespace(
+                CodProd="ERP-001",
+                fechaOC=date(2025, 12, 1),
+                numoc="OC-099",
+                FecFinalOC=None,
+                CodEstado="AP",
+                NumLinea=2,
+                cantidadOrdenadaDetalle=10.0,
+                precioUnitario=None,
+                cantidadIngresadaMovim=10.0,
+                cantidadRecepcionNoInv=0.0,
+                countedInPending=0,
+            ),
+        ]
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return rows
+
+        cursor = FakeCursor()
+        result = _get_purchase_order_lines_for_products_batch(cursor, ["ERP-001"])
+
+        self.assertIn("pol.rn <= ?", cursor.sql)
+        self.assertEqual(cursor.params[:2], ["AP", "PE"])
+        self.assertEqual(cursor.params[-1], 10)
+        self.assertEqual(len(result["ERP-001"]), 2)
+        self.assertEqual(result["ERP-001"][0]["pending_quantity"], 14.5)
+        self.assertEqual(result["ERP-001"][0]["unit_price"], 1234.5)
+        self.assertEqual(result["ERP-001"][0]["received_quantity"], 4.0)
+        self.assertEqual(result["ERP-001"][0]["received_not_invoiced_quantity"], 1.5)
+        self.assertTrue(result["ERP-001"][0]["counted_in_pending"])
+        self.assertFalse(result["ERP-001"][1]["counted_in_pending"])
 
     def test_calculate_delivery_time_stats_includes_median(self) -> None:
         with patch(

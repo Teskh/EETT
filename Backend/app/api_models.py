@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -70,6 +70,49 @@ class UserUpdateRequest(BaseModel):
     is_active: bool = True
 
 
+class BackupRecordModel(BaseModel):
+    filename: str
+    size_bytes: int
+    created_at: datetime
+    label: str | None = None
+
+
+class BackupSettingsModel(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(ge=1)
+    retention_count: int = Field(ge=1)
+    last_backup_at: datetime | None = None
+
+
+class BackupSettingsUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = Field(default=None, ge=1)
+    retention_count: int | None = Field(default=None, ge=1)
+
+
+class BackupCreateRequest(BaseModel):
+    label: str | None = None
+
+
+class BackupCreateResponse(BaseModel):
+    backup: BackupRecordModel
+    settings: BackupSettingsModel
+    pruned: list[str] = Field(default_factory=list)
+
+
+class BackupRestoreRequest(BaseModel):
+    filename: str
+    force_disconnect: bool = True
+
+
+class BackupRestoreResponse(BaseModel):
+    primary_db: str
+    archived_db: str
+    restored_from: str
+    checkpoint_backup: BackupRecordModel
+    pruned: list[str] = Field(default_factory=list)
+
+
 class MutationResultModel(BaseModel):
     ok: bool = True
     category_id: int | None = None
@@ -110,6 +153,11 @@ class CatalogComponentUpdateRequest(BaseModel):
     component_type: str
 
 
+class CatalogComponentMediaUpdateRequest(BaseModel):
+    media_asset_id: int | None = None
+    caption: str | None = None
+
+
 class CatalogAttributePayloadModel(BaseModel):
     name: str
     scope: str = "base"
@@ -145,7 +193,6 @@ class CatalogMaterialRulePayloadModel(BaseModel):
     sku: str
     unit: str | None = None
     unit_qty_per_unit: float | None = None
-    notes: str | None = None
     conditions: list[CatalogMaterialConditionGroupPayloadModel] = Field(default_factory=list)
 
 
@@ -192,6 +239,7 @@ class ProjectInstanceCreateRequest(BaseModel):
     unit_amount: float | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
     selected_material_rule_ids: list[int] | None = None
+    media_asset_id: int | None = None
 
 
 class ProjectInstanceUpdateRequest(BaseModel):
@@ -202,6 +250,8 @@ class ProjectInstanceUpdateRequest(BaseModel):
     installation: str | None = None
     unit_amount: float | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
+    media_asset_id: int | None = None
+    clear_media: bool = False
 
 
 class ProjectSubtypeCreateRequest(BaseModel):
@@ -262,9 +312,39 @@ class SyncStateModel(BaseModel):
 
 
 class MediaModel(BaseModel):
+    id: int | None = None
     kind: str
     uri: str
+    original_filename: str | None = None
+    content_type: str | None = None
+    byte_size: int | None = None
+    sha256: str | None = None
+    width: int | None = None
+    height: int | None = None
+    created_at: str | None = None
     caption: str | None
+    sort_order: int = 0
+
+
+class MediaAssetModel(BaseModel):
+    id: int
+    kind: str
+    uri: str
+    original_filename: str | None = None
+    content_type: str
+    byte_size: int
+    sha256: str
+    width: int | None = None
+    height: int | None = None
+    created_at: str | None = None
+
+
+class MediaAssetListResponse(BaseModel):
+    assets: list[MediaAssetModel] = Field(default_factory=list)
+
+
+class CatalogComponentModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
 
 
 class ExportSettingModel(BaseModel):
@@ -315,7 +395,6 @@ class MaterialModel(BaseModel):
     sku: str
     unit_qty_per_unit: float | None
     unit: str | None
-    notes: str | None
     source_status: str = "catalog"
     source_label: str | None = None
     applicability: MaterialApplicabilityModel
@@ -370,6 +449,7 @@ class AvailableComponentModel(BaseModel):
     base_attributes: list[EditableAttributeModel]
     usage_attributes: list[EditableAttributeModel]
     material_rules: list[CatalogMaterialRulePayloadModel] = Field(default_factory=list)
+    media: list[MediaModel] = Field(default_factory=list)
 
 
 class InstanceLinkModel(BaseModel):
@@ -638,6 +718,20 @@ class MaterialDashboardPurchaseOrderModel(BaseModel):
     estimated_delivery: str | None
 
 
+class MaterialDashboardPurchaseOrderLineModel(BaseModel):
+    date: str | None
+    number: str | None
+    estimated_delivery: str | None
+    status_code: str | None
+    line_number: str | None
+    ordered_quantity: float | None
+    unit_price: float | None = None
+    received_quantity: float | None
+    received_not_invoiced_quantity: float | None
+    pending_quantity: float | None
+    counted_in_pending: bool
+
+
 class MaterialDashboardListRowModel(BaseModel):
     sku: str
     material_name: str
@@ -663,6 +757,7 @@ class MaterialDashboardDetailModel(BaseModel):
     days_of_stock_30d: float | None
     reorder_date_recent_rate: str | None
     last_purchase_order: MaterialDashboardPurchaseOrderModel
+    purchase_orders: list[MaterialDashboardPurchaseOrderLineModel] = Field(default_factory=list)
 
 
 class MaterialDashboardResponse(BaseModel):
@@ -803,7 +898,6 @@ class MaterialDashboardProjectUsageItemModel(BaseModel):
     rule_id: int | None
     material_id: int
     unit_qty_per_unit: float | None
-    rule_notes: str | None
     total_quantity: float
     blank_quantity_count: int
     zero_quantity_count: int

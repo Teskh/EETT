@@ -337,7 +337,12 @@ def _load_cost_model_prices(
     settings: Settings | None,
     project_data: dict[str, Any],
 ) -> dict[str, float | None]:
-    from app.services.erp import _get_average_prices_for_products_batch, _open_connection, erp_search_available
+    from app.services.erp import (
+        _get_average_prices_for_products_batch,
+        _get_purchase_order_lines_for_products_batch,
+        _open_connection,
+        erp_search_available,
+    )
 
     unique_skus: list[str] = []
     seen_skus: set[str] = set()
@@ -360,10 +365,9 @@ def _load_cost_model_prices(
         return {}
 
     prices = {
-        cache.sku.strip().upper(): (
-            cache.average_price
-            if cache.average_price is not None
-            else cache.last_purchase_price
+        cache.sku.strip().upper(): _select_cost_model_price(
+            cache.average_price,
+            cache.last_purchase_price,
         )
         for cache in session.scalars(select(ErpMaterialCache)).all()
         if cache.sku
@@ -380,13 +384,44 @@ def _load_cost_model_prices(
                 unique_skus,
                 datetime.utcnow().strftime("%d/%m/%Y"),
             )
+            for sku, value in live_prices.items():
+                if _is_positive_price(value):
+                    price_map[sku] = value
+
+            missing_price_skus = [sku for sku in unique_skus if not _is_positive_price(price_map.get(sku))]
+            if missing_price_skus:
+                purchase_order_lines = _get_purchase_order_lines_for_products_batch(
+                    connection.cursor(),
+                    missing_price_skus,
+                )
+                for sku, lines in purchase_order_lines.items():
+                    purchase_order_price = _select_purchase_order_price(lines)
+                    if purchase_order_price is not None:
+                        price_map[sku] = purchase_order_price
     except Exception:
         return price_map
 
-    for sku, value in live_prices.items():
-        if value is not None:
-            price_map[sku] = value
     return price_map
+
+
+def _select_cost_model_price(average_price: float | None, last_purchase_price: float | None) -> float | None:
+    if _is_positive_price(average_price):
+        return average_price
+    if _is_positive_price(last_purchase_price):
+        return last_purchase_price
+    return average_price if average_price is not None else last_purchase_price
+
+
+def _is_positive_price(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _select_purchase_order_price(lines: list[dict[str, Any]]) -> float | None:
+    for line in lines:
+        unit_price = line.get("unit_price")
+        if _is_positive_price(unit_price):
+            return unit_price
+    return None
 
 
 def _coerce_optional_float(value: Any) -> float | None:

@@ -12,7 +12,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { MaterialDashboardPage } from "./pages/MaterialDashboardPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
-import { UsersPage } from "./pages/UsersPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 type Route =
   | { name: "home" }
@@ -24,7 +24,7 @@ type Route =
   | { name: "projects" }
   | { name: "project-detail"; projectId: number }
   | { name: "project-cost-model"; projectId: number }
-  | { name: "users" }
+  | { name: "settings" }
   | { name: "not-found" };
 
 function parseCurrentRoute(): Route {
@@ -55,8 +55,8 @@ function parseCurrentRoute(): Route {
   if (pathname === "/projects") {
     return { name: "projects" };
   }
-  if (pathname === "/users") {
-    return { name: "users" };
+  if (pathname === "/settings" || pathname === "/users") {
+    return { name: "settings" };
   }
   const projectCostModelMatch = pathname.match(/^\/projects\/(\d+)\/cost-model$/);
   if (projectCostModelMatch) {
@@ -83,7 +83,7 @@ export function App() {
   const [sessionLoading, setSessionLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [projectDetailTitle, setProjectDetailTitle] = useState("Project");
+  const [projectDetailTitle, setProjectDetailTitle] = useState("Proyecto");
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => (
     document.documentElement.classList.contains("dark") ? "dark" : "light"
   ));
@@ -130,7 +130,7 @@ export function App() {
       if (err instanceof ApiError && err.status === 401) {
         setSession(null);
       } else {
-        setAuthError(err instanceof ApiError ? err.message : "Could not load session.");
+        setAuthError(err instanceof ApiError ? err.message : "No se pudo cargar la sesión.");
       }
     } finally {
       setSessionLoading(false);
@@ -142,30 +142,30 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    setProjectDetailTitle("Project");
+    setProjectDetailTitle("Proyecto");
   }, [route]);
 
   useEffect(() => {
     if (route.name === "home") {
-      document.title = "Launcher | Spec Sheets";
+      document.title = "Inicio | Spec Sheets";
     } else if (route.name === "login") {
-      document.title = "Login | Spec Sheets";
+      document.title = "Ingreso | Spec Sheets";
     } else if (route.name === "catalog") {
-      document.title = "Database Editor | Spec Sheets";
+      document.title = "Editor de Base de Datos | Spec Sheets";
     } else if (route.name === "material-dashboard") {
-      document.title = "Material Dashboard | Spec Sheets";
+      document.title = "Panel de Materiales | Spec Sheets";
     } else if (route.name === "cost-model") {
-      document.title = route.projectId ? `${projectDetailTitle} — Cost Model | Spec Sheets` : "Cost Model | Spec Sheets";
+      document.title = route.projectId ? `${projectDetailTitle} — Modelo de Costos | Spec Sheets` : "Modelo de Costos | Spec Sheets";
     } else if (route.name === "history") {
-      document.title = "Change History | Spec Sheets";
+      document.title = "Historial de Cambios | Spec Sheets";
     } else if (route.name === "projects") {
-      document.title = "Projects | Spec Sheets";
+      document.title = "Proyectos | Spec Sheets";
     } else if (route.name === "project-detail") {
       document.title = `${projectDetailTitle} | Spec Sheets`;
     } else if (route.name === "project-cost-model") {
-      document.title = `${projectDetailTitle} — Cost Model | Spec Sheets`;
-    } else if (route.name === "users") {
-      document.title = "User Editor | Spec Sheets";
+      document.title = `${projectDetailTitle} — Modelo de Costos | Spec Sheets`;
+    } else if (route.name === "settings") {
+      document.title = "Configuracion | Spec Sheets";
     } else {
       document.title = "Spec Sheets";
     }
@@ -193,7 +193,7 @@ export function App() {
       const nextPath = route.name === "login" ? "/" : currentPath();
       navigate(nextPath === "/login" ? "/" : nextPath, true);
     } catch (err) {
-      setAuthError(err instanceof ApiError ? err.message : "Could not sign in.");
+      setAuthError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión.");
     } finally {
       setAuthLoading(false);
     }
@@ -207,14 +207,14 @@ export function App() {
       setSession(null);
       navigate("/login", true);
     } catch (err) {
-      setAuthError(err instanceof ApiError ? err.message : "Could not sign out.");
+      setAuthError(err instanceof ApiError ? err.message : "No se pudo cerrar sesión.");
     } finally {
       setAuthLoading(false);
     }
   }
 
   if (sessionLoading) {
-    return <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-500 flex items-center justify-center">Loading session...</div>;
+    return <div className="min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 text-zinc-500 flex items-center justify-center">Cargando sesión...</div>;
   }
 
   if (!session) {
@@ -228,7 +228,7 @@ export function App() {
   if (route.name === "home") {
     return (
       <AppShell
-        title="Launcher"
+        title="Inicio"
         activeNav="home"
         currentUser={session}
         themeMode={themeMode}
@@ -244,7 +244,7 @@ export function App() {
   if (route.name === "projects") {
     return (
       <AppShell
-        title="Projects"
+        title="Proyectos"
         activeNav="projects"
         currentUser={session}
         themeMode={themeMode}
@@ -260,7 +260,7 @@ export function App() {
   if (route.name === "material-dashboard") {
     return (
         <AppShell
-          title="Material Dashboard"
+          title="Panel de Materiales"
           activeNav="dashboard"
           currentUser={session}
           themeMode={themeMode}
@@ -271,7 +271,7 @@ export function App() {
         {session.permissions.material_dashboard ? (
           <MaterialDashboardPage canEditGroups={session.permissions.erp_admin} />
         ) : (
-          <AccessDenied message="This role cannot open the material dashboard." />
+          <AccessDenied message="Este rol no puede abrir el panel de materiales." />
         )}
       </AppShell>
     );
@@ -280,7 +280,7 @@ export function App() {
   if (route.name === "cost-model") {
     return (
       <AppShell
-        title={route.projectId ? `${projectDetailTitle} — Cost Model` : "Cost Model"}
+        title={route.projectId ? `${projectDetailTitle} — Modelo de Costos` : "Modelo de Costos"}
         activeNav="cost-model"
         currentUser={session}
         themeMode={themeMode}
@@ -301,7 +301,7 @@ export function App() {
   if (route.name === "history") {
     return (
       <AppShell
-        title="Change History"
+        title="Historial de Cambios"
         activeNav="history"
         currentUser={session}
         themeMode={themeMode}
@@ -317,7 +317,7 @@ export function App() {
   if (route.name === "catalog") {
     return (
       <AppShell
-        title="Database Editor"
+        title="Editor de Base de Datos"
         activeNav="catalog"
         currentUser={session}
         themeMode={themeMode}
@@ -328,7 +328,7 @@ export function App() {
         {session.permissions.catalog_edit ? (
           <CatalogPage categoryId={route.categoryId} onNavigate={navigate} />
         ) : (
-          <AccessDenied message="This role cannot open the catalog editor." />
+          <AccessDenied message="Este rol no puede abrir el editor de catálogo." />
         )}
       </AppShell>
     );
@@ -354,11 +354,11 @@ export function App() {
     return null;
   }
 
-  if (route.name === "users") {
+  if (route.name === "settings") {
     return (
       <AppShell
-        title="User Editor"
-        activeNav="users"
+        title="Configuracion"
+        activeNav="settings"
         currentUser={session}
         themeMode={themeMode}
         onThemeModeChange={handleThemeModeChange}
@@ -366,9 +366,9 @@ export function App() {
         onLogout={handleLogout}
       >
         {session.permissions.user_admin ? (
-          <UsersPage currentUsername={session.username} />
+          <SettingsPage currentUsername={session.username} canManageUsers={session.permissions.user_admin} />
         ) : (
-          <AccessDenied message="Only the reserved sysadmin account can access the user editor." />
+          <AccessDenied message="Solo la cuenta sysadmin reservada puede acceder a configuracion." />
         )}
       </AppShell>
     );
@@ -384,7 +384,7 @@ export function App() {
       onNavigate={navigate}
       onLogout={handleLogout}
     >
-      <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">This route is not implemented yet.</div>
+      <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Esta ruta aún no está implementada.</div>
     </AppShell>
   );
 }

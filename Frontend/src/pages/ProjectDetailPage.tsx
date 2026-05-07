@@ -1,7 +1,9 @@
 import { FormEvent, startTransition, useEffect, useRef, useState } from "react";
 
 import { MaterialCalculationSheetModal } from "../components/MaterialCalculationSheetModal";
+import { MediaPicker } from "../components/MediaPicker";
 import { Modal } from "../components/Modal";
+import { FactoryQuantityLabel, WorkQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import type {
   AttributeValueInput,
@@ -12,6 +14,7 @@ import type {
   EditableAttribute,
   InstanceSyncPreview,
   InstanceMaterial,
+  MediaAsset,
   ProjectCategorySection,
   ProjectDetailData,
   ProjectInstance,
@@ -56,6 +59,8 @@ type InstanceFormModalProps = {
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
     selected_material_rule_ids?: number[];
+    media_asset_id?: number | null;
+    clear_media?: boolean;
   }) => Promise<void>;
 };
 
@@ -232,7 +237,7 @@ function buildLocalBomEntries(
         unit: material.unit,
         calculation_mode: "manual",
         calculation_formula: null,
-        calculation_explanation: "Manually overridden quantity",
+        calculation_explanation: "Q_fábrica sobrescrita manualmente",
         is_persisted: true,
       };
     });
@@ -255,7 +260,7 @@ function buildLocalBomEntries(
       unit: material.unit,
       calculation_mode: "manual",
       calculation_formula: null,
-      calculation_explanation: "Manually overridden quantity",
+      calculation_explanation: "Q_fábrica sobrescrita manualmente",
       is_persisted: true,
     },
   ];
@@ -343,7 +348,7 @@ function quantityClass(value: number | null) {
 
 function formatQuantity(value: number | null) {
   if (value === null) {
-    return "Blank";
+    return "En blanco";
   }
   return String(value);
 }
@@ -615,6 +620,7 @@ function InstanceFormModal({
   const [unitAmount, setUnitAmount] = useState("");
   const [attributes, setAttributes] = useState<EditableAttribute[]>([]);
   const [selectedMaterialRuleIds, setSelectedMaterialRuleIds] = useState<number[]>([]);
+  const [selectedMedia, setSelectedMedia] = useState<MediaAsset | null>(null);
   const selectedComponent = availableComponents.find((component) => component.id === componentId) || availableComponents[0];
   const applicableMaterialRules =
     mode === "create" && selectedComponent
@@ -636,6 +642,7 @@ function InstanceFormModal({
       setInstallation(initialInstance.installation || "");
       setUnitAmount(initialInstance.unit_amount === null ? "" : String(initialInstance.unit_amount));
       setAttributes(normalizeEditableAttributes(initialInstance.editable_attributes));
+      setSelectedMedia(initialInstance.media[0] || null);
       return;
     }
 
@@ -648,6 +655,7 @@ function InstanceFormModal({
     setInstallation(defaultComponent?.installation || "");
     setUnitAmount("");
     setAttributes(buildAttributesFromComponent(defaultComponent));
+    setSelectedMedia(defaultComponent?.media[0] || null);
     setSelectedMaterialRuleIds((defaultComponent?.material_rules || []).map((rule) => rule.id).filter((id): id is number => id !== undefined));
   }, [availableComponents, initialInstance, mode, open]);
 
@@ -665,6 +673,7 @@ function InstanceFormModal({
     setShortDescription(selectedComponent.short_description || "");
     setInstallation(selectedComponent.installation || "");
     setAttributes(buildAttributesFromComponent(selectedComponent));
+    setSelectedMedia(selectedComponent.media[0] || null);
     setSelectedMaterialRuleIds(selectedComponent.material_rules.map((rule) => rule.id).filter((id): id is number => id !== undefined));
   }, [availableComponents, componentId, mode, open]);
 
@@ -698,6 +707,8 @@ function InstanceFormModal({
         value: (attribute.value || "").trim() || null,
       })),
       selected_material_rule_ids: mode === "create" ? selectedMaterialRuleIds : undefined,
+      media_asset_id: selectedMedia?.id ?? null,
+      clear_media: selectedMedia === null,
     });
   }
 
@@ -705,13 +716,13 @@ function InstanceFormModal({
     <Modal
       open={open}
       title={categoryName}
-      kicker={mode === "create" ? "Create project instance" : "Edit project instance"}
+      kicker={mode === "create" ? "Crear instancia de proyecto" : "Editar instancia de proyecto"}
       onClose={onClose}
     >
       <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
         {mode === "create" ? (
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Template Component</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Componente Plantilla</label>
             <select
               value={componentId}
               onChange={(event) => setComponentId(Number(event.target.value))}
@@ -728,7 +739,7 @@ function InstanceFormModal({
 
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Instance Name</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Nombre de Instancia</label>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -737,7 +748,7 @@ function InstanceFormModal({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Short Name (SKU)</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Nombre Corto (SKU)</label>
             <input
               value={shortName}
               onChange={(event) => setShortName(event.target.value)}
@@ -747,17 +758,22 @@ function InstanceFormModal({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Unit Amount</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest"><FactoryQuantityLabel /> Unitaria</label>
           <input
             value={unitAmount}
             onChange={(event) => setUnitAmount(event.target.value)}
-            placeholder="Optional quantity basis"
+            placeholder="Base opcional"
             className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Description</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Imagen</label>
+          <MediaPicker value={selectedMedia} onChange={setSelectedMedia} />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Descripción</label>
           <textarea
             value={description}
             onChange={(event) => setDescription(event.target.value)}
@@ -767,7 +783,7 @@ function InstanceFormModal({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Short Description</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Descripción Corta</label>
           <textarea
             value={shortDescription}
             onChange={(event) => setShortDescription(event.target.value)}
@@ -777,7 +793,7 @@ function InstanceFormModal({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Installation</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Instalación</label>
           <textarea
             value={installation}
             onChange={(event) => setInstallation(event.target.value)}
@@ -788,7 +804,7 @@ function InstanceFormModal({
 
         {attributes.length ? (
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 shadow-sm p-4 flex flex-col gap-3">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Base Attributes</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Atributos Base</div>
             {attributes.map((attribute) => (
               <div key={attribute.name} className="flex flex-col gap-1.5">
                 <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">{attribute.name}</label>
@@ -804,7 +820,7 @@ function InstanceFormModal({
                     }
                     className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
                   >
-                    <option value="">Select value</option>
+                    <option value="">Seleccionar valor</option>
                     {attribute.options.map((option) => (
                       <option key={option} value={option}>
                         {option}
@@ -833,7 +849,7 @@ function InstanceFormModal({
         {mode === "create" ? (
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 shadow-sm p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Initial Materials</div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Materiales Iniciales</div>
               {applicableMaterialRules.length ? (
                 <button
                   type="button"
@@ -843,7 +859,7 @@ function InstanceFormModal({
                   }}
                   className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-[10px] font-semibold"
                 >
-                  {selectedMaterialRuleIds.length === applicableMaterialRules.length ? "Clear" : "Select All"}
+                  {selectedMaterialRuleIds.length === applicableMaterialRules.length ? "Limpiar" : "Seleccionar todo"}
                 </button>
               ) : null}
             </div>
@@ -875,7 +891,7 @@ function InstanceFormModal({
                 })}
               </div>
             ) : (
-              <div className="text-xs text-zinc-500 dark:text-zinc-400">No predefined materials apply to the current attribute values.</div>
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">No hay materiales predefinidos aplicables a los valores de atributos actuales.</div>
             )}
           </div>
         ) : null}
@@ -891,14 +907,14 @@ function InstanceFormModal({
 
         <div className="flex items-center justify-end gap-3 mt-4 pt-4 border-t border-black/10 dark:border-white/10">
           <button type="button" className="px-4 py-2 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded-lg text-sm font-semibold transition-colors" onClick={onClose}>
-            Cancel
+            Cancelar
           </button>
           <button 
             type="submit" 
             disabled={submitting}
             className="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
           >
-            {submitting ? "Saving..." : mode === "create" ? "Create Instance" : "Save Instance"}
+            {submitting ? "Guardando..." : mode === "create" ? "Crear instancia" : "Guardar instancia"}
           </button>
         </div>
       </form>
@@ -907,17 +923,30 @@ function InstanceFormModal({
 }
 
 function getOccurrencePrimaryLabel(occurrence: UsageOccurrence) {
-  return occurrence.context_label || occurrence.targets[0]?.instance_name || "Usage occurrence";
+  return occurrence.context_label || occurrence.targets[0]?.instance_name || "Ocurrencia de uso";
 }
 
-function getIncomingOccurrencePrimaryLabel(instance: ProjectInstance, occurrence: UsageOccurrence, index: number) {
-  const matchingLink = instance.linked_accessories.find(
-    (link) =>
-      link.relationship_type === occurrence.relationship_type &&
-      (link.application_label || null) === (occurrence.context_label || null),
-  );
+function getIncomingOccurrencePrimaryLabel(
+  instance: ProjectInstance,
+  occurrence: UsageOccurrence,
+  index: number,
+  occurrences: UsageOccurrence[],
+) {
+  const matchesOccurrence = (link: { relationship_type: string; application_label: string | null }, candidate: UsageOccurrence) =>
+    link.relationship_type === candidate.relationship_type &&
+    (link.application_label || null) === (candidate.context_label || null);
+  const matchingLinks = instance.linked_accessories.filter((link) => matchesOccurrence(link, occurrence));
+  const occurrenceOrdinal = occurrences
+    .slice(0, index + 1)
+    .filter((candidate) =>
+      candidate.relationship_type === occurrence.relationship_type &&
+      (candidate.context_label || null) === (occurrence.context_label || null),
+    ).length - 1;
+  const matchingLink = matchingLinks[occurrenceOrdinal] || (matchingLinks.length === 1 ? matchingLinks[0] : null);
+  const ordinalFallbackIndex = matchingLinks.length ? occurrenceOrdinal : index;
+  const fallbackLink = matchingLinks[ordinalFallbackIndex] || instance.linked_accessories[index];
 
-  return matchingLink?.name || instance.linked_accessories[index]?.name || occurrence.context_label || "Usage occurrence";
+  return matchingLink?.name || fallbackLink?.name || occurrence.context_label || "Ocurrencia de uso";
 }
 
 function renderOccurrenceSummary(
@@ -1072,12 +1101,12 @@ function InstanceSyncModal({
     <Modal
       open={open}
       title={`${instance.name} Sync`}
-      kicker="Field Status"
+      kicker="Estado del Campo"
       onClose={onClose}
       panelClassName="max-w-3xl"
     >
       {loading || !preview ? (
-        <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading sync details...</div>
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">Cargando detalles de sincronización...</div>
       ) : targetField === "attributes" && attributeSchema ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
@@ -1085,8 +1114,8 @@ function InstanceSyncModal({
               <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{attributeSchema.label}</div>
               <div className="text-sm text-zinc-600 dark:text-zinc-400">
                 {attributeSchema.differences.length
-                  ? "Catalog and instance attribute rows differ."
-                  : "Instance base attributes match the catalog schema."}
+                  ? "Las filas de atributos del catálogo y de la instancia difieren."
+                  : "Los atributos base de la instancia coinciden con el esquema del catálogo."}
               </div>
             </div>
             {statusMeta ? <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-widest ${statusMeta.className}`}>{statusMeta.label}</span> : null}
@@ -1095,7 +1124,7 @@ function InstanceSyncModal({
           {missingAttributes.length ? (
             <div className="rounded-lg border border-black/10 dark:border-white/10 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Missing in Instance</div>
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Faltante en Instancia</div>
                 <button
                   type="button"
                   disabled={syncing}
@@ -1132,7 +1161,7 @@ function InstanceSyncModal({
           {extraAttributes.length ? (
             <div className="rounded-lg border border-black/10 dark:border-white/10 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Extra in Instance</div>
+                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Extra en Instancia</div>
                 <button
                   type="button"
                   disabled={syncing}
@@ -1179,8 +1208,8 @@ function InstanceSyncModal({
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <SyncValuePanel label="Catalog" value={scalarField.catalog_value} />
-            <SyncValuePanel label="Instance" value={scalarField.instance_value} />
+            <SyncValuePanel label="Catálogo" value={scalarField.catalog_value} />
+            <SyncValuePanel label="Instancia" value={scalarField.instance_value} />
           </div>
 
           {scalarField.can_apply_catalog ? (
@@ -1205,7 +1234,7 @@ function InstanceSyncModal({
           ) : null}
         </div>
       ) : (
-        <div className="text-sm text-zinc-600 dark:text-zinc-400">No sync details found for this field.</div>
+        <div className="text-sm text-zinc-600 dark:text-zinc-400">No se encontraron detalles de sincronización para este campo.</div>
       )}
 
       <div className="flex justify-end pt-5 mt-5 border-t border-black/10 dark:border-white/10">
@@ -1253,7 +1282,7 @@ function OccurrenceEditorCard({
   async function handleSave() {
     const trimmedContextLabel = contextLabel.trim();
     if (!targetInstanceId && !trimmedContextLabel) {
-      setError("Select a linked item or enter a freeform location.");
+      setError("Selecciona un ítem vinculado o ingresa una ubicación libre.");
       return;
     }
 
@@ -1270,14 +1299,14 @@ function OccurrenceEditorCard({
         })),
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save usage.");
+      setError(err instanceof Error ? err.message : "No se pudo guardar el uso.");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete() {
-    if (!onDelete || !window.confirm("Delete this usage?")) {
+    if (!onDelete || !window.confirm("¿Eliminar este uso?")) {
       return;
     }
     setSaving(true);
@@ -1285,7 +1314,7 @@ function OccurrenceEditorCard({
     try {
       await onDelete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete usage.");
+      setError(err instanceof Error ? err.message : "No se pudo eliminar el uso.");
       setSaving(false);
     }
   }
@@ -1294,7 +1323,7 @@ function OccurrenceEditorCard({
     <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-3">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div className="flex flex-col gap-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Linked Item</label>
+          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ítem Vinculado</label>
           <select
             value={targetInstanceId}
             onChange={(event) => {
@@ -1305,7 +1334,7 @@ function OccurrenceEditorCard({
             }}
             className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
           >
-            <option value="">No linked item</option>
+            <option value="">Sin ítem vinculado</option>
             {targetOptions.map((target) => (
               <option key={target.instance_id} value={target.instance_id}>
                 {target.instance_name} ({target.category_name})
@@ -1314,7 +1343,7 @@ function OccurrenceEditorCard({
           </select>
         </div>
         <div className="flex flex-col gap-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Freeform Location</label>
+          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ubicación Libre</label>
           <input
             value={contextLabel}
             disabled={Boolean(targetInstanceId)}
@@ -1323,7 +1352,7 @@ function OccurrenceEditorCard({
             className="w-full rounded border border-black/10 dark:border-white/10 bg-white disabled:bg-zinc-100 dark:bg-black/30 dark:disabled:bg-white/5 px-2 py-1.5 text-sm disabled:text-zinc-500"
           />
           <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {targetInstanceId ? "Clear the linked item to type a freeform location instead." : "Use this when the usage does not point to a project item."}
+            {targetInstanceId ? "Limpiar the linked item to type a freeform location instead." : "Use this when the usage does not point to a project item."}
           </div>
         </div>
       </div>
@@ -1343,7 +1372,7 @@ function OccurrenceEditorCard({
                   }
                   className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
                 >
-                  <option value="">Select value</option>
+                  <option value="">Seleccionar valor</option>
                   {attribute.options.map((option) => (
                     <option key={`${attribute.name}-${option}`} value={option}>
                       {option}
@@ -1386,7 +1415,7 @@ function OccurrenceEditorCard({
             onClick={() => void handleSave()}
             className="px-3 py-1.5 rounded bg-accent-500 hover:bg-accent-400 text-xs font-semibold text-zinc-950 disabled:opacity-50"
           >
-            {saving ? "Saving..." : saveLabel}
+            {saving ? "Guardando..." : saveLabel}
           </button>
         </div>
       </div>
@@ -1420,7 +1449,7 @@ function UsageManager({
           onClick={() => setCreating((current) => !current)}
           className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold"
         >
-          {creating ? "Cancel" : "Add usage"}
+          {creating ? "Cancelar" : "Agregar uso"}
         </button>
       </div>
 
@@ -1431,7 +1460,7 @@ function UsageManager({
             instance={instance}
             occurrence={occurrence}
             targetOptions={targetOptions}
-            saveLabel="Save usage"
+            saveLabel="Guardar uso"
             onSave={(payload) => onUpdateOccurrence(occurrence.id, payload)}
             onDelete={() => onDeleteOccurrence(occurrence.id)}
           />
@@ -1441,7 +1470,7 @@ function UsageManager({
           <OccurrenceEditorCard
             instance={instance}
             targetOptions={targetOptions}
-            saveLabel="Create usage"
+            saveLabel="Crear uso"
             onSave={async (payload) => {
               await onCreateOccurrence(payload);
               setCreating(false);
@@ -1522,7 +1551,7 @@ function MaterialOccurrenceEditor({
         });
         serverSignatureRef.current = buildMaterialDraftSignature(nextPayload.mode, nextPayload.rows);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Could not update material rows.";
+        const message = err instanceof Error ? err.message : "No se pudieron actualizar las filas de materiales.";
         setError(message);
       }
 
@@ -1544,7 +1573,7 @@ function MaterialOccurrenceEditor({
 
   async function handleToggle(nextChecked: boolean) {
     if (nextChecked && subtypeOptions.length === 0) {
-      setError("Add project subtypes before enabling subtype-specific quantities.");
+      setError("Agrega subtipos de proyecto antes de habilitar cantidades específicas por subtipo.");
       return;
     }
     const nextMode = nextChecked ? "per_subtype" : "general";
@@ -1590,10 +1619,10 @@ function MaterialOccurrenceEditor({
               </span>
             ) : material.source_status === "missing" ? (
               <span
-                title={material.source_label || "Material missing from catalog"}
+                title={material.source_label || "Material faltante en el catálogo"}
                 className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-[10px] font-semibold tracking-wide text-red-700 dark:text-red-300"
               >
-                <i className="ph-bold ph-warning" /> Missing
+                <i className="ph-bold ph-warning" /> Faltante
               </span>
             ) : material.source_status !== "catalog" ? (
               <span
@@ -1605,7 +1634,7 @@ function MaterialOccurrenceEditor({
             ) : null}
           </h5>
           <label className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 shrink-0">
-            <span>Subtypes</span>
+            <span>Subtipos</span>
             <button
               type="button"
               role="switch"
@@ -1632,8 +1661,8 @@ function MaterialOccurrenceEditor({
             type="button"
             onClick={onOpenCalculationSheet}
             disabled={material.rule_id === null}
-            aria-label={`Open calculation sheet for ${material.material_name}`}
-            title={material.rule_id === null ? "Calculation sheets are available for catalog material rules." : "Open calculation sheet"}
+            aria-label={`Abrir planilla de cálculo for ${material.material_name}`}
+            title={material.rule_id === null ? "Las planillas de cálculo están disponibles para reglas de materiales del catálogo." : "Abrir planilla de cálculo"}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200 disabled:opacity-40"
           >
             <i className="ph-bold ph-table" />
@@ -1643,38 +1672,33 @@ function MaterialOccurrenceEditor({
               type="button"
               onClick={() => void onDeleteMaterial(material.material_key)}
               aria-label={`Remove ${material.material_name}`}
-              title="Remove material from this instance"
+              title="Quitar material de esta instancia"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300"
             >
               <i className="ph-bold ph-trash" />
             </button>
           ) : null}
           <div className="text-right flex flex-col items-end">
-            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Rule Qty</span>
+            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest"><FactoryQuantityLabel /> Regla</span>
             <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
               {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
             </span>
           </div>
         </div>
         <div className="absolute right-3 bottom-1.5 min-w-14 text-right text-[10px] font-mono text-zinc-500 pointer-events-none">
-          <span className={saving ? "opacity-100" : "opacity-0"}>Saving...</span>
+          <span className={saving ? "opacity-100" : "opacity-0"}>Guardando...</span>
         </div>
       </div>
-      {material.notes ? (
-        <div className="px-3 py-2 border-b border-black/5 dark:border-white/5 text-xs text-zinc-600 dark:text-zinc-400 bg-white dark:bg-black/20 shadow-sm">
-          {material.notes}
-        </div>
-      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse text-sm">
           <thead className="bg-white dark:bg-black/40 border-b border-black/5 dark:border-white/5">
             <tr>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtype</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Quantity</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6">Assembly Kit</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unit</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Source</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Formula</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtipo</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><FactoryQuantityLabel /></th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><WorkQuantityLabel /></th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unidad</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Fuente</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Fórmula</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
@@ -1785,7 +1809,7 @@ function ManualMaterialPicker({
         })
         .catch((err) => {
           if (!cancelled) {
-            setError(err instanceof Error ? err.message : "Could not search materials.");
+            setError(err instanceof Error ? err.message : "No se pudieron buscar materiales.");
           }
         })
         .finally(() => {
@@ -1811,7 +1835,7 @@ function ManualMaterialPicker({
       setQuery("");
       setResults([]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add material.");
+      setError(err instanceof Error ? err.message : "No se pudo agregar el material.");
     } finally {
       setAddingId(null);
     }
@@ -1824,11 +1848,11 @@ function ManualMaterialPicker({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Add material by SKU or name"
+          placeholder="Agregar material por SKU o nombre"
           className="flex-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-black/30 px-2 py-1.5 text-sm"
         />
       </div>
-      {loading ? <div className="text-xs text-zinc-500">Searching...</div> : null}
+      {loading ? <div className="text-xs text-zinc-500">Buscando...</div> : null}
       {results.length ? (
         <div className="divide-y divide-black/5 dark:divide-white/5 rounded border border-black/5 dark:border-white/5 overflow-hidden">
           {results.map((result) => {
@@ -1846,7 +1870,7 @@ function ManualMaterialPicker({
                   <span className="block text-[11px] font-mono text-zinc-500">{result.sku}</span>
                 </span>
                 <span className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
-                  {alreadyAdded ? "Added" : addingId === result.material_id ? "Adding..." : "Add"}
+                  {alreadyAdded ? "Agregado" : addingId === result.material_id ? "Agregando..." : "Agregar"}
                 </span>
               </button>
             );
@@ -1901,6 +1925,7 @@ function InstanceCard({
   const shortDescriptionSync = getScalarSyncField(syncPreview, "short_description");
   const installationSync = getScalarSyncField(syncPreview, "installation");
   const attributeSchemaSync = syncPreview?.attribute_schema ?? null;
+  const primaryMedia = instance.media[0] || null;
 
   useEffect(() => {
     if (expanded && !syncPreview && !syncPreviewLoading) {
@@ -1914,14 +1939,23 @@ function InstanceCard({
         className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
       >
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-center gap-3">
+          {primaryMedia ? (
+            <img
+              src={primaryMedia.uri}
+              alt={primaryMedia.original_filename || instance.name}
+              className="w-14 h-10 object-contain rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 shrink-0"
+            />
+          ) : null}
+          <div className="min-w-0">
           <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2 min-w-0">
             <span className="truncate">{instance.name}</span>
             <SyncIndicatorButton
               status={nameSync?.status}
-              title="View name sync details"
+              title="Ver detalles de sincronización del nombre"
               onClick={() => onOpenSyncModal("name")}
             />
+          </div>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -1929,7 +1963,7 @@ function InstanceCard({
             <button
               type="button"
               aria-label={`Edit ${instance.name}`}
-              title="Edit instance"
+              title="Editar instancia"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-300 transition-colors hover:bg-zinc-100 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-white"
               onClick={(event) => {
                 event.stopPropagation();
@@ -1941,7 +1975,7 @@ function InstanceCard({
             <button
               type="button"
               aria-label={`Delete ${instance.name}`}
-              title="Delete instance"
+              title="Eliminar instancia"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 transition-colors hover:bg-red-200 dark:hover:bg-red-500/20"
               onClick={(event) => {
                 event.stopPropagation();
@@ -1966,10 +2000,10 @@ function InstanceCard({
                 {instance.short_name && instance.short_name.trim() !== "" && instance.short_name !== instance.name ? (
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Short Name</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Nombre Corto</span>
                       <SyncIndicatorButton
                         status={shortNameSync?.status}
-                        title="View short name sync details"
+                        title="Ver detalles de sincronización del nombre corto"
                         onClick={() => onOpenSyncModal("short_name")}
                       />
                     </div>
@@ -1978,33 +2012,33 @@ function InstanceCard({
                 ) : null}
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Description</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción</span>
                     <SyncIndicatorButton
                       status={descriptionSync?.status}
-                      title="View description sync details"
+                      title="Ver detalles de sincronización de la descripción"
                       onClick={() => onOpenSyncModal("description")}
                     />
                   </div>
                   <p className={`text-sm ${descriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-800 dark:text-zinc-300"}`}>
-                    {instance.description || "No description provided."}
+                    {instance.description || "Sin descripción."}
                   </p>
                 </div>
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Short Description</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción Corta</span>
                     <SyncIndicatorButton
                       status={shortDescriptionSync?.status}
-                      title="View short description sync details"
+                      title="Ver detalles de sincronización de la descripción corta"
                       onClick={() => onOpenSyncModal("short_description")}
                     />
                   </div>
                   <p className={`text-xs ${shortDescriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-1 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-600 dark:text-zinc-400"}`}>
-                    {instance.short_description || "No short description."}
+                    {instance.short_description || "Sin descripción corta."}
                   </p>
                 </div>
                 <div className="flex items-center gap-4 text-xs font-mono">
                   <span className="text-zinc-600 dark:text-zinc-400">
-                    Unit Amount: <strong className="text-zinc-900 dark:text-zinc-200">{instance.unit_amount ?? "-"}</strong>
+                    <FactoryQuantityLabel /> Unitaria: <strong className="text-zinc-900 dark:text-zinc-200">{instance.unit_amount ?? "-"}</strong>
                   </span>
                 </div>
               </div>
@@ -2036,7 +2070,7 @@ function InstanceCard({
                   <div className="space-y-3">
                     {instance.incoming_occurrences.map((occurrence, index) =>
                       renderOccurrenceSummary(occurrence, index, {
-                        primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index),
+                        primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index, instance.incoming_occurrences),
                       }),
                     )}
                   </div>
@@ -2048,11 +2082,11 @@ function InstanceCard({
                   <i className="ph-bold ph-wrench text-zinc-600" /> Installation
                   <SyncIndicatorButton
                     status={installationSync?.status}
-                    title="View installation sync details"
+                    title="Ver detalles de sincronización de instalación"
                     onClick={() => onOpenSyncModal("installation")}
                   />
                 </h6>
-                <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "No installation notes."}</p>
+                <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "Sin notas de instalación."}</p>
               </div>
             </div>
 
@@ -2063,7 +2097,7 @@ function InstanceCard({
                 </h5>
                 <SyncIndicatorButton
                   status={attributeSchemaSync?.status}
-                  title="View attribute sync details"
+                  title="Ver detalles de sincronización de atributos"
                   onClick={() => onOpenSyncModal("attributes")}
                 />
               </div>
@@ -2089,7 +2123,7 @@ function InstanceCard({
                                     <td className={`py-1.5 w-1/2 ${isExtra ? "text-sky-700 dark:text-sky-300 font-medium" : "text-zinc-500"}`}>
                                       {row.name}
                                       {isExtra && (
-                                        <span title="Custom attribute not in catalog" className="inline-block ml-1.5 align-middle w-1.5 h-1.5 rounded-full bg-sky-400"></span>
+                                        <span title="Atributo personalizado no presente en el catálogo" className="inline-block ml-1.5 align-middle w-1.5 h-1.5 rounded-full bg-sky-400"></span>
                                       )}
                                     </td>
                                     <td className={`py-1.5 font-mono w-1/2 ${isExtra ? "text-sky-800 dark:text-sky-200" : "text-zinc-900 dark:text-zinc-200"}`}>{row.value || "-"}</td>
@@ -2101,20 +2135,20 @@ function InstanceCard({
                         </div>
                       ))
                     ) : (
-                      <p className="text-xs text-zinc-500 font-mono italic">No attributes loaded.</p>
+                      <p className="text-xs text-zinc-500 font-mono italic">No hay atributos cargados.</p>
                     )}
 
                     {missingAttributes.length > 0 && (
                       <div className="mt-4 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
                         <h5 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                          <i className="ph-bold ph-ghost text-zinc-400" /> Catalog Schema Defaults
+                          <i className="ph-bold ph-ghost text-zinc-400" /> Atributos del catalogo faltantes
                         </h5>
                         <table className="w-full text-left border-collapse text-sm opacity-50">
                           <tbody className="divide-y divide-black/5 dark:divide-white/10">
                             {missingAttributes.map((diff) => (
                               <tr key={`missing-${diff.name}`}>
                                 <td className="py-1.5 text-zinc-500 w-1/2">{diff.name}</td>
-                                <td className="py-1.5 text-zinc-500 font-mono w-1/2 italic">Not set</td>
+                                <td className="py-1.5 text-zinc-500 font-mono w-1/2 italic">Sin definir</td>
                               </tr>
                             ))}
                           </tbody>
@@ -2162,7 +2196,7 @@ function InstanceCard({
                 {instance.materials.filter(m => m.source_status !== "catalog").length ? (
                   <div className="mt-6 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
                     <h6 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                      <i className="ph-bold ph-warning-circle text-zinc-400" /> Exceptions (Manual / Missing)
+                      <i className="ph-bold ph-warning-circle text-zinc-400" /> Excepciones (Manual / Faltante)
                     </h6>
                     <div className="space-y-4">
                       {instance.materials.filter(m => m.source_status !== "catalog").map((material) => (
@@ -2181,7 +2215,7 @@ function InstanceCard({
 
                 {!instance.materials.length ? (
                   <div className="text-center py-6 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
-                    No applicable materials resolved for this instance.
+                    No hay materiales aplicables para este item
                   </div>
                 ) : null}
               </div>
@@ -2214,7 +2248,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     try {
       setData(await api.getProject(projectId));
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not load project.";
+      const message = err instanceof ApiError ? err.message : "No se pudo cargar el proyecto.";
       setError(message);
     } finally {
       if (showSpinner) {
@@ -2233,7 +2267,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       setSyncPreviews((current) => ({ ...current, [instanceId]: preview }));
       return preview;
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not load sync details.";
+      const message = err instanceof ApiError ? err.message : "No se pudieron cargar los detalles de sincronización.";
       setError(message);
       throw err;
     } finally {
@@ -2242,7 +2276,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
   }
 
   useEffect(() => {
-    onTitleChange?.("Project");
+    onTitleChange?.("Proyecto");
     setSyncPreviews({});
     setSyncPreviewLoading({});
     setSyncModalState(null);
@@ -2279,6 +2313,8 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
     selected_material_rule_ids?: number[];
+    media_asset_id?: number | null;
+    clear_media?: boolean;
   }) {
     if (!modalState || modalState.kind !== "create" || !activeCategory || !payload.component_id) {
       return;
@@ -2296,13 +2332,14 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
         selected_material_rule_ids: payload.selected_material_rule_ids ?? [],
+        media_asset_id: payload.media_asset_id ?? null,
       });
       if (result.instance) {
         setData((current) => (current ? upsertCategoryInstance(current, activeCategory.id, result.instance as ProjectInstance) : current));
       }
       setModalState(null);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create project instance.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear la instancia de proyecto.";
       setError(message);
     } finally {
       setSubmitting(false);
@@ -2317,6 +2354,8 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     installation: string | null;
     unit_amount: number | null;
     attribute_values: AttributeValueInput[];
+    media_asset_id?: number | null;
+    clear_media?: boolean;
   }) {
     if (!modalState || modalState.kind !== "edit" || !activeInstance) {
       return;
@@ -2331,6 +2370,8 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         installation: payload.installation,
         unit_amount: payload.unit_amount,
         attribute_values: payload.attribute_values,
+        media_asset_id: payload.media_asset_id ?? null,
+        clear_media: payload.clear_media ?? false,
       };
       const result = await api.updateProjectInstance(projectId, activeInstance.id, request);
       if (result.instance) {
@@ -2338,7 +2379,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       }
       setModalState(null);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not update project instance.";
+      const message = err instanceof ApiError ? err.message : "No se pudo actualizar la instancia de proyecto.";
       setError(message);
     } finally {
       setSubmitting(false);
@@ -2346,7 +2387,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
   }
 
   async function handleDeleteInstance(categoryId: number, instanceId: number) {
-    const confirmed = window.confirm("Delete this project instance and its project-scoped records?");
+    const confirmed = window.confirm("¿Eliminar esta instancia de proyecto y sus registros asociados al proyecto?");
     if (!confirmed) {
       return;
     }
@@ -2358,7 +2399,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         window.location.hash = `category-${categoryId}`;
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not delete project instance.";
+      const message = err instanceof ApiError ? err.message : "No se pudo eliminar la instancia de proyecto.";
       setError(message);
     }
   }
@@ -2399,7 +2440,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         });
       });
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not update material rows.";
+      const message = err instanceof ApiError ? err.message : "No se pudieron actualizar las filas de materiales.";
       setError(message);
       throw err;
     }
@@ -2411,14 +2452,14 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       await api.addManualMaterial(projectId, instanceId, materialId);
       await loadProject(false);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not add material.";
+      const message = err instanceof ApiError ? err.message : "No se pudo agregar el material.";
       setError(message);
       throw err;
     }
   }
 
   async function handleDeleteMaterialOccurrence(instanceId: number, materialKey: string) {
-    const confirmed = window.confirm("Remove this material from the instance?");
+    const confirmed = window.confirm("¿Quitar este material de la instancia?");
     if (!confirmed) {
       return;
     }
@@ -2427,7 +2468,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       await api.deleteMaterialOccurrence(projectId, instanceId, materialKey);
       await loadProject(false);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not remove material.";
+      const message = err instanceof ApiError ? err.message : "No se pudo quitar el material.";
       setError(message);
       throw err;
     }
@@ -2446,7 +2487,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         );
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not create usage.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear el uso.";
       setError(message);
       throw err;
     }
@@ -2466,7 +2507,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         );
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not update usage.";
+      const message = err instanceof ApiError ? err.message : "No se pudo actualizar el uso.";
       setError(message);
       throw err;
     }
@@ -2478,7 +2519,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       await api.deleteProjectOccurrence(projectId, instanceId, occurrenceId);
       setData((current) => (current ? removeOccurrenceFromProject(current, instanceId, occurrenceId) : current));
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not delete usage.";
+      const message = err instanceof ApiError ? err.message : "No se pudo eliminar el uso.";
       setError(message);
       throw err;
     }
@@ -2508,7 +2549,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       const preview = await api.refreshProjectInstanceSync(projectId, instanceId);
       await refreshProjectAndSyncPreview(instanceId, preview);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not refresh tracked fields.";
+      const message = err instanceof ApiError ? err.message : "No se pudieron actualizar los campos rastreados.";
       setError(message);
     } finally {
       setSyncingInstanceId(null);
@@ -2522,7 +2563,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       const preview = await api.applyProjectInstanceCatalogField(projectId, instanceId, field);
       await refreshProjectAndSyncPreview(instanceId, preview);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not apply catalog value.";
+      const message = err instanceof ApiError ? err.message : "No se pudo aplicar el valor del catálogo.";
       setError(message);
     } finally {
       setSyncingInstanceId(null);
@@ -2536,7 +2577,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       const preview = await api.applyProjectInstanceFieldToCatalog(projectId, instanceId, field);
       await refreshProjectAndSyncPreview(instanceId, preview);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not apply instance value to catalog.";
+      const message = err instanceof ApiError ? err.message : "No se pudo aplicar el valor de la instancia al catálogo.";
       setError(message);
     } finally {
       setSyncingInstanceId(null);
@@ -2550,7 +2591,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       const preview = await api.reconcileProjectInstanceAttributes(projectId, instanceId, payload);
       await refreshProjectAndSyncPreview(instanceId, preview);
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "Could not reconcile attribute schema.";
+      const message = err instanceof ApiError ? err.message : "No se pudo conciliar el esquema de atributos.";
       setError(message);
     } finally {
       setSyncingInstanceId(null);
@@ -2558,11 +2599,11 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
   }
 
   if (loading) {
-    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Loading project...</div>;
+    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Cargando proyecto...</div>;
   }
 
   if (!data) {
-    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Project not found.</div>;
+    return <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-600 dark:text-zinc-400">Proyecto no encontrado.</div>;
   }
 
   const categoryTree = buildCategoryTree(data.categories);
@@ -2597,7 +2638,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
               value={categorySearch}
               onChange={(event) => setCategorySearch(event.target.value)}
               type="text"
-              placeholder="Filter categories..."
+              placeholder="Filtrar categorías..."
               className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
             />
             <div className="flex-1 overflow-y-auto pr-2 space-y-1">
@@ -2627,7 +2668,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                     <i className="ph-bold ph-plus" />
                   </button>
                 ) : (
-                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">No reusable components exist</p>
+                  <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">No existen componentes reutilizables</p>
                 )}
               </div>
               <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
@@ -2677,18 +2718,18 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           <div className="mt-8 pt-8 border-t border-black/10 dark:border-white/10">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                <i className="ph-bold ph-tags text-zinc-600 dark:text-zinc-400" /> Auxiliary Elements
+                <i className="ph-bold ph-tags text-zinc-600 dark:text-zinc-400" /> Elementos Auxiliares
               </h3>
             </div>
             <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-black/40">
               <table className="w-full text-left border-collapse text-sm">
                 <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
                   <tr>
-                    <th className="px-3 py-2 text-zinc-500 font-medium">Code</th>
-                    <th className="px-3 py-2 text-zinc-500 font-medium">Name</th>
-                    <th className="px-3 py-2 text-zinc-500 font-medium">Category</th>
-                    <th className="px-3 py-2 text-zinc-500 font-medium">Subtype</th>
-                    <th className="px-3 py-2 text-zinc-500 font-medium text-right">Base Price</th>
+                    <th className="px-3 py-2 text-zinc-500 font-medium">Código</th>
+                    <th className="px-3 py-2 text-zinc-500 font-medium">Nombre</th>
+                    <th className="px-3 py-2 text-zinc-500 font-medium">Categoría</th>
+                    <th className="px-3 py-2 text-zinc-500 font-medium">Subtipo</th>
+                    <th className="px-3 py-2 text-zinc-500 font-medium text-right">Precio Base</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
@@ -2697,7 +2738,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                       <tr key={`${row.code}-${row.subtype}`} className="group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">
                         <td className="px-3 py-3 text-zinc-500 font-mono text-xs">{row.code}</td>
                         <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm">{row.name}</td>
-                        <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.category || "Uncategorized"}</td>
+                        <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.category || "Sin categoría"}</td>
                         <td className="px-3 py-3 text-zinc-600 dark:text-zinc-400 text-sm">{row.subtype}</td>
                         <td className="px-3 py-3 text-right font-mono text-sm text-accent-700 dark:text-accent-400">{row.price.toLocaleString()}</td>
                       </tr>

@@ -13,6 +13,7 @@ from app.models import (
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
+    CatalogComponentMedia,
     ComponentMaterialRule,
     ErpMaterialCache,
     Material,
@@ -22,6 +23,7 @@ from app.models import (
     ProjectInstanceAttributeGroup,
 )
 from app.models.entities import CategoryScope, ComponentType, utcnow
+from app.services.media import serialize_media_link
 
 
 def get_catalog_page_data(session: Session, selected_category_id: int | None = None) -> dict:
@@ -31,6 +33,9 @@ def get_catalog_page_data(session: Session, selected_category_id: int | None = N
             selectinload(CatalogCategory.components)
             .selectinload(CatalogComponent.attribute_definitions)
             .selectinload(CatalogAttributeDefinition.options),
+            selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.media)
+            .selectinload(CatalogComponentMedia.asset),
             selectinload(CatalogCategory.components)
             .selectinload(CatalogComponent.material_rules)
             .selectinload(ComponentMaterialRule.material),
@@ -139,11 +144,43 @@ def get_catalog_component_data(session: Session, component_id: int) -> dict | No
             selectinload(CatalogComponent.material_rules)
             .selectinload(ComponentMaterialRule.condition_groups)
             .selectinload(MaterialRuleGroup.conditions),
+            selectinload(CatalogComponent.media).selectinload(CatalogComponentMedia.asset),
         )
     )
     if component is None:
         return None
     return _serialize_component(component)
+
+
+def set_component_primary_media(
+    session: Session,
+    *,
+    component_id: int,
+    media_asset_id: int | None,
+    caption: str | None = None,
+) -> CatalogComponent | None:
+    component = session.scalar(
+        select(CatalogComponent)
+        .where(CatalogComponent.id == component_id)
+        .options(selectinload(CatalogComponent.media).selectinload(CatalogComponentMedia.asset))
+    )
+    if component is None:
+        return None
+
+    component.media.clear()
+    if media_asset_id is not None:
+        component.media.append(
+            CatalogComponentMedia(
+                media_asset_id=media_asset_id,
+                role="primary",
+                caption=(caption or "").strip() or None,
+                sort_order=0,
+            )
+        )
+    _touch_component(component)
+    session.commit()
+    session.refresh(component)
+    return component
 
 
 def update_component(
@@ -369,7 +406,6 @@ def replace_component_material_rules(
         material_rule.display_order = index * 10
         material_rule.unit = None
         material_rule.unit_qty_per_unit = rule_data.get("unit_qty_per_unit")
-        material_rule.notes = (rule_data.get("notes") or "").strip() or None
         material_rule.condition_groups.clear()
         session.flush()
 
@@ -504,6 +540,7 @@ def _serialize_component(component: CatalogComponent) -> dict:
         "short_description": component.short_description,
         "installation": component.installation,
         "unit_type": component.unit_type,
+        "media": [serialize_media_link(link) for link in component.media],
         "attributes": base_attributes,
         "base_attributes": base_attributes,
         "usage_attributes": usage_attributes,
@@ -515,7 +552,6 @@ def _serialize_component(component: CatalogComponent) -> dict:
                 "sku": rule.material.sku,
                 "unit": rule.unit or rule.material.unit,
                 "unit_qty_per_unit": rule.unit_qty_per_unit,
-                "notes": rule.notes,
                 "conditions": [
                     {
                         "group": group.group_key,

@@ -11,6 +11,7 @@ from app.models import (
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
+    CatalogComponentMedia,
     ComponentMaterialRule,
     InstanceExportSetting,
     Material,
@@ -37,6 +38,7 @@ from app.models import (
 from app.models.entities import BomCalculationMode, MaterialMode, MembershipRole, utcnow
 from app.services.audit import build_activity_change, build_activity_details, build_audit_context, record_project_activity
 from app.services.auth import can_view_project
+from app.services.media import serialize_media_link
 
 
 STATUS_LABELS = {
@@ -193,6 +195,30 @@ def _store_source_snapshot(instance: ProjectInstance, snapshot: dict) -> None:
 
 def _store_current_component_source_snapshot(instance: ProjectInstance) -> None:
     _store_source_snapshot(instance, _current_component_source_snapshot(instance.component))
+
+
+def _component_primary_media_asset_id(component: CatalogComponent) -> int | None:
+    for link in sorted(component.media, key=lambda item: item.sort_order):
+        if link.asset is not None:
+            return link.media_asset_id
+    return None
+
+
+def _set_instance_primary_media(instance: ProjectInstance, media_asset_id: int | None) -> None:
+    instance.media.clear()
+    instance.image_uri = None
+    if media_asset_id is None:
+        return
+    uri = f"/api/v1/media/assets/{media_asset_id}/content"
+    instance.media.append(
+        ProjectInstanceMedia(
+            media_asset_id=media_asset_id,
+            kind="image",
+            uri=uri,
+            sort_order=0,
+        )
+    )
+    instance.image_uri = uri
 
 
 def _build_scalar_sync_field(instance: ProjectInstance, field: str, snapshot_fields: dict[str, object]) -> dict:
@@ -664,6 +690,7 @@ def create_project_instance(
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
     selected_material_rule_ids: list[int] | None = None,
+    media_asset_id: int | None = None,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> ProjectInstance:
@@ -676,6 +703,7 @@ def create_project_instance(
             selectinload(CatalogComponent.material_rules)
             .selectinload(ComponentMaterialRule.condition_groups)
             .selectinload(MaterialRuleGroup.conditions),
+            selectinload(CatalogComponent.media).selectinload(CatalogComponentMedia.asset),
         )
     )
     if component is None:
@@ -705,6 +733,7 @@ def create_project_instance(
         instance=instance,
         selected_material_rule_ids=selected_material_rule_ids,
     )
+    _set_instance_primary_media(instance, media_asset_id if media_asset_id is not None else _component_primary_media_asset_id(component))
     session.add(
         ProjectInstanceSyncState(
             instance=instance,
@@ -760,6 +789,8 @@ def update_project_instance(
     installation: str | None,
     unit_amount: float | None,
     attribute_values: dict[str, str | None] | None = None,
+    media_asset_id: int | None = None,
+    update_media: bool = False,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> ProjectInstance | None:
@@ -769,6 +800,7 @@ def update_project_instance(
         .options(
             selectinload(ProjectInstance.component).selectinload(CatalogComponent.attribute_definitions),
             selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
+            selectinload(ProjectInstance.media).selectinload(ProjectInstanceMedia.asset),
             selectinload(ProjectInstance.sync_state),
         )
     )
@@ -787,6 +819,8 @@ def update_project_instance(
     instance.unit_amount = unit_amount
     _sync_base_attribute_group(instance)
     _apply_base_attribute_values(instance, attribute_values or {})
+    if update_media:
+        _set_instance_primary_media(instance, media_asset_id)
 
     if instance.sync_state is None:
         instance.sync_state = ProjectInstanceSyncState(instance=instance)
@@ -1095,6 +1129,9 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
             selectinload(CatalogCategory.components)
             .selectinload(CatalogComponent.attribute_definitions),
             selectinload(CatalogCategory.components)
+            .selectinload(CatalogComponent.media)
+            .selectinload(CatalogComponentMedia.asset),
+            selectinload(CatalogCategory.components)
             .selectinload(CatalogComponent.material_rules)
             .selectinload(ComponentMaterialRule.material),
             selectinload(CatalogCategory.components)
@@ -1204,7 +1241,7 @@ def get_project_with_details(session: Session, project_id: int) -> Project | Non
             .selectinload(ComponentMaterialRule.material),
             selectinload(Project.instances).selectinload(ProjectInstance.category),
             selectinload(Project.instances).selectinload(ProjectInstance.sync_state),
-            selectinload(Project.instances).selectinload(ProjectInstance.media),
+            selectinload(Project.instances).selectinload(ProjectInstance.media).selectinload(ProjectInstanceMedia.asset),
             selectinload(Project.instances).selectinload(ProjectInstance.export_settings),
             selectinload(Project.auxiliary_materials)
             .selectinload(ProjectAuxiliaryMaterialSelection.auxiliary_material),
@@ -1379,7 +1416,7 @@ def replace_project_material_occurrence(
             scope_type="instance",
             scope_id=instance.id,
             details=build_activity_details(
-                headline="Material quantities changed",
+                headline="Q_fábrica de materiales modificada",
                 subject_name=material.name,
                 notes=[f"Component: {instance.name}"],
                 changes=_describe_material_quantity_changes(previous_snapshot, next_snapshot),
@@ -1856,6 +1893,7 @@ def _build_category_sections(
                 "description": component.description,
                 "short_description": component.short_description,
                 "installation": component.installation,
+                "media": [serialize_media_link(link) for link in component.media],
                 "base_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.BASE)],
                 "usage_attributes": [_serialize_editable_definition(definition) for definition in _component_attribute_definitions(component, AttributeScope.USAGE)],
                 "material_rules": [_serialize_available_material_rule(rule) for rule in sorted(component.material_rules, key=lambda item: item.display_order)],
@@ -1878,7 +1916,6 @@ def _serialize_available_material_rule(rule: ComponentMaterialRule) -> dict:
         "sku": rule.material.sku,
         "unit": rule.unit or rule.material.unit,
         "unit_qty_per_unit": rule.unit_qty_per_unit,
-        "notes": rule.notes,
         "conditions": [
             {
                 "group": group.group_key,
@@ -1997,7 +2034,6 @@ def _serialize_instance(
                 "sku": rule.material.sku,
                 "unit_qty_per_unit": rule.unit_qty_per_unit,
                 "unit": rule.unit or rule.material.unit,
-                "notes": rule.notes,
                 "source_status": source_status,
                 "source_label": _material_source_label(source_status, rule_exists=True, applies=evaluation["applies"]),
                 "applicability": evaluation,
@@ -2033,7 +2069,6 @@ def _serialize_instance(
                 "sku": first_entry.material.sku,
                 "unit_qty_per_unit": rule.unit_qty_per_unit if rule else None,
                 "unit": first_entry.unit or (rule.unit if rule else None) or first_entry.material.unit,
-                "notes": rule.notes if rule else None,
                 "source_status": source_status,
                 "source_label": _material_source_label(source_status, rule_exists=rule is not None, applies=False),
                 "applicability": _manual_material_applicability(source_status != "stale"),
@@ -2082,7 +2117,7 @@ def _serialize_instance(
             else None,
             "notes": instance.sync_state.sync_notes if instance.sync_state else None,
         },
-        "media": [{"kind": media.kind, "uri": media.uri, "caption": media.caption} for media in instance.media],
+        "media": [serialize_media_link(media) for media in instance.media],
         "export_settings": [
             {
                 "target": setting.target,
@@ -2287,7 +2322,7 @@ INSTANCE_FIELD_LABELS = {
     "description": "Description",
     "short_description": "Short description",
     "installation": "Installation",
-    "unit_amount": "Unit amount",
+    "unit_amount": "Q_fábrica unitaria",
 }
 
 OCCURRENCE_FIELD_LABELS = {
@@ -2382,11 +2417,11 @@ def _describe_material_quantity_changes(before: list[dict], after: list[dict]) -
         next_row = after_map.get(subtype_id, {})
         label_prefix = next_row.get("subtype_name") or previous_row.get("subtype_name") or "General"
         if previous_row.get("quantity") != next_row.get("quantity"):
-            changes.append(build_activity_change(f"{label_prefix} quantity", previous_row.get("quantity"), next_row.get("quantity")))
+            changes.append(build_activity_change(f"{label_prefix} Q_fábrica", previous_row.get("quantity"), next_row.get("quantity")))
         if previous_row.get("assembly_quantity") != next_row.get("assembly_quantity"):
             changes.append(
                 build_activity_change(
-                    f"{label_prefix} assembly quantity",
+                    f"{label_prefix} Q_obra",
                     previous_row.get("assembly_quantity"),
                     next_row.get("assembly_quantity"),
                 )
@@ -2643,9 +2678,9 @@ def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:
 
 def _build_formula_explanation(entry: ProjectBomEntry) -> str | None:
     if entry.calculation_mode == BomCalculationMode.AUTO and entry.calculation_formula:
-        return f"Auto calculated from formula {entry.calculation_formula}"
+        return f"Q_fábrica calculada automáticamente con la fórmula {entry.calculation_formula}"
     if entry.calculation_mode == BomCalculationMode.MANUAL:
-        return "Manually overridden quantity"
+        return "Q_fábrica sobrescrita manualmente"
     return None
 
 
