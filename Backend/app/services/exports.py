@@ -68,12 +68,13 @@ def request_project_export(
     export_kind: str,
     payload: dict | None,
 ) -> ProjectExportJob:
+    normalized_payload = _normalize_export_payload(export_kind, payload or {})
     job = ProjectExportJob(
         project=project,
         requested_by=requested_by,
         export_kind=ExportKind(export_kind),
         status=ExportStatus.PENDING,
-        payload=payload or {},
+        payload=normalized_payload,
     )
     session.add(job)
     session.commit()
@@ -145,39 +146,17 @@ def execute_project_export(
     return job
 
 
-def resolve_artifact_path(*, settings: Settings, artifact_uri: str) -> Path:
-    prefix = "/exports/"
-    if not artifact_uri.startswith(prefix):
-        raise ValueError("Unsupported export artifact URI")
-
-    artifact_name = artifact_uri[len(prefix) :]
-    if not artifact_name:
-        raise ValueError("Missing export artifact name")
-
-    output_dir = settings.export_output_dir.resolve()
-    artifact_path = (output_dir / artifact_name).resolve()
-    if artifact_path.parent != output_dir:
-        raise ValueError("Invalid export artifact path")
-    return artifact_path
-
-
 def _build_materials_workbook_export(
     session: Session,
     *,
     project_id: int,
-    output_dir: Path,
     job_id: int,
 ) -> str:
-    from app.services.export_workbooks import build_materials_workbook
-
     project_data = get_project_view_data(session, project_id)
     if project_data is None:
         raise ValueError("Project not found")
 
-    project_name = project_data["project"]["name"]
-    artifact_name = f"{job_id}-{_slugify(project_name)}-materials.xlsx"
-    artifact_path = output_dir / artifact_name
-    build_materials_workbook(project_data, artifact_path)
+    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "materials", "xlsx")
     return f"/exports/{artifact_name}"
 
 
@@ -185,24 +164,13 @@ def _build_cost_model_workbook_export(
     session: Session,
     *,
     project_id: int,
-    output_dir: Path,
     job_id: int,
-    settings: Settings,
 ) -> str:
-    from app.services.export_workbooks import build_cost_model_workbook
-
     project_data = get_project_view_data(session, project_id)
     if project_data is None:
         raise ValueError("Project not found")
 
-    project_name = project_data["project"]["name"]
-    artifact_name = f"{job_id}-{_slugify(project_name)}-cost-model.xlsx"
-    artifact_path = output_dir / artifact_name
-    build_cost_model_workbook(
-        project_data,
-        artifact_path,
-        prices_by_sku=_load_cost_model_price_map(session, settings=settings, project_data=project_data),
-    )
+    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
     return f"/exports/{artifact_name}"
 
 
@@ -210,22 +178,17 @@ def _build_commercial_pdf_export(
     session: Session,
     *,
     project_id: int,
-    output_dir: Path,
     job_id: int,
     static_dir: Path,
     media_gallery_dir: Path,
 ) -> str:
-    from app.services.export_pdfs import build_commercial_pdf
-
     project = get_project_with_details(session, project_id)
     project_data = get_project_view_data(session, project_id)
     if project is None or project_data is None:
         raise ValueError("Project not found")
 
-    commercial_sections = build_commercial_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
-    artifact_name = f"{job_id}-{_slugify(project_data['project']['name'])}-commercial.pdf"
-    artifact_path = output_dir / artifact_name
-    build_commercial_pdf({"project": project_data["project"], "sections": commercial_sections}, artifact_path)
+    build_commercial_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
+    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "commercial", "pdf")
     return f"/exports/{artifact_name}"
 
 
@@ -233,22 +196,17 @@ def _build_full_technical_pdf_export(
     session: Session,
     *,
     project_id: int,
-    output_dir: Path,
     job_id: int,
     static_dir: Path,
     media_gallery_dir: Path,
 ) -> str:
-    from app.services.export_pdfs import build_full_technical_pdf
-
     project = get_project_with_details(session, project_id)
     project_data = get_project_view_data(session, project_id)
     if project is None or project_data is None:
         raise ValueError("Project not found")
 
-    sections = build_full_technical_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
-    artifact_name = f"{job_id}-{_slugify(project_data['project']['name'])}-full-technical.pdf"
-    artifact_path = output_dir / artifact_name
-    build_full_technical_pdf({"project": project_data["project"], "sections": sections}, artifact_path)
+    build_full_technical_export_sections(project, project_data, static_dir=static_dir, media_gallery_dir=media_gallery_dir)
+    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "full-technical", "pdf")
     return f"/exports/{artifact_name}"
 
 
@@ -256,32 +214,190 @@ def _build_detailed_material_pdf_export(
     session: Session,
     *,
     project_id: int,
-    output_dir: Path,
+    job_id: int,
+) -> str:
+    project_data = get_project_view_data(session, project_id)
+    if project_data is None:
+        raise ValueError("Project not found")
+
+    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "detailed-materials", "pdf")
+    return f"/exports/{artifact_name}"
+
+
+def build_project_export_artifact(
+    session: Session,
+    *,
+    job: ProjectExportJob,
+    settings: Settings,
+) -> ExportArtifact:
+    match job.export_kind:
+        case ExportKind.COMMERCIAL_PDF:
+            return _render_commercial_pdf_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
+        case ExportKind.MATERIALS_WORKBOOK:
+            return _render_materials_workbook_export(session, project_id=job.project_id, job_id=job.id)
+        case ExportKind.COST_MODEL_WORKBOOK:
+            return _render_cost_model_workbook_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
+        case ExportKind.FULL_TECHNICAL_PDF:
+            return _render_full_technical_pdf_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
+        case ExportKind.DETAILED_MATERIAL_PDF:
+            return _render_detailed_material_pdf_export(
+                session,
+                project_id=job.project_id,
+                job_id=job.id,
+                settings=settings,
+                show_prices=_should_show_prices(job.requested_by),
+                quantity_basis=_detailed_material_quantity_basis(job.payload),
+            )
+        case _:
+            raise NotImplementedError(f"Export kind '{job.export_kind.value}' is not implemented yet")
+
+
+def _render_materials_workbook_export(session: Session, *, project_id: int, job_id: int) -> ExportArtifact:
+    from app.services.export_workbooks import build_materials_workbook
+
+    project_data = get_project_view_data(session, project_id)
+    if project_data is None:
+        raise ValueError("Project not found")
+
+    output = BytesIO()
+    build_materials_workbook(project_data, output)
+    filename = _artifact_name(job_id, project_data["project"]["name"], "materials", "xlsx")
+    return ExportArtifact(
+        output.getvalue(),
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        False,
+    )
+
+
+def _render_cost_model_workbook_export(
+    session: Session,
+    *,
+    project_id: int,
+    job_id: int,
+    settings: Settings,
+) -> ExportArtifact:
+    from app.services.export_workbooks import build_cost_model_workbook
+
+    project_data = get_project_view_data(session, project_id)
+    if project_data is None:
+        raise ValueError("Project not found")
+
+    output = BytesIO()
+    build_cost_model_workbook(
+        project_data,
+        output,
+        prices_by_sku=_load_cost_model_price_map(session, settings=settings, project_data=project_data),
+    )
+    filename = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
+    return ExportArtifact(
+        output.getvalue(),
+        filename,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        False,
+    )
+
+
+def _render_commercial_pdf_export(
+    session: Session,
+    *,
+    project_id: int,
+    job_id: int,
+    settings: Settings,
+) -> ExportArtifact:
+    from app.services.export_pdfs import build_commercial_pdf
+
+    project = get_project_with_details(session, project_id)
+    project_data = get_project_view_data(session, project_id)
+    if project is None or project_data is None:
+        raise ValueError("Project not found")
+
+    sections = build_commercial_export_sections(
+        project,
+        project_data,
+        static_dir=BACKEND_DIR / "app" / "static",
+        media_gallery_dir=settings.media_gallery_dir,
+    )
+    output = BytesIO()
+    build_commercial_pdf({"project": project_data["project"], "sections": sections}, output)
+    filename = _artifact_name(job_id, project_data["project"]["name"], "commercial", "pdf")
+    return ExportArtifact(output.getvalue(), filename, "application/pdf", True)
+
+
+def _render_full_technical_pdf_export(
+    session: Session,
+    *,
+    project_id: int,
+    job_id: int,
+    settings: Settings,
+) -> ExportArtifact:
+    from app.services.export_pdfs import build_full_technical_pdf
+
+    project = get_project_with_details(session, project_id)
+    project_data = get_project_view_data(session, project_id)
+    if project is None or project_data is None:
+        raise ValueError("Project not found")
+
+    sections = build_full_technical_export_sections(
+        project,
+        project_data,
+        static_dir=BACKEND_DIR / "app" / "static",
+        media_gallery_dir=settings.media_gallery_dir,
+    )
+    output = BytesIO()
+    build_full_technical_pdf({"project": project_data["project"], "sections": sections}, output)
+    filename = _artifact_name(job_id, project_data["project"]["name"], "full-technical", "pdf")
+    return ExportArtifact(output.getvalue(), filename, "application/pdf", True)
+
+
+def _render_detailed_material_pdf_export(
+    session: Session,
+    *,
+    project_id: int,
     job_id: int,
     settings: Settings,
     show_prices: bool,
-) -> str:
+    quantity_basis: str,
+) -> ExportArtifact:
     from app.services.export_pdfs import build_detailed_material_pdf
 
     project_data = get_project_view_data(session, project_id)
     if project_data is None:
         raise ValueError("Project not found")
 
-    sections = build_detailed_material_export_sections(project_data)
+    sections = build_detailed_material_export_sections(project_data, quantity_basis=quantity_basis)
     enriched_sections = _enrich_detailed_material_sections(
         session,
         sections=sections,
         settings=settings,
         show_prices=show_prices,
     )
-    artifact_name = f"{job_id}-{_slugify(project_data['project']['name'])}-detailed-materials.pdf"
-    artifact_path = output_dir / artifact_name
+    output = BytesIO()
     build_detailed_material_pdf(
         {"project": project_data["project"], "sections": enriched_sections},
-        artifact_path,
+        output,
         show_prices=show_prices,
+        quantity_label="Q obra" if quantity_basis == "work" else "Q fabrica",
     )
-    return f"/exports/{artifact_name}"
+    filename_suffix = "detailed-materials-q-obra" if quantity_basis == "work" else "detailed-materials-q-fabrica"
+    filename = _artifact_name(job_id, project_data["project"]["name"], filename_suffix, "pdf")
+    return ExportArtifact(output.getvalue(), filename, "application/pdf", True)
+
+
+def _normalize_export_payload(export_kind: str, payload: dict) -> dict:
+    normalized = dict(payload)
+    if export_kind == ExportKind.DETAILED_MATERIAL_PDF.value:
+        normalized["quantity_basis"] = _detailed_material_quantity_basis(normalized)
+    return normalized
+
+
+def _detailed_material_quantity_basis(payload: dict | None) -> str:
+    raw_value = (payload or {}).get("quantity_basis")
+    if raw_value in {"factory", "q_fabrica", "Q_fabrica"}:
+        return "factory"
+    if raw_value in {"work", "q_obra", "Q_obra"}:
+        return "work"
+    return "factory"
 
 
 def _enrich_detailed_material_sections(
@@ -508,6 +624,10 @@ def _should_show_prices(user: User | None) -> bool:
     if user is None:
         return True
     return "viewer" not in role_codes(user)
+
+
+def _artifact_name(job_id: int, project_name: str, suffix: str, extension: str) -> str:
+    return f"{job_id}-{_slugify(project_name)}-{suffix}.{extension}"
 
 
 def _slugify(value: str) -> str:

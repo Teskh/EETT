@@ -27,6 +27,13 @@ type SubtypeModalState = {
   projectName: string;
 } | null;
 
+type ExportModalState = {
+  projectId: number;
+  projectName: string;
+} | null;
+
+type DetailedMaterialQuantityBasis = "factory" | "work";
+
 const INLINE_EXPORT_KINDS = new Set([
   "commercial_pdf",
   "full_technical_pdf",
@@ -87,7 +94,7 @@ function SubtypeNodeEditor({
             onClick={() => void onCreateChild(subtype.id)}
             className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 text-[10px] font-semibold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 disabled:opacity-50"
           >
-            Child
+            Hijo
           </button>
           <button
             type="button"
@@ -95,7 +102,7 @@ function SubtypeNodeEditor({
             onClick={() => void onDelete(subtype.id)}
             className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-[10px] font-semibold uppercase tracking-widest text-red-700 dark:text-red-300 disabled:opacity-50"
           >
-            Delete
+            Eliminar
           </button>
         </div>
       </div>
@@ -125,6 +132,8 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [saving, setSaving] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [subtypeModal, setSubtypeModal] = useState<SubtypeModalState>(null);
+  const [exportModal, setExportModal] = useState<ExportModalState>(null);
+  const [detailedMaterialQuantityBasis, setDetailedMaterialQuantityBasis] = useState<DetailedMaterialQuantityBasis>("factory");
   const [subtypeProject, setSubtypeProject] = useState<ProjectDetailData | null>(null);
   const [subtypeLoading, setSubtypeLoading] = useState(false);
   const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
@@ -298,7 +307,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     if (!subtypeModal) {
       return;
     }
-    const promptLabel = parentId === null ? "New root subtype name" : "New child subtype name";
+    const promptLabel = parentId === null ? "Nombre del nuevo subtipo raíz" : "Nombre del nuevo subtipo hijo";
     const name = window.prompt(promptLabel);
     if (!name || !name.trim()) {
       return;
@@ -364,11 +373,23 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
         throw new Error(payloadError || "La exportación no se completó correctamente.");
       }
       await openExportArtifact(job);
+      return true;
     } catch (err) {
       const message = err instanceof ApiError || err instanceof Error ? err.message : "No se pudo exportar el archivo.";
       setError(message);
+      return false;
     } finally {
       setExportingJob(null);
+    }
+  }
+
+  async function handleModalExport(kind: string, payload: Record<string, unknown> = {}) {
+    if (!exportModal) {
+      return;
+    }
+    const completed = await handleRequestExport(exportModal.projectId, kind, payload);
+    if (completed) {
+      setExportModal(null);
     }
   }
 
@@ -514,115 +535,18 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             >
                               Subtipos
                             </button>
-                            <details className="relative">
-                              <summary
-                                className="list-none px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 cursor-pointer flex items-center gap-1.5"
-                                aria-label={`Opciones de exportación para ${project.name}`}
-                              >
-                                <i className="ph-bold ph-file-arrow-down" />
-                                Exportar
-                                <i className="ph-bold ph-caret-down" />
-                              </summary>
-                              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-20 min-w-56 rounded-xl border border-black/10 dark:border-white/10 bg-white/95 dark:bg-zinc-950/95 backdrop-blur-xl shadow-xl p-2">
-                                <button
-                                  type="button"
-                                  disabled={isExporting(project.id, "commercial_pdf")}
-                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
-                                  onClick={(event) => {
-                                    const details = event.currentTarget.closest("details");
-                                    if (details instanceof HTMLDetailsElement) {
-                                      details.open = false;
-                                    }
-                                    void handleRequestExport(project.id, "commercial_pdf");
-                                  }}
-                                >
-                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "commercial_pdf") ? "Generando PDF..." : "PDF Comercial (.pdf)"}
-                                  </span>
-                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Abre el PDF para cliente en una nueva pestaña del navegador.
-                                  </span>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isExporting(project.id, "full_technical_pdf")}
-                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
-                                  onClick={(event) => {
-                                    const details = event.currentTarget.closest("details");
-                                    if (details instanceof HTMLDetailsElement) {
-                                      details.open = false;
-                                    }
-                                    void handleRequestExport(project.id, "full_technical_pdf");
-                                  }}
-                                >
-                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "full_technical_pdf") ? "Generando PDF..." : "PDF Técnico Completo (.pdf)"}
-                                  </span>
-                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Abre el PDF técnico con descripciones completas, notas de instalación y materiales.
-                                  </span>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isExporting(project.id, "detailed_material_pdf")}
-                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
-                                  onClick={(event) => {
-                                    const details = event.currentTarget.closest("details");
-                                    if (details instanceof HTMLDetailsElement) {
-                                      details.open = false;
-                                    }
-                                    void handleRequestExport(project.id, "detailed_material_pdf");
-                                  }}
-                                >
-                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "detailed_material_pdf") ? "Generando PDF..." : "PDF Detallado de Materiales (.pdf)"}
-                                  </span>
-                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Abre el PDF de materiales agrupado por categoría con detalle de stock, OC y consumo.
-                                  </span>
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={isExporting(project.id, "materials_workbook")}
-                                  className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
-                                  onClick={(event) => {
-                                    const details = event.currentTarget.closest("details");
-                                    if (details instanceof HTMLDetailsElement) {
-                                      details.open = false;
-                                    }
-                                    void handleRequestExport(project.id, "materials_workbook", { group_by: "context" });
-                                  }}
-                                >
-                                  <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                    {isExporting(project.id, "materials_workbook") ? "Generando libro..." : "Libro de Materiales (.xlsx)"}
-                                  </span>
-                                  <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                    Descarga el libro mediante el flujo de descarga del navegador.
-                                  </span>
-                                </button>
-                                {currentUser.permissions.cost_model_export ? (
-                                  <button
-                                    type="button"
-                                    disabled={isExporting(project.id, "cost_model_workbook")}
-                                    className="w-full text-left rounded-lg px-3 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
-                                    onClick={(event) => {
-                                      const details = event.currentTarget.closest("details");
-                                      if (details instanceof HTMLDetailsElement) {
-                                        details.open = false;
-                                      }
-                                      void handleRequestExport(project.id, "cost_model_workbook");
-                                    }}
-                                  >
-                                    <span className="block text-[11px] font-semibold text-zinc-900 dark:text-white">
-                                      {isExporting(project.id, "cost_model_workbook") ? "Generando libro..." : "Libro de Modelo de Costos (.xlsx)"}
-                                    </span>
-                                    <span className="block mt-1 text-[10px] text-zinc-500 dark:text-zinc-400">
-                                      Descarga el libro de modelo de costos basado en fórmulas con subtotales de instancias e ítems auxiliares.
-                                    </span>
-                                  </button>
-                                ) : null}
-                              </div>
-                            </details>
+                            <button
+                              type="button"
+                              className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 flex items-center gap-1.5"
+                              onClick={() => {
+                                setDetailedMaterialQuantityBasis("factory");
+                                setExportModal({ projectId: project.id, projectName: project.name });
+                              }}
+                              aria-label={`Exportar ${project.name}`}
+                            >
+                              <i className="ph-bold ph-file-arrow-down" />
+                              Exportar
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -638,6 +562,124 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
           })}
         </div>
       ) : null}
+
+      <Modal
+        open={exportModal !== null}
+        title={exportModal?.projectName || "Exportar proyecto"}
+        kicker="Exportación"
+        onClose={() => {
+          if (exportingJob) {
+            return;
+          }
+          setExportModal(null);
+        }}
+        panelClassName="max-w-2xl"
+      >
+        <div className="space-y-3">
+          <button
+            type="button"
+            disabled={!exportModal || isExporting(exportModal.projectId, "commercial_pdf")}
+            className="w-full rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-left transition-colors hover:bg-black/10 disabled:opacity-50 dark:border-white/10 dark:bg-black/30 dark:hover:bg-white/5"
+            onClick={() => void handleModalExport("commercial_pdf")}
+          >
+            <span className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-white">PDF Comercial</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">.pdf</span>
+            </span>
+            <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+              {exportModal && isExporting(exportModal.projectId, "commercial_pdf") ? "Generando..." : "Para cliente."}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!exportModal || isExporting(exportModal.projectId, "full_technical_pdf")}
+            className="w-full rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-left transition-colors hover:bg-black/10 disabled:opacity-50 dark:border-white/10 dark:bg-black/30 dark:hover:bg-white/5"
+            onClick={() => void handleModalExport("full_technical_pdf")}
+          >
+            <span className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-white">PDF Técnico Completo</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">.pdf</span>
+            </span>
+            <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+              {exportModal && isExporting(exportModal.projectId, "full_technical_pdf") ? "Generando..." : "Ficha técnica completa."}
+            </span>
+          </button>
+
+          <div className="rounded-lg border border-black/10 bg-black/5 p-4 dark:border-white/10 dark:bg-black/30">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">PDF Detallado de Materiales</h4>
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Materiales, stock y OC.</p>
+              </div>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">.pdf</span>
+            </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Cantidad para PDF detallado de materiales">
+              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
+                <input
+                  type="radio"
+                  name="detailed-material-quantity"
+                  value="factory"
+                  checked={detailedMaterialQuantityBasis === "factory"}
+                  onChange={() => setDetailedMaterialQuantityBasis("factory")}
+                />
+                Q_fabrica
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
+                <input
+                  type="radio"
+                  name="detailed-material-quantity"
+                  value="work"
+                  checked={detailedMaterialQuantityBasis === "work"}
+                  onChange={() => setDetailedMaterialQuantityBasis("work")}
+                />
+                Q_obra
+              </label>
+            </div>
+            <button
+              type="button"
+              disabled={!exportModal || isExporting(exportModal.projectId, "detailed_material_pdf")}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-accent-500 px-4 py-2.5 text-sm font-bold text-zinc-950 transition-colors hover:bg-accent-400 disabled:opacity-60"
+              onClick={() => void handleModalExport("detailed_material_pdf", { quantity_basis: detailedMaterialQuantityBasis })}
+            >
+              <i className="ph-bold ph-file-pdf" />
+              {exportModal && isExporting(exportModal.projectId, "detailed_material_pdf") ? "Generando..." : "Generar PDF"}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            disabled={!exportModal || isExporting(exportModal.projectId, "materials_workbook")}
+            className="w-full rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-left transition-colors hover:bg-black/10 disabled:opacity-50 dark:border-white/10 dark:bg-black/30 dark:hover:bg-white/5"
+            onClick={() => void handleModalExport("materials_workbook", { group_by: "context" })}
+          >
+            <span className="flex items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-zinc-900 dark:text-white">Libro de Materiales</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">.xlsx</span>
+            </span>
+            <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+              {exportModal && isExporting(exportModal.projectId, "materials_workbook") ? "Generando..." : "Totales y contexto."}
+            </span>
+          </button>
+
+          {currentUser.permissions.cost_model_export ? (
+            <button
+              type="button"
+              disabled={!exportModal || isExporting(exportModal.projectId, "cost_model_workbook")}
+              className="w-full rounded-lg border border-black/10 bg-black/5 px-4 py-3 text-left transition-colors hover:bg-black/10 disabled:opacity-50 dark:border-white/10 dark:bg-black/30 dark:hover:bg-white/5"
+              onClick={() => void handleModalExport("cost_model_workbook")}
+            >
+              <span className="flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-zinc-900 dark:text-white">Libro de Modelo de Costos</span>
+                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">.xlsx</span>
+              </span>
+              <span className="mt-1 block text-xs text-zinc-500 dark:text-zinc-400">
+                {exportModal && isExporting(exportModal.projectId, "cost_model_workbook") ? "Generando..." : "Costos y fórmulas."}
+              </span>
+            </button>
+          ) : null}
+        </div>
+      </Modal>
 
       <Modal
         open={createModalOpen}

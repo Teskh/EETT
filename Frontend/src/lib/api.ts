@@ -8,8 +8,11 @@ import type {
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
   CatalogPageData,
+  CommentContext,
+  CommentNotification,
   CostModelAdjustmentDeleteRequest,
   CostModelAdjustmentUpsertRequest,
+  CreateProjectCommentRequest,
   CostModelView,
   CreateProjectSubtypeRequest,
   CreateUserRequest,
@@ -39,7 +42,9 @@ import type {
   MutationResult,
   InstanceSyncPreview,
   ProjectDetailData,
+  ProjectComment,
   ProjectsBoardData,
+  RolePageAccessUpdateRequest,
   SessionUser,
   UpdateProjectStatusRequest,
   UpdateMaterialCalculationSheetRequest,
@@ -208,6 +213,12 @@ export const api = {
   },
   updateUser(userId: number, payload: UpdateUserRequest) {
     return request<ManagedUser>(`/api/v1/users/${userId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  updateRolePageAccess(payload: RolePageAccessUpdateRequest) {
+    return request<UserDirectory>("/api/v1/roles/page-access", {
       method: "PUT",
       body: JSON.stringify(payload),
     });
@@ -516,6 +527,46 @@ export const api = {
   },
   getProjectActivity(projectId: number) {
     return request<ActivityGroup[]>(`/api/v1/projects/${projectId}/activity`);
+  },
+  getProjectComments(projectId: number, instanceId?: number | null) {
+    const query = instanceId ? `?instance_id=${instanceId}` : "";
+    return request<ProjectComment[]>(`/api/v1/projects/${projectId}/comments${query}`);
+  },
+  createProjectComment(projectId: number, payload: CreateProjectCommentRequest, mutationBatchId?: string) {
+    return request<ProjectComment>(`/api/v1/projects/${projectId}/comments`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  deleteProjectComment(projectId: number, commentId: number, mutationBatchId?: string) {
+    return request<{ ok: boolean; comment_id: number; soft_deleted: boolean }>(`/api/v1/projects/${projectId}/comments/${commentId}`, {
+      method: "DELETE",
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  getCommentContext(commentId: number) {
+    return request<CommentContext>(`/api/v1/comments/${commentId}/context`);
+  },
+  getMentionableUsers(projectId?: number) {
+    const query = projectId ? `?project_id=${projectId}` : "";
+    return request<{ users: ManagedUser[] }>(`/api/v1/comments/mentionable-users${query}`);
+  },
+  getNotifications() {
+    return request<CommentNotification[]>("/api/v1/notifications");
+  },
+  getNotificationUnreadCount() {
+    return request<{ unread: number }>("/api/v1/notifications/unread-count");
+  },
+  markNotificationRead(notificationId: number) {
+    return request<{ ok: boolean; notification_id: number; is_read: boolean }>(`/api/v1/notifications/${notificationId}/read`, {
+      method: "POST",
+    });
+  },
+  markInstanceNotificationsRead(projectId: number, instanceId: number) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/instances/${instanceId}/notifications/read`, {
+      method: "POST",
+    });
   },
   createProjectSubtype(projectId: number, payload: CreateProjectSubtypeRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes`, {

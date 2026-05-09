@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -35,10 +35,13 @@ PROJECT_STATUS_LABELS = {
 }
 
 
-def get_project_comments(session: Session, project_id: int) -> list[dict]:
+def get_project_comments(session: Session, project_id: int, *, instance_id: int | None = None, user: User | None = None) -> list[dict]:
+    filters = [ProjectComment.project_id == project_id, ProjectComment.parent_comment_id.is_(None)]
+    if instance_id is not None:
+        filters.append(ProjectComment.instance_id == instance_id)
     comments = session.scalars(
         select(ProjectComment)
-        .where(ProjectComment.project_id == project_id, ProjectComment.parent_comment_id.is_(None))
+        .where(*filters)
         .options(
             selectinload(ProjectComment.author),
             selectinload(ProjectComment.instance),
@@ -49,10 +52,10 @@ def get_project_comments(session: Session, project_id: int) -> list[dict]:
         )
         .order_by(ProjectComment.created_at)
     ).all()
-    return [_serialize_comment(comment) for comment in comments]
+    return [_serialize_comment(comment, user=user) for comment in comments]
 
 
-def get_comment_payload(session: Session, comment_id: int) -> dict | None:
+def get_comment_payload(session: Session, comment_id: int, *, user: User | None = None) -> dict | None:
     comment = session.scalar(
         select(ProjectComment)
         .where(ProjectComment.id == comment_id)
@@ -67,7 +70,7 @@ def get_comment_payload(session: Session, comment_id: int) -> dict | None:
     )
     if comment is None:
         return None
-    return _serialize_comment(comment)
+    return _serialize_comment(comment, user=user)
 
 
 def add_project_comment(
@@ -91,21 +94,24 @@ def add_project_comment(
     session.flush()
 
     mentioned_usernames = sorted(set(MENTION_PATTERN.findall(body)))
+    mentioned_user_ids: set[int] = set()
     for username in mentioned_usernames:
         user = session.scalar(select(User).where(User.username == username))
         if user is None:
             continue
+        mentioned_user_ids.add(user.id)
         session.add(CommentMention(comment=comment, user=user))
-        session.add(
-            CommentNotification(
-                user=user,
-                comment=comment,
-                notification_type=NotificationType.COMMENT_MENTION,
-                route=_build_comment_route(project.id, comment.id),
+        if user.id != author.id:
+            session.add(
+                CommentNotification(
+                    user=user,
+                    comment=comment,
+                    notification_type=NotificationType.COMMENT_MENTION,
+                    route=_build_comment_route(project.id, comment.id),
+                )
             )
-        )
 
-    if parent_comment is not None and parent_comment.author_user_id != author.id:
+    if parent_comment is not None and parent_comment.author_user_id != author.id and parent_comment.author_user_id not in mentioned_user_ids:
         session.add(
             CommentNotification(
                 user=parent_comment.author,
@@ -146,6 +152,42 @@ def add_project_comment(
     session.commit()
     session.refresh(comment)
     return comment
+
+
+def delete_project_comment(session: Session, *, comment: ProjectComment, user: User) -> dict:
+    if comment.author_user_id != user.id:
+        raise PermissionError("No tienes permiso para eliminar este comentario.")
+
+    has_replies = bool(comment.replies)
+    comment_id = comment.id
+    if not has_replies:
+        session.delete(comment)
+        session.commit()
+        return {"ok": True, "comment_id": comment_id, "soft_deleted": False}
+
+    if comment.deleted_at is None:
+        comment.body = "[eliminado]"
+        comment.deleted_at = utcnow()
+        comment.mentions.clear()
+        comment.notifications.clear()
+    session.commit()
+    return {"ok": True, "comment_id": comment_id, "soft_deleted": True}
+
+
+def get_comment_context(session: Session, comment_id: int) -> dict | None:
+    comment = session.scalar(
+        select(ProjectComment)
+        .where(ProjectComment.id == comment_id)
+        .options(selectinload(ProjectComment.instance), selectinload(ProjectComment.project))
+    )
+    if comment is None:
+        return None
+    return {
+        "project_id": comment.project_id,
+        "instance_id": comment.instance_id,
+        "comment_id": comment.id,
+        "parent_comment_id": comment.parent_comment_id,
+    }
 
 
 def get_project_activity(session: Session, project_id: int) -> list[dict]:
@@ -308,7 +350,11 @@ def get_user_notifications(session: Session, user: User) -> list[dict]:
     notifications = session.scalars(
         select(CommentNotification)
         .where(CommentNotification.user_id == user.id)
-        .options(selectinload(CommentNotification.comment))
+        .options(
+            selectinload(CommentNotification.comment).selectinload(ProjectComment.author),
+            selectinload(CommentNotification.comment).selectinload(ProjectComment.project),
+            selectinload(CommentNotification.comment).selectinload(ProjectComment.instance),
+        )
         .order_by(CommentNotification.created_at.desc())
     ).all()
     return [
@@ -318,21 +364,74 @@ def get_user_notifications(session: Session, user: User) -> list[dict]:
             "route": notification.route,
             "is_read": notification.is_read,
             "comment_id": notification.comment_id,
+            "project_id": notification.comment.project_id,
+            "instance_id": notification.comment.instance_id,
+            "body": _comment_preview(notification.comment.body),
+            "author": notification.comment.author.username,
+            "project_name": notification.comment.project.name,
+            "instance_name": notification.comment.instance.name if notification.comment.instance else None,
             "created_at": notification.created_at.isoformat(),
         }
         for notification in notifications
     ]
 
 
-def _serialize_comment(comment: ProjectComment) -> dict:
+def get_unread_notification_count(session: Session, user: User) -> int:
+    return int(
+        session.scalar(
+            select(func.count(CommentNotification.id)).where(
+                CommentNotification.user_id == user.id,
+                CommentNotification.is_read.is_(False),
+            )
+        )
+        or 0
+    )
+
+
+def mark_notification_read(session: Session, *, notification_id: int, user: User) -> dict | None:
+    notification = session.scalar(
+        select(CommentNotification).where(CommentNotification.id == notification_id, CommentNotification.user_id == user.id)
+    )
+    if notification is None:
+        return None
+    notification.is_read = True
+    session.commit()
+    return {"ok": True, "notification_id": notification.id, "is_read": notification.is_read}
+
+
+def mark_instance_notifications_read(session: Session, *, project_id: int, instance_id: int, user: User) -> dict:
+    notifications = session.scalars(
+        select(CommentNotification)
+        .join(ProjectComment, CommentNotification.comment_id == ProjectComment.id)
+        .where(
+            CommentNotification.user_id == user.id,
+            CommentNotification.is_read.is_(False),
+            ProjectComment.project_id == project_id,
+            ProjectComment.instance_id == instance_id,
+        )
+    ).all()
+    for notification in notifications:
+        notification.is_read = True
+    session.commit()
+    return {"ok": True, "updated": len(notifications)}
+
+
+def _serialize_comment(comment: ProjectComment, *, user: User | None = None) -> dict:
     return {
         "id": comment.id,
         "body": comment.body,
         "author": comment.author.username,
+        "author_display_name": comment.author.display_name,
+        "project_id": comment.project_id,
+        "instance_id": comment.instance_id,
         "instance": comment.instance.name if comment.instance else None,
+        "parent_comment_id": comment.parent_comment_id,
         "created_at": comment.created_at.isoformat(),
+        "updated_at": comment.updated_at.isoformat(),
+        "is_author": bool(user and comment.author_user_id == user.id),
+        "is_deleted": comment.deleted_at is not None,
         "mentions": [mention.user.username for mention in comment.mentions],
-        "replies": [_serialize_comment(reply) for reply in sorted(comment.replies, key=lambda item: item.created_at)],
+        "replies": [_serialize_comment(reply, user=user) for reply in sorted(comment.replies, key=lambda item: item.created_at)],
     }
 
 

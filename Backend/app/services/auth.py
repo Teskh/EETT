@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Project, ProjectMembership, ProjectStatus, User, UserRole
+from app.models import Project, ProjectMembership, ProjectStatus, Role, User, UserRole
 from app.models.entities import MembershipRole
 
 
@@ -64,12 +64,26 @@ ROLE_DEFINITION_MAP = {role.code: role for role in ROLE_DEFINITIONS}
 ASSIGNABLE_ROLE_CODES = {role.code for role in ROLE_DEFINITIONS if role.assignable}
 PASSWORD_HASH_ITERATIONS = 120_000
 
+PAGE_DEFINITIONS: tuple[dict[str, str], ...] = (
+    {"key": "catalog", "label": "Editor de Base de Datos"},
+    {"key": "material_dashboard", "label": "Panel de Materiales"},
+    {"key": "cost_model", "label": "Modelo de Costos"},
+    {"key": "history", "label": "Historial de Cambios"},
+    {"key": "projects", "label": "Proyectos"},
+    {"key": "settings", "label": "Configuracion"},
+)
+PAGE_KEYS = {page["key"] for page in PAGE_DEFINITIONS}
+
 
 def get_user_by_username(session: Session, username: str) -> User | None:
     return session.scalar(
         select(User)
         .where(User.username == username)
-        .options(selectinload(User.roles).selectinload(UserRole.role), selectinload(User.project_memberships))
+        .options(
+            selectinload(User.roles).selectinload(UserRole.role),
+            selectinload(User.roles).selectinload(UserRole.role).selectinload(Role.page_access),
+            selectinload(User.project_memberships),
+        )
     )
 
 
@@ -161,6 +175,7 @@ def serialize_session_user(user: User) -> dict:
         "display_name": user.display_name,
         "roles": sorted(role_codes(user)),
         "permissions": build_permission_payload(user),
+        "page_access": build_page_access_payload(user),
     }
 
 
@@ -205,6 +220,99 @@ def can_manage_users(user: User) -> bool:
     return is_sysadmin(user)
 
 
+def default_role_page_access(role_code: str, page_key: str) -> tuple[bool, bool]:
+    if role_code == "sysadmin":
+        return True, True
+    if role_code == "admin":
+        if page_key == "settings":
+            return False, False
+        return True, True
+    if role_code in {"editor", "ot"}:
+        if page_key in {"catalog", "projects", "cost_model"}:
+            return True, True
+        if page_key in {"material_dashboard", "history"}:
+            return True, False
+        return False, False
+    if role_code == "viewer":
+        if page_key in {"projects", "cost_model", "history"}:
+            return True, False
+        return False, False
+    return False, False
+
+
+def get_role_page_access(role: Role, page_key: str) -> tuple[bool, bool]:
+    if page_key not in PAGE_KEYS:
+        return False, False
+    row = next((access for access in role.page_access if access.page_key == page_key), None)
+    if row is not None:
+        return row.can_read or row.can_edit, row.can_edit
+    return default_role_page_access(role.code, page_key)
+
+
+def build_role_page_access_payload(role: Role) -> dict:
+    return {
+        page["key"]: {
+            "can_read": get_role_page_access(role, page["key"])[0],
+            "can_edit": get_role_page_access(role, page["key"])[1],
+        }
+        for page in PAGE_DEFINITIONS
+    }
+
+
+def default_page_access(user: User, page_key: str) -> tuple[bool, bool]:
+    if page_key == "catalog":
+        access = can_edit_catalog(user)
+        return access, access
+    if page_key == "material_dashboard":
+        return can_access_material_dashboard(user), can_use_erp_admin(user)
+    if page_key == "cost_model":
+        return can_edit_catalog(user) or "viewer" in role_codes(user), can_edit_catalog(user)
+    if page_key == "history":
+        return can_edit_catalog(user) or "viewer" in role_codes(user), False
+    if page_key == "projects":
+        return can_edit_catalog(user) or "viewer" in role_codes(user), can_create_project(user)
+    if page_key == "settings":
+        access = can_manage_users(user)
+        return access, access
+    return False, False
+
+
+def get_page_access(user: User, page_key: str) -> tuple[bool, bool]:
+    if page_key not in PAGE_KEYS:
+        return False, False
+    can_read = False
+    can_edit = False
+    for assignment in user.roles:
+        role_can_read, role_can_edit = get_role_page_access(assignment.role, page_key)
+        can_read = can_read or role_can_read
+        can_edit = can_edit or role_can_edit
+    return can_read, can_edit
+
+
+def can_read_page(user: User, page_key: str) -> bool:
+    can_read, _ = get_page_access(user, page_key)
+    return can_read
+
+
+def can_edit_page(user: User, page_key: str) -> bool:
+    _, can_edit = get_page_access(user, page_key)
+    return can_edit
+
+
+def build_page_access_payload(user: User) -> dict:
+    return {
+        page["key"]: {
+            "can_read": get_page_access(user, page["key"])[0],
+            "can_edit": get_page_access(user, page["key"])[1],
+        }
+        for page in PAGE_DEFINITIONS
+    }
+
+
+def serialize_page_catalog() -> list[dict]:
+    return list(PAGE_DEFINITIONS)
+
+
 def can_view_project(user: User, project: Project) -> bool:
     codes = role_codes(user)
     if any(code in codes for code in {"sysadmin", "admin", "editor", "ot"}):
@@ -247,8 +355,7 @@ def require_project_create(user: User) -> None:
 
 
 def require_material_dashboard_access(user: User) -> None:
-    if not can_access_material_dashboard(user):
-        raise HTTPException(status_code=403, detail="Material dashboard permission required")
+    require_page_read(user, "material_dashboard")
 
 
 def require_erp_admin(user: User) -> None:
@@ -264,6 +371,16 @@ def require_cost_model_export(user: User) -> None:
 def require_user_admin(user: User) -> None:
     if not can_manage_users(user):
         raise HTTPException(status_code=403, detail="User administration permission required")
+
+
+def require_page_read(user: User, page_key: str) -> None:
+    if not can_read_page(user, page_key):
+        raise HTTPException(status_code=403, detail="Page read permission required")
+
+
+def require_page_edit(user: User, page_key: str) -> None:
+    if not can_edit_page(user, page_key):
+        raise HTTPException(status_code=403, detail="Page edit permission required")
 
 
 def require_project_view(user: User, project: Project) -> None:

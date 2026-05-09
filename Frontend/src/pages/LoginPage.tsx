@@ -21,7 +21,7 @@ export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
       <form className="liquid-glass w-full max-w-md rounded-3xl p-8 border border-black/10 dark:border-white/10 flex flex-col gap-5" onSubmit={handleSubmit}>
         <div className="space-y-2">
           <p className="text-[11px] font-mono uppercase tracking-[0.25em] text-zinc-500">Acceso Interno</p>
-          <h1 className="text-3xl font-bold tracking-tight">Ingreso a Spec Sheets</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Ingreso a EETT</h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             La autenticación interna mínima está habilitada. La cuenta inicial cargada es <span className="font-mono">sysadmin</span> con contraseña{" "}
             <span className="font-mono">adminpass</span>.

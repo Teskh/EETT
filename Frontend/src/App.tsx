@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { ApiError, api } from "./lib/api";
+import { canEditPage, canReadPage } from "./lib/pageAccess";
 import { applyTheme, getPreferredThemeForUser, persistThemeForUser, rememberThemeUser, type ThemeMode } from "./lib/theme";
 import type { SessionUser } from "./lib/types";
 import { CatalogPage } from "./pages/CatalogPage";
@@ -147,27 +148,27 @@ export function App() {
 
   useEffect(() => {
     if (route.name === "home") {
-      document.title = "Inicio | Spec Sheets";
+      document.title = "Inicio | EETT";
     } else if (route.name === "login") {
-      document.title = "Ingreso | Spec Sheets";
+      document.title = "Ingreso | EETT";
     } else if (route.name === "catalog") {
-      document.title = "Editor de Base de Datos | Spec Sheets";
+      document.title = "Editor de Base de Datos | EETT";
     } else if (route.name === "material-dashboard") {
-      document.title = "Panel de Materiales | Spec Sheets";
+      document.title = "Panel de Materiales | EETT";
     } else if (route.name === "cost-model") {
-      document.title = route.projectId ? `${projectDetailTitle} — Modelo de Costos | Spec Sheets` : "Modelo de Costos | Spec Sheets";
+      document.title = route.projectId ? `${projectDetailTitle} — Modelo de Costos | EETT` : "Modelo de Costos | EETT";
     } else if (route.name === "history") {
-      document.title = "Historial de Cambios | Spec Sheets";
+      document.title = "Historial de Cambios | EETT";
     } else if (route.name === "projects") {
-      document.title = "Proyectos | Spec Sheets";
+      document.title = "Proyectos | EETT";
     } else if (route.name === "project-detail") {
-      document.title = `${projectDetailTitle} | Spec Sheets`;
+      document.title = `${projectDetailTitle} | EETT`;
     } else if (route.name === "project-cost-model") {
-      document.title = `${projectDetailTitle} — Modelo de Costos | Spec Sheets`;
+      document.title = `${projectDetailTitle} — Modelo de Costos | EETT`;
     } else if (route.name === "settings") {
-      document.title = "Configuracion | Spec Sheets";
+      document.title = "Configuracion | EETT";
     } else {
-      document.title = "Spec Sheets";
+      document.title = "EETT";
     }
   }, [projectDetailTitle, route]);
 
@@ -252,7 +253,11 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        <ProjectsPage onNavigate={navigate} currentUser={session} />
+        {canReadPage(session, "projects") ? (
+          <ProjectsPage onNavigate={navigate} currentUser={session} />
+        ) : (
+          <AccessDenied message="Este rol no puede abrir proyectos." />
+        )}
       </AppShell>
     );
   }
@@ -268,8 +273,8 @@ export function App() {
           onNavigate={navigate}
           onLogout={handleLogout}
         >
-        {session.permissions.material_dashboard ? (
-          <MaterialDashboardPage canEditGroups={session.permissions.erp_admin} />
+        {canReadPage(session, "material_dashboard") ? (
+          <MaterialDashboardPage canEditGroups={canEditPage(session, "material_dashboard")} />
         ) : (
           <AccessDenied message="Este rol no puede abrir el panel de materiales." />
         )}
@@ -288,12 +293,16 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        <CostModelPage
-          projectId={route.projectId}
-          onNavigate={navigate}
-          onTitleChange={setProjectDetailTitle}
-          currentUser={session}
-        />
+        {canReadPage(session, "cost_model") ? (
+          <CostModelPage
+            projectId={route.projectId}
+            onNavigate={navigate}
+            onTitleChange={setProjectDetailTitle}
+            currentUser={session}
+          />
+        ) : (
+          <AccessDenied message="Este rol no puede abrir el modelo de costos." />
+        )}
       </AppShell>
     );
   }
@@ -309,7 +318,7 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        <ChangeHistoryPage />
+        {canReadPage(session, "history") ? <ChangeHistoryPage /> : <AccessDenied message="Este rol no puede abrir el historial de cambios." />}
       </AppShell>
     );
   }
@@ -325,7 +334,7 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {session.permissions.catalog_edit ? (
+        {canReadPage(session, "catalog") ? (
           <CatalogPage categoryId={route.categoryId} onNavigate={navigate} />
         ) : (
           <AccessDenied message="Este rol no puede abrir el editor de catálogo." />
@@ -345,7 +354,11 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
+        {canReadPage(session, "projects") ? (
+          <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
+        ) : (
+          <AccessDenied message="Este rol no puede abrir proyectos." />
+        )}
       </AppShell>
     );
   }
@@ -365,8 +378,8 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {session.permissions.user_admin ? (
-          <SettingsPage currentUsername={session.username} canManageUsers={session.permissions.user_admin} />
+        {canReadPage(session, "settings") ? (
+          <SettingsPage currentUsername={session.username} canManageUsers={session.permissions.user_admin && canEditPage(session, "settings")} />
         ) : (
           <AccessDenied message="Solo la cuenta sysadmin reservada puede acceder a configuracion." />
         )}
@@ -376,7 +389,7 @@ export function App() {
 
   return (
     <AppShell
-      title="Spec Sheets"
+      title="EETT"
       activeNav="home"
       currentUser={session}
       themeMode={themeMode}

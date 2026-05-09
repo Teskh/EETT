@@ -55,6 +55,7 @@ from .entities import (
     Role,
     SyncStatus,
     User,
+    RolePageAccess,
     UserRole,
 )
 
@@ -115,5 +116,6 @@ __all__ = [
     "Role",
     "SyncStatus",
     "User",
+    "RolePageAccess",
     "UserRole",
 ]

@@ -9,6 +9,8 @@ __pycache__/
 *.bak
 *.svg
 *.png
+!Frontend/public/patagual-logo-white.png
+!Backend/app/static/app/patagual-logo-white.png
 *.jpg
 Frontend/node_modules/
 *.txt

@@ -152,6 +152,7 @@ class Role(Base):
     description: Mapped[str | None] = mapped_column(Text, default=None)
 
     users: Mapped[list["UserRole"]] = relationship(back_populates="role", cascade="all, delete-orphan")
+    page_access: Mapped[list["RolePageAccess"]] = relationship(back_populates="role", cascade="all, delete-orphan")
 
 
 class UserRole(Base):
@@ -164,6 +165,19 @@ class UserRole(Base):
 
     user: Mapped[User] = relationship(back_populates="roles")
     role: Mapped[Role] = relationship(back_populates="users")
+
+
+class RolePageAccess(Base):
+    __tablename__ = "role_page_access"
+    __table_args__ = (UniqueConstraint("role_id", "page_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), nullable=False)
+    page_key: Mapped[str] = mapped_column(String(60), nullable=False)
+    can_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    can_edit: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    role: Mapped[Role] = relationship(back_populates="page_access")
 
 
 class CatalogCategory(Base):

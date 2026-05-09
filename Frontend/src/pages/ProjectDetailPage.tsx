@@ -1,4 +1,4 @@
-import { FormEvent, startTransition, useEffect, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, startTransition, useEffect, useRef, useState } from "react";
 
 import { MaterialCalculationSheetModal } from "../components/MaterialCalculationSheetModal";
 import { MediaPicker } from "../components/MediaPicker";
@@ -16,12 +16,14 @@ import type {
   InstanceMaterial,
   MediaAsset,
   ProjectCategorySection,
+  ProjectComment,
   ProjectDetailData,
   ProjectInstance,
   ProjectSubtype,
   UpdateProjectOccurrenceRequest,
   UpdateProjectInstanceRequest,
   UsageOccurrence,
+  ManagedUser,
 } from "../lib/types";
 
 type ProjectDetailPageProps = {
@@ -522,6 +524,27 @@ function removeInstanceFromProject(data: ProjectDetailData, instanceId: number):
   return withRecomputedIncomingOccurrences(nextData);
 }
 
+function updateInstanceCommentSummary(
+  data: ProjectDetailData,
+  instanceId: number,
+  updater: (summary: ProjectInstance["comment_summary"]) => ProjectInstance["comment_summary"],
+): ProjectDetailData {
+  return {
+    ...data,
+    categories: data.categories.map((category) => ({
+      ...category,
+      instances: category.instances.map((instance) =>
+        instance.id === instanceId
+          ? {
+              ...instance,
+              comment_summary: updater(instance.comment_summary || { total_count: 0, unread_count: 0 }),
+            }
+          : instance,
+      ),
+    })),
+  };
+}
+
 function buildAttributesFromComponent(component: AvailableComponent | undefined): EditableAttribute[] {
   if (!component) {
     return [];
@@ -991,31 +1014,60 @@ function getSyncStatusMeta(status: string) {
   switch (status) {
     case "customized":
       return {
-        label: "Custom",
+        label: "Personalizado",
         icon: "ph-pencil-simple",
         className: "text-sky-500 dark:text-sky-400 hover:text-sky-600 dark:hover:text-sky-300",
       };
     case "stale":
       return {
-        label: "Stale",
+        label: "Desactualizado",
         icon: "ph-clock-counter-clockwise",
         className: "text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300",
       };
     case "conflict":
       return {
-        label: "Conflict",
+        label: "Conflicto",
         icon: "ph-warning",
         className: "text-red-500 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300",
       };
     case "out_of_sync":
       return {
-        label: "Schema",
+        label: "Esquema",
         icon: "ph-warning-circle",
         className: "text-amber-500 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300",
       };
     default:
       return null;
   }
+}
+
+function translateProjectDetailLabel(label: string | null | undefined) {
+  const normalized = (label || "").trim().toLowerCase();
+  const translations: Record<string, string> = {
+    attributes: "Atributos",
+    "base attributes": "Atributos base",
+    "imported attributes": "Atributos importados",
+    name: "Nombre",
+    "short name": "Nombre corto",
+    description: "Descripción",
+    "short description": "Descripción corta",
+    installation: "Instalación",
+    text: "Texto",
+    number: "Número",
+    select: "Selección",
+  };
+
+  return translations[normalized] || label || "";
+}
+
+function translateCalculationMode(mode: string) {
+  const translations: Record<string, string> = {
+    manual: "manual",
+    formula: "fórmula",
+    catalog: "catálogo",
+  };
+
+  return translations[mode] || mode;
 }
 
 function SyncIndicatorButton({
@@ -1054,7 +1106,7 @@ function SyncValuePanel({
   return (
     <div className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">{label}</div>
-      <div className="text-sm text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap break-words">{value || "Empty"}</div>
+      <div className="text-sm text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap break-words">{value || "Vacío"}</div>
     </div>
   );
 }
@@ -1100,7 +1152,7 @@ function InstanceSyncModal({
   return (
     <Modal
       open={open}
-      title={`${instance.name} Sync`}
+      title={`Sincronización de ${instance.name}`}
       kicker="Estado del Campo"
       onClose={onClose}
       panelClassName="max-w-3xl"
@@ -1111,7 +1163,7 @@ function InstanceSyncModal({
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{attributeSchema.label}</div>
+              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{translateProjectDetailLabel(attributeSchema.label)}</div>
               <div className="text-sm text-zinc-600 dark:text-zinc-400">
                 {attributeSchema.differences.length
                   ? "Las filas de atributos del catálogo y de la instancia difieren."
@@ -1131,7 +1183,7 @@ function InstanceSyncModal({
                   onClick={() => void onAddAttributes(missingAttributes.map((item) => item.name))}
                   className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold disabled:opacity-50"
                 >
-                  Add All
+                  Agregar todos
                 </button>
               </div>
               <div className="space-y-2">
@@ -1140,7 +1192,7 @@ function InstanceSyncModal({
                     <div>
                       <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.name}</div>
                       <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {item.catalog_definition?.value_type || "text"}
+                        {translateProjectDetailLabel(item.catalog_definition?.value_type || "text")}
                         {item.catalog_definition?.options.length ? ` • ${item.catalog_definition.options.join(", ")}` : ""}
                       </div>
                     </div>
@@ -1150,7 +1202,7 @@ function InstanceSyncModal({
                       onClick={() => void onAddAttributes([item.name])}
                       className="px-3 py-1.5 rounded bg-accent-500 hover:bg-accent-400 text-xs font-semibold text-zinc-950 disabled:opacity-50"
                     >
-                      Add
+                      Agregar
                     </button>
                   </div>
                 ))}
@@ -1168,7 +1220,7 @@ function InstanceSyncModal({
                   onClick={() => void onRemoveAttributes(extraAttributes.map((item) => item.name))}
                   className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
                 >
-                  Remove All
+                  Quitar todos
                 </button>
               </div>
               <div className="space-y-2">
@@ -1181,7 +1233,7 @@ function InstanceSyncModal({
                       onClick={() => void onRemoveAttributes([item.name])}
                       className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
                     >
-                      Remove
+                      Quitar
                     </button>
                   </div>
                 ))}
@@ -1191,7 +1243,7 @@ function InstanceSyncModal({
 
           {!attributeSchema.differences.length ? (
             <div className="rounded-lg border border-dashed border-black/10 dark:border-white/10 p-4 text-sm text-zinc-500 dark:text-zinc-400">
-              No schema differences detected.
+              No se detectaron diferencias de esquema.
             </div>
           ) : null}
         </div>
@@ -1199,9 +1251,9 @@ function InstanceSyncModal({
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{scalarField.label}</div>
+              <div className="text-xs font-bold uppercase tracking-widest text-zinc-500">{translateProjectDetailLabel(scalarField.label)}</div>
               <div className="text-sm text-zinc-600 dark:text-zinc-400">
-                Compare the catalog value against the current instance value.
+                Compara el valor del catálogo con el valor actual de la instancia.
               </div>
             </div>
             {statusMeta ? <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-widest ${statusMeta.className}`}>{statusMeta.label}</span> : null}
@@ -1220,7 +1272,7 @@ function InstanceSyncModal({
                 onClick={() => void onApplyInstanceField(targetField as Exclude<SyncFieldKey, "attributes">)}
                 className="px-4 py-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-semibold disabled:opacity-50"
               >
-                Apply Instance Value to Catalog
+                Aplicar valor de instancia al catálogo
               </button>
               <button
                 type="button"
@@ -1228,7 +1280,7 @@ function InstanceSyncModal({
                 onClick={() => void onApplyCatalogField(targetField as Exclude<SyncFieldKey, "attributes">)}
                 className="px-4 py-2 rounded bg-accent-500 hover:bg-accent-400 text-sm font-semibold text-zinc-950 disabled:opacity-50"
               >
-                Apply Catalog Value
+                Aplicar valor del catálogo
               </button>
             </div>
           ) : null}
@@ -1244,7 +1296,7 @@ function InstanceSyncModal({
           onClick={() => void onRefreshAll()}
           className="px-4 py-2 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-semibold disabled:opacity-50"
         >
-          Refresh All Tracked Fields
+          Actualizar todos los campos rastreados
         </button>
       </div>
     </Modal>
@@ -1348,11 +1400,11 @@ function OccurrenceEditorCard({
             value={contextLabel}
             disabled={Boolean(targetInstanceId)}
             onChange={(event) => setContextLabel(event.target.value)}
-            placeholder="e.g. Kitchen wall to ceiling juncture"
+            placeholder="Ej. unión entre muro de cocina y cielo"
             className="w-full rounded border border-black/10 dark:border-white/10 bg-white disabled:bg-zinc-100 dark:bg-black/30 dark:disabled:bg-white/5 px-2 py-1.5 text-sm disabled:text-zinc-500"
           />
           <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {targetInstanceId ? "Limpiar the linked item to type a freeform location instead." : "Use this when the usage does not point to a project item."}
+            {targetInstanceId ? "Limpia el ítem vinculado para escribir una ubicación libre." : "Usa esto cuando el uso no apunta a un ítem del proyecto."}
           </div>
         </div>
       </div>
@@ -1406,7 +1458,7 @@ function OccurrenceEditorCard({
               onClick={() => void handleDelete()}
               className="px-3 py-1.5 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs font-semibold text-red-700 dark:text-red-300 disabled:opacity-50"
             >
-              Delete
+              Eliminar
             </button>
           ) : null}
           <button
@@ -1442,7 +1494,7 @@ function UsageManager({
     <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
       <div className="flex items-center justify-between gap-3 mb-3">
         <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-          <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usages
+          <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usos
         </h6>
         <button
           type="button"
@@ -1480,7 +1532,7 @@ function UsageManager({
 
         {!instance.outgoing_occurrences.length && !creating ? (
           <div className="text-center py-4 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
-            No usages defined yet.
+            Aún no hay usos definidos.
           </div>
         ) : null}
       </div>
@@ -1612,7 +1664,7 @@ function MaterialOccurrenceEditor({
             </span>
             {material.source_status === "manual" ? (
               <span
-                title={material.source_label || "Manually added material"}
+                title={material.source_label || "Material agregado manualmente"}
                 className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-sky-200 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-500/10 text-[10px] font-semibold tracking-wide text-sky-700 dark:text-sky-300"
               >
                 <i className="ph-bold ph-hand-pointing" /> Manual
@@ -1661,7 +1713,7 @@ function MaterialOccurrenceEditor({
             type="button"
             onClick={onOpenCalculationSheet}
             disabled={material.rule_id === null}
-            aria-label={`Abrir planilla de cálculo for ${material.material_name}`}
+            aria-label={`Abrir planilla de cálculo para ${material.material_name}`}
             title={material.rule_id === null ? "Las planillas de cálculo están disponibles para reglas de materiales del catálogo." : "Abrir planilla de cálculo"}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200 disabled:opacity-40"
           >
@@ -1671,7 +1723,7 @@ function MaterialOccurrenceEditor({
             <button
               type="button"
               onClick={() => void onDeleteMaterial(material.material_key)}
-              aria-label={`Remove ${material.material_name}`}
+              aria-label={`Quitar ${material.material_name}`}
               title="Quitar material de esta instancia"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300"
             >
@@ -1762,7 +1814,7 @@ function MaterialOccurrenceEditor({
                   />
                 </td>
                 <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
-                <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{row.calculation_mode}</td>
+                <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{translateCalculationMode(row.calculation_mode)}</td>
                 <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
                   {row.calculation_formula || "-"}
                 </td>
@@ -1882,6 +1934,364 @@ function ManualMaterialPicker({
   );
 }
 
+type CommentOverlayState = {
+  instanceId: number;
+  instanceName: string;
+  highlightCommentId?: number | null;
+  source?: "badge" | "notification";
+  notificationId?: number | null;
+} | null;
+
+const PENDING_COMMENT_NOTIFICATION_KEY = "spec-sheets.pendingCommentNotification";
+
+function commentInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[parts.length - 1][0] || ""}`.toUpperCase();
+}
+
+function formatCommentDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString(undefined, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderCommentBody(body: string, mentions: string[]) {
+  const mentionSet = new Set(mentions.map((mention) => `@${mention.toLowerCase()}`));
+  return body.split(/(\s+)/).map((part, index) => {
+    const normalized = part.replace(/[.,!?;:)]+$/, "").toLowerCase();
+    if (mentionSet.has(normalized)) {
+      return (
+        <span key={`${part}-${index}`} className="rounded bg-accent-500/10 px-1 font-semibold text-accent-700 dark:text-accent-400">
+          {part}
+        </span>
+      );
+    }
+    return part;
+  });
+}
+
+function getMentionContext(text: string, caretPosition: number) {
+  const searchStart = Math.max(0, caretPosition - 1);
+  const start = text.lastIndexOf("@", searchStart);
+  if (start === -1) {
+    return null;
+  }
+  const previous = start > 0 ? text[start - 1] : "";
+  if (previous && !/\s|[([{]/.test(previous)) {
+    return null;
+  }
+  const query = text.slice(start + 1, caretPosition);
+  if (query.includes("@") || query.includes("\n") || /\s/.test(query)) {
+    return null;
+  }
+  return { start, end: caretPosition, query };
+}
+
+function CommentComposer({
+  mentionableUsers,
+  onSubmit,
+  onCancel,
+  autoFocus = false,
+  placeholder = "Escribe un comentario. Usa @usuario para mencionar.",
+}: {
+  mentionableUsers: ManagedUser[];
+  onSubmit: (body: string) => Promise<void>;
+  onCancel?: () => void;
+  autoFocus?: boolean;
+  placeholder?: string;
+}) {
+  const [body, setBody] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionContext = getMentionContext(body, textareaRef.current?.selectionStart ?? body.length);
+  const mentionSuggestions = mentionContext
+    ? mentionableUsers
+        .filter((user) => {
+          const term = mentionContext.query.toLowerCase();
+          return user.username.toLowerCase().startsWith(term) || user.display_name.toLowerCase().includes(term);
+        })
+        .slice(0, 8)
+    : [];
+
+  function applyMention(user: ManagedUser) {
+    if (!mentionContext) {
+      return;
+    }
+    const insertion = `@${user.username} `;
+    const nextBody = `${body.slice(0, mentionContext.start)}${insertion}${body.slice(mentionContext.end)}`;
+    const nextCaret = mentionContext.start + insertion.length;
+    setBody(nextBody);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    }, 0);
+    setActiveSuggestionIndex(0);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (!mentionSuggestions.length) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSuggestionIndex((current) => (current + 1) % mentionSuggestions.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSuggestionIndex((current) => (current - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+    } else if (event.key === "Tab" || event.key === "Enter") {
+      event.preventDefault();
+      applyMention(mentionSuggestions[activeSuggestionIndex] || mentionSuggestions[0]);
+    } else if (event.key === "Escape") {
+      setActiveSuggestionIndex(0);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const trimmed = body.trim();
+    if (!trimmed) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSubmit(trimmed);
+      setBody("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo guardar el comentario.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="space-y-2" onSubmit={handleSubmit}>
+      <div className="relative">
+        {mentionSuggestions.length ? (
+          <div className="absolute bottom-full left-0 right-0 z-50 mb-1 max-h-56 overflow-y-auto rounded-lg border border-black/10 bg-white shadow-lg dark:border-white/10 dark:bg-zinc-900">
+            {mentionSuggestions.map((user, index) => (
+              <button
+                key={user.id}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  applyMention(user);
+                }}
+                className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs ${
+                  index === activeSuggestionIndex ? "bg-accent-500/10 text-zinc-900 dark:text-zinc-100" : "text-zinc-600 dark:text-zinc-300"
+                }`}
+              >
+                <span className="truncate font-semibold">{user.display_name || user.username}</span>
+                <span className="shrink-0 font-mono text-zinc-500">@{user.username}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <textarea
+          ref={textareaRef}
+          value={body}
+          autoFocus={autoFocus}
+          rows={3}
+          onChange={(event) => {
+            setBody(event.target.value);
+            setActiveSuggestionIndex(0);
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          className="w-full resize-none rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
+        />
+      </div>
+      {error ? <div className="text-xs text-red-700 dark:text-red-300">{error}</div> : null}
+      <div className="flex justify-end gap-2">
+        {onCancel ? (
+          <button type="button" onClick={onCancel} className="px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+            Cancelar
+          </button>
+        ) : null}
+        <button
+          type="submit"
+          disabled={saving || !body.trim()}
+          className="rounded bg-accent-500 px-3 py-1.5 text-xs font-bold text-zinc-950 disabled:opacity-50"
+        >
+          {saving ? "Publicando..." : "Publicar"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CommentItem({
+  comment,
+  mentionableUsers,
+  highlightCommentId,
+  onReply,
+  onDelete,
+  level = 0,
+}: {
+  comment: ProjectComment;
+  mentionableUsers: ManagedUser[];
+  highlightCommentId?: number | null;
+  onReply: (parentCommentId: number, body: string) => Promise<void>;
+  onDelete: (commentId: number) => Promise<void>;
+  level?: number;
+}) {
+  const [replying, setReplying] = useState(false);
+  const displayName = comment.author_display_name || comment.author;
+  const highlighted = highlightCommentId === comment.id;
+
+  return (
+    <div id={`comment-${comment.id}`} className={level ? "ml-5 border-l border-black/10 pl-3 dark:border-white/10" : ""}>
+      <div
+        className={`rounded-lg border p-3 transition-colors ${
+          highlighted
+            ? "border-accent-500/60 bg-accent-500/10"
+            : "border-black/10 bg-white dark:border-white/10 dark:bg-black/20"
+        }`}
+      >
+        <div className="mb-2 flex items-center gap-2">
+          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-[10px] font-bold text-zinc-700 dark:bg-white/10 dark:text-zinc-200">
+            {commentInitials(displayName)}
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-xs font-semibold text-zinc-900 dark:text-zinc-100">{displayName}</div>
+            <div className="text-[10px] font-mono text-zinc-500">{formatCommentDate(comment.created_at)}</div>
+          </div>
+        </div>
+        <div className="whitespace-pre-wrap break-words text-sm text-zinc-700 dark:text-zinc-300">
+          {comment.is_deleted ? <em className="text-zinc-500">[eliminado]</em> : renderCommentBody(comment.body, comment.mentions)}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <button type="button" onClick={() => setReplying((current) => !current)} className="text-xs font-semibold text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+            Responder
+          </button>
+          {comment.is_author && !comment.is_deleted ? (
+            <button type="button" onClick={() => void onDelete(comment.id)} className="text-xs font-semibold text-red-600 hover:text-red-700">
+              Eliminar
+            </button>
+          ) : null}
+        </div>
+        {replying ? (
+          <div className="mt-3">
+            <CommentComposer
+              autoFocus
+              mentionableUsers={mentionableUsers}
+              placeholder="Escribe una respuesta."
+              onCancel={() => setReplying(false)}
+              onSubmit={async (body) => {
+                await onReply(comment.id, body);
+                setReplying(false);
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      {comment.replies.length ? (
+        <div className="mt-3 space-y-3">
+          {comment.replies.map((reply) => (
+            <CommentItem
+              key={reply.id}
+              comment={reply}
+              mentionableUsers={mentionableUsers}
+              highlightCommentId={highlightCommentId}
+              onReply={onReply}
+              onDelete={onDelete}
+              level={level + 1}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CommentsOverlay({
+  open,
+  instanceName,
+  comments,
+  loading,
+  mentionableUsers,
+  highlightCommentId,
+  onClose,
+  onCreate,
+  onReply,
+  onDelete,
+}: {
+  open: boolean;
+  instanceName: string;
+  comments: ProjectComment[];
+  loading: boolean;
+  mentionableUsers: ManagedUser[];
+  highlightCommentId?: number | null;
+  onClose: () => void;
+  onCreate: (body: string) => Promise<void>;
+  onReply: (parentCommentId: number, body: string) => Promise<void>;
+  onDelete: (commentId: number) => Promise<void>;
+}) {
+  useEffect(() => {
+    if (!open || !highlightCommentId) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      document.getElementById(`comment-${highlightCommentId}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 100);
+    return () => window.clearTimeout(timeoutId);
+  }, [open, highlightCommentId, comments]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 z-30 bg-transparent" onClick={onClose} aria-hidden="true" />
+      <aside className="fixed left-16 top-16 bottom-0 z-40 w-[min(440px,calc(100vw-4rem))] border-r border-black/10 bg-zinc-50 shadow-2xl dark:border-white/10 dark:bg-zinc-950">
+        <div className="flex h-full flex-col">
+          <div className="flex items-start justify-between gap-3 border-b border-black/10 px-4 py-4 dark:border-white/10">
+            <div className="min-w-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Comentarios</div>
+              <h3 className="truncate text-sm font-bold text-zinc-900 dark:text-zinc-100">{instanceName}</h3>
+            </div>
+            <button type="button" onClick={onClose} className="inline-flex h-8 w-8 items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/10">
+              <i className="ph-bold ph-x" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            {loading ? (
+              <div className="text-sm text-zinc-500">Cargando comentarios...</div>
+            ) : comments.length ? (
+              <div className="space-y-3">
+                {comments.map((comment) => (
+                  <CommentItem
+                    key={comment.id}
+                    comment={comment}
+                    mentionableUsers={mentionableUsers}
+                    highlightCommentId={highlightCommentId}
+                    onReply={onReply}
+                    onDelete={onDelete}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-black/10 p-4 text-sm text-zinc-500 dark:border-white/10">
+                Sin comentarios todavía.
+              </div>
+            )}
+          </div>
+          <div className="border-t border-black/10 bg-white p-4 dark:border-white/10 dark:bg-black/30">
+            <CommentComposer mentionableUsers={mentionableUsers} onSubmit={onCreate} />
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
 function InstanceCard({
   instance,
   subtypeOptions,
@@ -1892,6 +2302,7 @@ function InstanceCard({
   onOpenSyncModal,
   onEdit,
   onDelete,
+  onOpenComments,
   onOpenCalculationSheet,
   onCreateOccurrence,
   onUpdateOccurrence,
@@ -1909,6 +2320,7 @@ function InstanceCard({
   onOpenSyncModal: (field: SyncFieldKey) => void;
   onEdit: () => void;
   onDelete: () => void;
+  onOpenComments: () => void;
   onOpenCalculationSheet: (material: InstanceMaterial) => void;
   onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
@@ -1955,6 +2367,24 @@ function InstanceCard({
               title="Ver detalles de sincronización del nombre"
               onClick={() => onOpenSyncModal("name")}
             />
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenComments();
+              }}
+              className={`inline-flex h-7 items-center gap-1 rounded-md border px-1.5 text-[11px] font-semibold transition-colors ${
+                instance.comment_summary?.unread_count
+                  ? "border-accent-500/40 bg-accent-500/10 text-accent-700 dark:text-accent-400"
+                  : "border-black/10 bg-zinc-50 text-zinc-500 hover:text-zinc-900 dark:border-white/10 dark:bg-white/5 dark:hover:text-zinc-100"
+              }`}
+              aria-label={`Abrir comentarios de ${instance.name}`}
+              title="Comentarios"
+            >
+              <i className="ph-bold ph-chat-circle-text" />
+              <span>{instance.comment_summary?.total_count || 0}</span>
+              {instance.comment_summary?.unread_count ? <span className="h-1.5 w-1.5 rounded-full bg-accent-500" /> : null}
+            </button>
           </div>
           </div>
         </div>
@@ -1962,7 +2392,7 @@ function InstanceCard({
           <div className="flex items-center gap-2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto">
             <button
               type="button"
-              aria-label={`Edit ${instance.name}`}
+              aria-label={`Editar ${instance.name}`}
               title="Editar instancia"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-300 transition-colors hover:bg-zinc-100 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-white"
               onClick={(event) => {
@@ -1974,7 +2404,7 @@ function InstanceCard({
             </button>
             <button
               type="button"
-              aria-label={`Delete ${instance.name}`}
+              aria-label={`Eliminar ${instance.name}`}
               title="Eliminar instancia"
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400 transition-colors hover:bg-red-200 dark:hover:bg-red-500/20"
               onClick={(event) => {
@@ -1995,7 +2425,7 @@ function InstanceCard({
             <div className="space-y-6">
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                  <i className="ph-bold ph-info text-zinc-600" /> Info
+                  <i className="ph-bold ph-info text-zinc-600" /> Información
                 </h6>
                 {instance.short_name && instance.short_name.trim() !== "" && instance.short_name !== instance.name ? (
                   <div className="mb-3">
@@ -2054,7 +2484,7 @@ function InstanceCard({
               ) : instance.outgoing_occurrences.length ? (
                 <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usage Summary
+                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Resumen de usos
                   </h6>
                   <div className="space-y-3">
                     {instance.outgoing_occurrences.map((occurrence, index) => renderOccurrenceSummary(occurrence, index))}
@@ -2065,7 +2495,7 @@ function InstanceCard({
               {instance.incoming_occurrences.length ? (
                 <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenced Here
+                    <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenciado aquí
                   </h6>
                   <div className="space-y-3">
                     {instance.incoming_occurrences.map((occurrence, index) =>
@@ -2079,7 +2509,7 @@ function InstanceCard({
 
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                  <i className="ph-bold ph-wrench text-zinc-600" /> Installation
+                  <i className="ph-bold ph-wrench text-zinc-600" /> Instalación
                   <SyncIndicatorButton
                     status={installationSync?.status}
                     title="Ver detalles de sincronización de instalación"
@@ -2093,7 +2523,7 @@ function InstanceCard({
             <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                  <i className="ph-bold ph-list-dashes text-zinc-600" /> Attributes
+                  <i className="ph-bold ph-list-dashes text-zinc-600" /> Atributos
                 </h5>
                 <SyncIndicatorButton
                   status={attributeSchemaSync?.status}
@@ -2112,7 +2542,7 @@ function InstanceCard({
                       instance.attributes.map((group) => (
                         <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
                           <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                            <i className="ph-bold ph-list-dashes text-zinc-600" /> {group.name}
+                            <i className="ph-bold ph-list-dashes text-zinc-600" /> {translateProjectDetailLabel(group.name)}
                           </h5>
                           <table className="w-full text-left border-collapse text-sm">
                             <tbody className="divide-y divide-black/5 dark:divide-white/10">
@@ -2141,7 +2571,7 @@ function InstanceCard({
                     {missingAttributes.length > 0 && (
                       <div className="mt-4 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
                         <h5 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-2">
-                          <i className="ph-bold ph-ghost text-zinc-400" /> Atributos del catalogo faltantes
+                          <i className="ph-bold ph-ghost text-zinc-400" /> Atributos faltantes del catálogo
                         </h5>
                         <table className="w-full text-left border-collapse text-sm opacity-50">
                           <tbody className="divide-y divide-black/5 dark:divide-white/10">
@@ -2168,7 +2598,7 @@ function InstanceCard({
               className="w-full flex items-center justify-between text-left mb-4"
             >
               <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                <i className="ph-bold ph-boxes text-zinc-600" /> Applicable Materials
+                <i className="ph-bold ph-boxes text-zinc-600" /> Materiales aplicables
               </h6>
               <i className={`ph-bold ${materialsExpanded ? "ph-caret-up" : "ph-caret-down"} text-zinc-600 dark:text-zinc-300`} />
             </button>
@@ -2239,6 +2669,12 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
   const [syncPreviewLoading, setSyncPreviewLoading] = useState<Record<number, boolean>>({});
   const [syncingInstanceId, setSyncingInstanceId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [commentOverlay, setCommentOverlay] = useState<CommentOverlayState>(null);
+  const [comments, setComments] = useState<ProjectComment[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+  const [mentionableUsers, setMentionableUsers] = useState<ManagedUser[]>([]);
+  const [commentNavigationTick, setCommentNavigationTick] = useState(0);
+  const handledCommentHashRef = useRef<number | null>(null);
 
   async function loadProject(showSpinner = true) {
     if (showSpinner) {
@@ -2254,6 +2690,87 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
       if (showSpinner) {
         setLoading(false);
       }
+    }
+  }
+
+  async function loadInstanceComments(instanceId: number) {
+    setCommentsLoading(true);
+    try {
+      setComments(await api.getProjectComments(projectId, instanceId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudieron cargar los comentarios.");
+      throw err;
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
+
+  async function openCommentsForInstance(nextState: NonNullable<CommentOverlayState>) {
+    setCommentOverlay(nextState);
+    if (!mentionableUsers.length) {
+      try {
+        const directory = await api.getMentionableUsers(projectId);
+        setMentionableUsers(directory.users);
+      } catch {
+        setMentionableUsers([]);
+      }
+    }
+    await loadInstanceComments(nextState.instanceId);
+    if (nextState.source === "notification" && nextState.notificationId) {
+      await api.markNotificationRead(nextState.notificationId);
+      setData((current) =>
+        current
+          ? updateInstanceCommentSummary(current, nextState.instanceId, (summary) => ({
+              ...summary,
+              unread_count: Math.max(0, summary.unread_count - 1),
+            }))
+          : current,
+      );
+    } else if (nextState.source === "badge") {
+      await api.markInstanceNotificationsRead(projectId, nextState.instanceId);
+      setData((current) =>
+        current
+          ? updateInstanceCommentSummary(current, nextState.instanceId, (summary) => ({ ...summary, unread_count: 0 }))
+          : current,
+      );
+    }
+  }
+
+  async function createComment(body: string, parentCommentId?: number | null) {
+    if (!commentOverlay) {
+      return;
+    }
+    await api.createProjectComment(projectId, {
+      body,
+      instance_id: commentOverlay.instanceId,
+      parent_comment_id: parentCommentId ?? null,
+    });
+    await loadInstanceComments(commentOverlay.instanceId);
+    setData((current) =>
+      current
+        ? updateInstanceCommentSummary(current, commentOverlay.instanceId, (summary) => ({
+            ...summary,
+            total_count: summary.total_count + 1,
+          }))
+        : current,
+    );
+  }
+
+  async function deleteComment(commentId: number) {
+    if (!commentOverlay || !window.confirm("¿Eliminar este comentario?")) {
+      return;
+    }
+    const result = await api.deleteProjectComment(projectId, commentId);
+    await loadInstanceComments(commentOverlay.instanceId);
+    if (!result.soft_deleted) {
+      setData((current) =>
+        current
+          ? updateInstanceCommentSummary(current, commentOverlay.instanceId, (summary) => ({
+              ...summary,
+              total_count: Math.max(0, summary.total_count - 1),
+            }))
+          : current,
+      );
     }
   }
 
@@ -2280,8 +2797,77 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     setSyncPreviews({});
     setSyncPreviewLoading({});
     setSyncModalState(null);
+    setCommentOverlay(null);
+    setComments([]);
     void loadProject();
   }, [onTitleChange, projectId]);
+
+  useEffect(() => {
+    const handleCommentNavigation = () => setCommentNavigationTick((current) => current + 1);
+    window.addEventListener("spec-sheets:comment-navigation", handleCommentNavigation);
+    window.addEventListener("hashchange", handleCommentNavigation);
+    return () => {
+      window.removeEventListener("spec-sheets:comment-navigation", handleCommentNavigation);
+      window.removeEventListener("hashchange", handleCommentNavigation);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    const hashMatch = window.location.hash.match(/^#comment-(\d+)$/);
+    const pendingRaw = window.sessionStorage.getItem(PENDING_COMMENT_NOTIFICATION_KEY);
+    if (!hashMatch && !pendingRaw) {
+      return;
+    }
+
+    let pending: { notificationId?: number; projectId?: number; instanceId?: number | null; commentId?: number } | null = null;
+    if (pendingRaw) {
+      try {
+        pending = JSON.parse(pendingRaw);
+      } catch {
+        pending = null;
+      }
+    }
+    const commentId = pending?.commentId || (hashMatch ? Number(hashMatch[1]) : null);
+    if (!commentId) {
+      return;
+    }
+    if (!pending && handledCommentHashRef.current === commentId) {
+      return;
+    }
+
+    const allInstances = data.categories.flatMap((category) => category.instances);
+    const directInstance = pending?.instanceId ? allInstances.find((instance) => instance.id === pending?.instanceId) : null;
+
+    async function openPendingComment() {
+      let instance = directInstance || null;
+      if (!instance) {
+        const context = await api.getCommentContext(commentId);
+        if (context.project_id !== projectId || !context.instance_id) {
+          return;
+        }
+        instance = allInstances.find((item) => item.id === context.instance_id) || null;
+      }
+      if (!instance) {
+        return;
+      }
+      window.sessionStorage.removeItem(PENDING_COMMENT_NOTIFICATION_KEY);
+      handledCommentHashRef.current = commentId;
+      await openCommentsForInstance({
+        instanceId: instance.id,
+        instanceName: instance.name,
+        highlightCommentId: commentId,
+        source: pending?.notificationId ? "notification" : undefined,
+        notificationId: pending?.notificationId || null,
+      });
+    }
+
+    void openPendingComment().catch((err) => {
+      setError(err instanceof ApiError ? err.message : "No se pudo abrir el comentario.");
+    });
+  }, [commentNavigationTick, data, projectId]);
 
   useEffect(() => {
     if (data?.project.name) {
@@ -2631,7 +3217,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           <div className="liquid-glass rounded-2xl p-4 flex flex-col h-[60vh] sticky top-24">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                <i className="ph-bold ph-list-magnifying-glass" /> Categories
+                <i className="ph-bold ph-list-magnifying-glass" /> Categorías
               </h2>
             </div>
             <input
@@ -2691,6 +3277,13 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                       onOpenSyncModal={(field) => void openSyncModal(instance.id, field)}
                       onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
                       onDelete={() => void handleDeleteInstance(category.id, instance.id)}
+                      onOpenComments={() =>
+                        void openCommentsForInstance({
+                          instanceId: instance.id,
+                          instanceName: instance.name,
+                          source: "badge",
+                        })
+                      }
                       onOpenCalculationSheet={(material) =>
                         setCalculationSheetState({
                           instanceId: instance.id,
@@ -2746,7 +3339,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                   ) : (
                     <tr>
                       <td colSpan={5} className="py-4 text-center text-zinc-500 font-mono text-xs">
-                        No auxiliary materials selected.
+                        No hay materiales auxiliares seleccionados.
                       </td>
                     </tr>
                   )}
@@ -2756,6 +3349,19 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           </div>
         </div>
       </div>
+
+      <CommentsOverlay
+        open={commentOverlay !== null}
+        instanceName={commentOverlay?.instanceName || ""}
+        comments={comments}
+        loading={commentsLoading}
+        mentionableUsers={mentionableUsers}
+        highlightCommentId={commentOverlay?.highlightCommentId}
+        onClose={() => setCommentOverlay(null)}
+        onCreate={(body) => createComment(body)}
+        onReply={(parentCommentId, body) => createComment(body, parentCommentId)}
+        onDelete={deleteComment}
+      />
 
       {activeCategory ? (
         <InstanceFormModal

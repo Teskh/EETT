@@ -5,7 +5,6 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import date
-import mimetypes
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -13,7 +12,7 @@ from sqlalchemy import select
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api_models import (
@@ -37,7 +36,12 @@ from app.api_models import (
     CatalogComponentUpdateRequest,
     CatalogMaterialSearchResponse,
     CatalogResponse,
+    CommentContextResponse,
+    CommentCreateRequest,
+    CommentDeleteResponse,
     CommentModel,
+    CommentNotificationReadResponse,
+    CommentUnreadCountResponse,
     CostModelAdjustmentDeleteRequest,
     CostModelAdjustmentUpsertRequest,
     CostModelViewResponse,
@@ -71,6 +75,7 @@ from app.api_models import (
     MediaAssetListResponse,
     MediaAssetModel,
     ManagedUserModel,
+    MentionableUsersResponse,
     MutationResultModel,
     NotificationModel,
     ProjectDetailResponse,
@@ -86,6 +91,7 @@ from app.api_models import (
     ProjectsBoardResponse,
     PublicProjectListResponse,
     PublicProjectSkuResponse,
+    RolePageAccessUpdateRequest,
     SessionUserResponse,
     SyncAttributeSchemaUpdateRequest,
     SyncFieldApplyRequest,
@@ -96,7 +102,7 @@ from app.api_models import (
 )
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
-from app.models import Project, ProjectExportJob
+from app.models import Project, ProjectComment, ProjectExportJob, ProjectMembership, User, UserRole
 from app.seed import seed_demo_data_if_empty
 from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
@@ -109,10 +115,14 @@ from app.services.auth import (
     require_cost_model_export,
     require_material_dashboard_access,
     require_erp_admin,
+    can_read_page,
     require_project_edit,
     require_project_status_change,
     require_project_view,
+    require_page_edit,
+    require_page_read,
     require_user_admin,
+    serialize_page_catalog,
     serialize_session_user,
 )
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
@@ -130,13 +140,18 @@ from app.services.catalog import (
 )
 from app.services.collaboration import (
     add_project_comment,
+    delete_project_comment,
     decide_project_approval,
+    get_comment_context,
     get_activity_history,
     get_comment_payload,
     get_project_activity,
     get_project_approvals,
     get_project_comments,
+    get_unread_notification_count,
     get_user_notifications,
+    mark_instance_notifications_read,
+    mark_notification_read,
     request_project_approval,
 )
 from app.services.dashboard import (
@@ -165,7 +180,7 @@ from app.services.production_dashboard import (
     get_material_dashboard_house_start_comparison,
     get_material_dashboard_house_types,
 )
-from app.services.exports import execute_project_export, get_project_export_job_for_artifact, get_project_export_jobs, request_project_export, resolve_artifact_path
+from app.services.exports import build_project_export_artifact, execute_project_export, get_project_export_job_for_artifact, get_project_export_jobs, request_project_export
 from app.services.media import (
     create_media_asset_from_upload,
     get_media_asset,
@@ -201,7 +216,7 @@ from app.services.projects import (
     update_project_instance,
 )
 from app.services.public_api import list_project_public_skus, list_public_projects
-from app.services.user_admin import create_user, delete_user, list_users, serialize_role_catalog, serialize_user, update_user
+from app.services.user_admin import create_user, delete_user, list_roles, list_users, serialize_roles_with_access, serialize_user, update_role_page_access, update_user
 from app.ui import render_catalog_page, render_home_page, render_project_detail_page, render_projects_page
 
 
@@ -238,7 +253,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise RuntimeError(
                 "Database schema is missing. Run `alembic upgrade head` against the configured PostgreSQL database before starting the app."
             )
-        settings.export_output_dir.mkdir(parents=True, exist_ok=True)
         settings.media_gallery_dir.mkdir(parents=True, exist_ok=True)
         settings.backup_dir.mkdir(parents=True, exist_ok=True)
         if settings.seed_demo_data:
@@ -385,8 +399,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def login_page() -> str:
         return serve_frontend_app(render_home_page())
 
-    @app.get("/exports/{artifact_name}", response_class=FileResponse)
-    async def download_export_artifact(
+    @app.get("/exports/{artifact_name}")
+    async def view_export_artifact(
         artifact_name: str,
         request: Request,
         session: Session = Depends(get_session),
@@ -400,18 +414,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if job.export_kind.value == "cost_model_workbook":
             require_cost_model_export(current_user)
         try:
-            artifact_path = resolve_artifact_path(settings=request.app.state.settings, artifact_uri=artifact_uri)
+            artifact = build_project_export_artifact(
+                session,
+                job=job,
+                settings=request.app.state.settings,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Export artifact not found") from exc
-        if not artifact_path.is_file():
-            raise HTTPException(status_code=404, detail="Export artifact not found")
-        media_type = mimetypes.guess_type(artifact_path.name)[0] or "application/octet-stream"
-        is_pdf = media_type == "application/pdf"
-        return FileResponse(
-            artifact_path,
-            media_type=media_type,
-            filename=artifact_path.name,
-            content_disposition_type="inline" if is_pdf else "attachment",
+        disposition = "inline" if artifact.inline else "attachment"
+        return Response(
+            content=artifact.content,
+            media_type=artifact.media_type,
+            headers={"Content-Disposition": f'{disposition}; filename="{artifact.filename}"'},
         )
 
     @app.get("/api/v1/media/assets", response_model=MediaAssetListResponse)
@@ -533,6 +547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         component = update_component(
             session,
@@ -556,6 +571,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         try:
             deleted_category_id = delete_component(session, component_id=component_id)
@@ -574,6 +590,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         definition = create_attribute_definition(
             session,
@@ -595,6 +612,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         definition = update_attribute_definition(
             session,
@@ -614,6 +632,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         deleted_category_id = delete_attribute_definition(session, attribute_definition_id=attribute_definition_id)
         if deleted_category_id is None:
@@ -628,6 +647,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
+        require_page_edit(current_user, "catalog")
         require_catalog_edit(current_user)
         try:
             attributes = json.loads(attributes_json)
@@ -655,7 +675,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_read(current_user, "catalog")
         form = await request.form()
         linked_ids = [int(value) for value in form.getlist("linked_category_ids")]
         update_category_links(session, category_id=category_id, linked_category_ids=linked_ids)
@@ -842,9 +862,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/users", response_model=UserDirectoryResponse)
     async def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
+        require_page_read(current_user, "settings")
         return {
             "users": [serialize_user(user) for user in list_users(session)],
-            "roles": serialize_role_catalog(),
+            "roles": serialize_roles_with_access(list_roles(session)),
+            "pages": serialize_page_catalog(),
+        }
+
+    @app.put("/api/v1/roles/page-access", response_model=UserDirectoryResponse)
+    async def update_role_page_access_api(
+        payload: RolePageAccessUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
+        try:
+            roles = update_role_page_access(
+                session,
+                {role_code: {page_key: access.model_dump() for page_key, access in pages.items()} for role_code, pages in payload.role_access.items()},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "users": [serialize_user(user) for user in list_users(session)],
+            "roles": serialize_roles_with_access(roles),
+            "pages": serialize_page_catalog(),
         }
 
     @app.post("/api/v1/users", response_model=ManagedUserModel)
@@ -854,6 +897,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             user = create_user(
                 session,
@@ -876,6 +920,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             user = update_user(
                 session,
@@ -899,6 +944,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             deleted = delete_user(session, user_id=user_id)
         except ValueError as exc:
@@ -910,6 +956,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/backups", response_model=list[BackupRecordModel])
     async def list_backups_api(request: Request, current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
+        require_page_read(current_user, "settings")
         return backup_service.list_backups(request.app.state.settings)
 
     @app.post("/api/v1/backups", response_model=BackupCreateResponse, status_code=201)
@@ -919,6 +966,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             backup, backup_settings, pruned = backup_service.create_backup(request.app.state.settings, payload.label)
         except ValueError as exc:
@@ -930,6 +978,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/backups/settings", response_model=BackupSettingsModel)
     async def get_backup_settings_api(request: Request, current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
+        require_page_read(current_user, "settings")
         return backup_service.load_backup_settings(request.app.state.settings)
 
     @app.put("/api/v1/backups/settings", response_model=BackupSettingsModel)
@@ -939,6 +988,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             return backup_service.update_backup_settings(
                 request.app.state.settings,
@@ -954,6 +1004,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
     ):
         require_user_admin(current_user)
+        require_page_edit(current_user, "settings")
         try:
             result = backup_service.restore_backup(
                 request.app.state.settings,
@@ -968,7 +1019,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/catalog", response_model=CatalogResponse)
     async def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
-        require_catalog_edit(current_user)
+        require_page_read(current_user, "catalog")
         return get_catalog_page_data(session, selected_category_id=category_id)
 
     @app.post("/api/v1/catalog/categories", response_model=MutationResultModel)
@@ -977,7 +1028,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         category = create_category(
             session,
             name=payload.name,
@@ -993,7 +1044,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         component = create_component(
             session,
             category_id=payload.category_id,
@@ -1019,7 +1070,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         component = update_component(
             session,
             component_id=component_id,
@@ -1047,7 +1098,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         if payload.media_asset_id is not None and get_media_asset(session, payload.media_asset_id) is None:
             raise HTTPException(status_code=404, detail="Media asset not found")
         component = set_component_primary_media(
@@ -1071,7 +1122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         try:
             deleted_category_id = delete_component(session, component_id=component_id)
         except ValueError as exc:
@@ -1087,7 +1138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         component = replace_component_attributes(
             session,
             component_id=component_id,
@@ -1110,7 +1161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         component = replace_component_material_rules(
             session,
             component_id=component_id,
@@ -1132,7 +1183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_edit(current_user, "catalog")
         update_category_links(session, category_id=category_id, linked_category_ids=payload.linked_category_ids)
         return {"ok": True, "category_id": category_id, "linked_category_ids": payload.linked_category_ids}
 
@@ -1144,7 +1195,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_catalog_edit(current_user)
+        require_page_read(current_user, "catalog")
         capped_limit = max(1, min(limit, 20))
         local_results = search_material_candidates(session, query=q, limit=capped_limit)
         settings: Settings = request.app.state.settings
@@ -1174,6 +1225,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/projects", response_model=ProjectsBoardResponse)
     async def projects_v1(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        if not can_read_page(current_user, "projects") and not can_read_page(current_user, "cost_model"):
+            require_page_read(current_user, "projects")
         return get_projects_page_data(session, user=current_user)
 
     @app.post("/api/v1/projects", response_model=MutationResultModel)
@@ -1183,6 +1236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current_user=Depends(get_actor_user),
         mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
+        require_page_edit(current_user, "projects")
         require_project_create(current_user)
         project = create_project(
             session,
@@ -1219,6 +1273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
     async def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        require_page_read(current_user, "projects")
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1692,6 +1747,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         from app.services.cost_model import get_cost_model_view
 
+        require_page_read(current_user, "cost_model")
         view = get_cost_model_view(
             session,
             project_id,
@@ -1715,6 +1771,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
+        require_page_edit(current_user, "cost_model")
         require_project_edit(current_user, project)
         try:
             upsert_cost_model_adjustment(
@@ -1758,6 +1815,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
+        require_page_edit(current_user, "cost_model")
         require_project_edit(current_user, project)
         delete_cost_model_adjustment(
             session,
@@ -1930,48 +1988,110 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.get("/api/v1/projects/{project_id}/comments", response_model=list[CommentModel])
-    async def project_comments_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def project_comments_api(
+        project_id: int,
+        instance_id: int | None = None,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_view(current_user, project)
-        return get_project_comments(session, project_id)
+        if instance_id is not None and not any(instance.id == instance_id for instance in project.instances):
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        return get_project_comments(session, project_id, instance_id=instance_id, user=current_user)
 
     @app.post("/api/v1/projects/{project_id}/comments", response_model=CommentModel)
     async def add_comment_api(
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
-        payload: dict[str, Any] = Body(...),
+        payload: CommentCreateRequest = Body(...),
         mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        require_project_edit(current_user, project)
+        require_project_view(current_user, project)
+        body = payload.body.strip()
+        if not body:
+            raise HTTPException(status_code=400, detail="Comment body is required")
         instance = None
-        if payload.get("instance_id"):
-            instance = next((item for item in project.instances if item.id == payload["instance_id"]), None)
+        if payload.instance_id:
+            instance = next((item for item in project.instances if item.id == payload.instance_id), None)
             if instance is None:
                 raise HTTPException(status_code=404, detail="Project instance not found")
         parent_comment = None
-        if payload.get("parent_comment_id"):
-            parent_comment = next((item for item in project.comments if item.id == payload["parent_comment_id"]), None)
+        if payload.parent_comment_id:
+            parent_comment = next((item for item in project.comments if item.id == payload.parent_comment_id), None)
             if parent_comment is None:
                 raise HTTPException(status_code=404, detail="Parent comment not found")
+            if parent_comment.project_id != project.id or parent_comment.instance_id != (instance.id if instance else None):
+                raise HTTPException(status_code=400, detail="Parent comment does not belong to this context")
         comment = add_project_comment(
             session,
             project=project,
             author=current_user,
-            body=payload["body"],
+            body=body,
             instance=instance,
             parent_comment=parent_comment,
             mutation_batch_id=mutation_batch_id,
         )
-        payload_out = get_comment_payload(session, comment.id)
+        payload_out = get_comment_payload(session, comment.id, user=current_user)
         if payload_out is None:
             raise HTTPException(status_code=500, detail="Comment could not be loaded after creation")
         return payload_out
+
+    @app.delete("/api/v1/projects/{project_id}/comments/{comment_id}", response_model=CommentDeleteResponse)
+    async def delete_comment_api(project_id: int, comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        comment = session.scalar(
+            select(ProjectComment)
+            .where(ProjectComment.id == comment_id, ProjectComment.project_id == project_id)
+            .options(selectinload(ProjectComment.replies), selectinload(ProjectComment.mentions), selectinload(ProjectComment.notifications))
+        )
+        if comment is None:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        try:
+            return delete_project_comment(session, comment=comment, user=current_user)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    @app.get("/api/v1/comments/mentionable-users", response_model=MentionableUsersResponse)
+    async def mentionable_users_api(
+        project_id: int | None = None,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        del current_user
+        role_codes = {role.code.lower() for role in list_roles(session)}
+        if project_id is not None:
+            users = session.scalars(
+                select(User)
+                .join(ProjectMembership, ProjectMembership.user_id == User.id)
+                .where(ProjectMembership.project_id == project_id, User.is_active.is_(True))
+                .options(selectinload(User.roles).selectinload(UserRole.role))
+                .order_by(User.display_name, User.username)
+            ).all()
+        else:
+            users = [user for user in list_users(session) if user.is_active]
+        users = [user for user in users if user.username.lower() not in role_codes]
+        return {"users": [serialize_user(user) for user in users]}
+
+    @app.get("/api/v1/comments/{comment_id}/context", response_model=CommentContextResponse)
+    async def comment_context_api(comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        context = get_comment_context(session, comment_id)
+        if context is None:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        project = get_project_with_details(session, context["project_id"])
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        return context
 
     @app.get("/api/v1/projects/{project_id}/activity", response_model=list[ActivityGroupModel])
     async def project_activity_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -1983,6 +2103,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
     async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        require_page_read(current_user, "history")
         return get_activity_history(session, current_user)
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
@@ -2022,6 +2143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payload: dict[str, Any] = Body(...),
         mutation_batch_id: str | None = Depends(get_mutation_batch_id),
     ):
+        require_page_edit(current_user, "material_dashboard")
         require_erp_admin(current_user)
         approval = decide_project_approval(
             session,
@@ -2228,7 +2350,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_erp_admin(current_user)
+        require_page_edit(current_user, "material_dashboard")
         try:
             return create_material_study_group(
                 session,
@@ -2247,7 +2369,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_erp_admin(current_user)
+        require_page_edit(current_user, "material_dashboard")
         try:
             group = update_material_study_group(
                 session,
@@ -2269,7 +2391,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        require_erp_admin(current_user)
+        require_page_edit(current_user, "material_dashboard")
         if not delete_material_study_group(session, group_id):
             raise HTTPException(status_code=404, detail="Material group not found")
         return {"ok": True}
@@ -2855,6 +2977,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/notifications", response_model=list[NotificationModel])
     async def notifications_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return get_user_notifications(session, current_user)
+
+    @app.get("/api/v1/notifications/unread-count", response_model=CommentUnreadCountResponse)
+    async def notification_unread_count_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        return {"unread": get_unread_notification_count(session, current_user)}
+
+    @app.post("/api/v1/notifications/{notification_id}/read", response_model=CommentNotificationReadResponse)
+    async def mark_notification_read_api(notification_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        result = mark_notification_read(session, notification_id=notification_id, user=current_user)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Notification not found")
+        return result
+
+    @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/notifications/read", response_model=MutationResultModel)
+    async def mark_instance_notifications_read_api(
+        project_id: int,
+        instance_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        if not any(instance.id == instance_id for instance in project.instances):
+            raise HTTPException(status_code=404, detail="Project instance not found")
+        result = mark_instance_notifications_read(session, project_id=project_id, instance_id=instance_id, user=current_user)
+        return {"ok": True, "deleted_id": result["updated"]}
 
     @app.get("/api/v1/public/projects", response_model=PublicProjectListResponse)
     async def public_projects_api(session: Session = Depends(get_session)):

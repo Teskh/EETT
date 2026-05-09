@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -19,6 +19,7 @@ from app.models import (
     Project,
     ProjectAuxiliaryMaterialSelection,
     ProjectBomEntry,
+    ProjectComment,
     ProjectInstance,
     ProjectInstanceAttributeGroup,
     ProjectInstanceAttributeValue,
@@ -30,6 +31,7 @@ from app.models import (
     ProjectInstanceSyncState,
     ProjectMaterialMode,
     ProjectMembership,
+    CommentNotification,
     ProjectStatus,
     ProjectSubtype,
     SyncStatus,
@@ -1112,6 +1114,36 @@ def get_project_occurrence_data(
     return _serialize_occurrence(occurrence)
 
 
+def _project_comment_summaries(session: Session, project_id: int, user: User | None) -> dict[int, dict[str, int]]:
+    summaries: dict[int, dict[str, int]] = defaultdict(lambda: {"total_count": 0, "unread_count": 0})
+    total_rows = session.execute(
+        select(ProjectComment.instance_id, func.count(ProjectComment.id))
+        .where(ProjectComment.project_id == project_id, ProjectComment.instance_id.is_not(None))
+        .group_by(ProjectComment.instance_id)
+    ).all()
+    for instance_id, count in total_rows:
+        if instance_id is not None:
+            summaries[int(instance_id)]["total_count"] = int(count or 0)
+
+    if user is not None:
+        unread_rows = session.execute(
+            select(ProjectComment.instance_id, func.count(CommentNotification.id))
+            .join(CommentNotification, CommentNotification.comment_id == ProjectComment.id)
+            .where(
+                ProjectComment.project_id == project_id,
+                ProjectComment.instance_id.is_not(None),
+                CommentNotification.user_id == user.id,
+                CommentNotification.is_read.is_(False),
+            )
+            .group_by(ProjectComment.instance_id)
+        ).all()
+        for instance_id, count in unread_rows:
+            if instance_id is not None:
+                summaries[int(instance_id)]["unread_count"] = int(count or 0)
+
+    return dict(summaries)
+
+
 def get_project_view_data(session: Session, project_id: int, user: User | None = None) -> dict | None:
     project = get_project_with_details(session, project_id)
     if project is None:
@@ -1150,8 +1182,16 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
     flat_subtypes = _flatten_subtypes(subtype_nodes)
 
     instance_groups = defaultdict(list)
+    comment_summaries = _project_comment_summaries(session, project.id, user)
     for instance in project.instances:
-        instance_groups[instance.category_id].append(_serialize_instance(instance, flat_subtypes, project.material_mode))
+        instance_groups[instance.category_id].append(
+            _serialize_instance(
+                instance,
+                flat_subtypes,
+                project.material_mode,
+                comment_summary=comment_summaries.get(instance.id),
+            )
+        )
 
     category_sections = []
     for root in children_by_parent[None]:
@@ -1947,6 +1987,7 @@ def _serialize_instance(
     instance: ProjectInstance,
     flat_subtypes: list[dict],
     project_material_mode: ProjectMaterialMode | None,
+    comment_summary: dict | None = None,
 ) -> dict:
     base_definitions = _component_attribute_definitions(instance.component, AttributeScope.BASE)
     usage_definitions = _component_attribute_definitions(instance.component, AttributeScope.USAGE)
@@ -2126,6 +2167,7 @@ def _serialize_instance(
             for setting in sorted(instance.export_settings, key=lambda item: item.target)
         ],
         "material_mode": project_material_mode.mode.value if project_material_mode else MaterialMode.GENERAL.value,
+        "comment_summary": comment_summary or {"total_count": 0, "unread_count": 0},
     }
 
 

@@ -19,11 +19,22 @@ class PermissionSet(BaseModel):
     user_admin: bool
 
 
+class PageAccessModel(BaseModel):
+    can_read: bool = False
+    can_edit: bool = False
+
+
+class PageOptionModel(BaseModel):
+    key: str
+    label: str
+
+
 class SessionUserResponse(BaseModel):
     username: str
     display_name: str
     roles: list[str]
     permissions: PermissionSet
+    page_access: dict[str, PageAccessModel]
 
 
 class LoginRequest(BaseModel):
@@ -36,6 +47,7 @@ class RoleOptionModel(BaseModel):
     name: str
     description: str
     assignable: bool
+    page_access: dict[str, PageAccessModel] = Field(default_factory=dict)
 
 
 class ManagedUserModel(BaseModel):
@@ -51,6 +63,7 @@ class ManagedUserModel(BaseModel):
 class UserDirectoryResponse(BaseModel):
     users: list[ManagedUserModel]
     roles: list[RoleOptionModel]
+    pages: list[PageOptionModel]
 
 
 class UserCreateRequest(BaseModel):
@@ -68,6 +81,10 @@ class UserUpdateRequest(BaseModel):
     password: str | None = None
     role_codes: list[str] = Field(default_factory=list)
     is_active: bool = True
+
+
+class RolePageAccessUpdateRequest(BaseModel):
+    role_access: dict[str, dict[str, PageAccessModel]] = Field(default_factory=dict)
 
 
 class BackupRecordModel(BaseModel):
@@ -476,6 +493,11 @@ class OccurrenceModel(BaseModel):
     attributes: list[OccurrenceAttributeModel]
 
 
+class InstanceCommentSummaryModel(BaseModel):
+    total_count: int = 0
+    unread_count: int = 0
+
+
 class ProjectInstanceModel(BaseModel):
     id: int
     name: str
@@ -497,6 +519,7 @@ class ProjectInstanceModel(BaseModel):
     media: list[MediaModel]
     export_settings: list[ExportSettingModel]
     material_mode: str
+    comment_summary: InstanceCommentSummaryModel = Field(default_factory=InstanceCommentSummaryModel)
 
 
 class CatalogComponentMutationResultModel(MutationResultModel):
@@ -624,10 +647,50 @@ class CommentModel(BaseModel):
     id: int
     body: str
     author: str
+    author_display_name: str | None = None
+    project_id: int
+    instance_id: int | None = None
     instance: str | None
+    parent_comment_id: int | None = None
     created_at: str
+    updated_at: str
+    is_author: bool = False
+    is_deleted: bool = False
     mentions: list[str]
     replies: list["CommentModel"] = Field(default_factory=list)
+
+
+class CommentCreateRequest(BaseModel):
+    body: str
+    instance_id: int | None = None
+    parent_comment_id: int | None = None
+
+
+class CommentDeleteResponse(BaseModel):
+    ok: bool = True
+    comment_id: int
+    soft_deleted: bool
+
+
+class CommentContextResponse(BaseModel):
+    project_id: int
+    instance_id: int | None = None
+    comment_id: int
+    parent_comment_id: int | None = None
+
+
+class CommentNotificationReadResponse(BaseModel):
+    ok: bool = True
+    notification_id: int
+    is_read: bool
+
+
+class CommentUnreadCountResponse(BaseModel):
+    unread: int
+
+
+class MentionableUsersResponse(BaseModel):
+    users: list[ManagedUserModel]
 
 
 class ActivityChangeModel(BaseModel):
@@ -1041,6 +1104,12 @@ class NotificationModel(BaseModel):
     route: str
     is_read: bool
     comment_id: int
+    project_id: int
+    instance_id: int | None = None
+    body: str | None = None
+    author: str | None = None
+    project_name: str | None = None
+    instance_name: str | None = None
     created_at: str
 
 

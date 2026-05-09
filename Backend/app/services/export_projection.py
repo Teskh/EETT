@@ -67,7 +67,12 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
                     }
 
 
-def build_detailed_material_export_sections(project_data: dict[str, Any]) -> list[dict[str, Any]]:
+def build_detailed_material_export_sections(project_data: dict[str, Any], *, quantity_basis: str = "factory") -> list[dict[str, Any]]:
+    if quantity_basis not in {"factory", "work"}:
+        raise ValueError("quantity_basis must be 'factory' or 'work'")
+
+    quantity_key = "quantity" if quantity_basis == "factory" else "assembly_quantity"
+    quantity_state_key = "quantity_state" if quantity_basis == "factory" else "assembly_quantity_state"
     materials_by_sku: dict[str, dict[str, Any]] = {}
 
     for section in number_category_sections(project_data.get("categories", [])):
@@ -88,7 +93,7 @@ def build_detailed_material_export_sections(project_data: dict[str, Any]) -> lis
                 )
 
                 for bom_entry in material.get("bom_entries", []):
-                    quantity_state = bom_entry.get("quantity_state")
+                    quantity_state = bom_entry.get(quantity_state_key)
                     subtype_name = bom_entry.get("subtype") or "General"
                     subtype_entry = material_entry["subtypes"].setdefault(
                         subtype_name,
@@ -100,8 +105,8 @@ def build_detailed_material_export_sections(project_data: dict[str, Any]) -> lis
                         },
                     )
 
-                    if quantity_state == "value" and bom_entry.get("quantity") is not None:
-                        subtype_entry["quantity_total"] += float(bom_entry["quantity"])
+                    if quantity_state == "value" and bom_entry.get(quantity_key) is not None:
+                        subtype_entry["quantity_total"] += float(bom_entry[quantity_key])
                         subtype_entry["has_numeric_quantity"] = True
                     elif quantity_state == "blank":
                         subtype_entry["has_blank_quantity"] = True

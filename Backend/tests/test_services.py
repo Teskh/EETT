@@ -55,6 +55,7 @@ from app.services.erp import (
     _get_lead_time_samples_for_product,
     _get_purchase_order_lines_for_products_batch,
 )
+from app.services.export_projection import build_detailed_material_export_sections
 from app.services.material_groups import (
     create_material_study_group,
     get_material_dashboard_group_detail,
@@ -71,6 +72,64 @@ from app.services.projects import (
     refresh_instance_snapshot,
 )
 from app.ui import render_catalog_page, render_project_detail_page, render_projects_page
+
+
+class ExportProjectionTests(unittest.TestCase):
+    def test_detailed_material_export_can_use_work_quantities(self) -> None:
+        project_data = {
+            "categories": [
+                {
+                    "name": "Doors",
+                    "depth": 0,
+                    "instances": [
+                        {
+                            "name": "Main Door",
+                            "materials": [
+                                {
+                                    "material_name": "Anchor Screw 5x70",
+                                    "sku": "MAT-001",
+                                    "unit": "UN",
+                                    "bom_entries": [
+                                        {
+                                            "subtype": None,
+                                            "quantity": 10,
+                                            "quantity_state": "value",
+                                            "assembly_quantity": 2,
+                                            "assembly_quantity_state": "value",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "Service Door",
+                            "materials": [
+                                {
+                                    "material_name": "Anchor Screw 5x70",
+                                    "sku": "MAT-001",
+                                    "unit": "UN",
+                                    "bom_entries": [
+                                        {
+                                            "subtype": None,
+                                            "quantity": 14,
+                                            "quantity_state": "value",
+                                            "assembly_quantity": 2,
+                                            "assembly_quantity_state": "value",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        factory_sections = build_detailed_material_export_sections(project_data, quantity_basis="factory")
+        work_sections = build_detailed_material_export_sections(project_data, quantity_basis="work")
+
+        self.assertEqual(factory_sections[0]["materials"][0]["rows"][0]["quantity"], 24.0)
+        self.assertEqual(work_sections[0]["materials"][0]["rows"][0]["quantity"], 4.0)
 
 
 class ServiceLayerTests(unittest.TestCase):
@@ -1510,11 +1569,12 @@ class ServiceLayerTests(unittest.TestCase):
         create_export = self.client.post(
             "/api/v1/projects/2/exports",
             headers={"X-Spec-Sheets-User": "editor"},
-            json={"kind": "detailed_material_pdf", "payload": {}},
+            json={"kind": "detailed_material_pdf", "payload": {"quantity_basis": "work"}},
         )
         self.assertEqual(create_export.status_code, 200)
         self.assertEqual(create_export.json()["kind"], "detailed_material_pdf")
         self.assertEqual(create_export.json()["status"], "completed")
+        self.assertEqual(create_export.json()["payload"]["quantity_basis"], "work")
         artifact_uri = create_export.json()["artifact_uri"]
         self.assertTrue(artifact_uri.endswith(".pdf"))
 

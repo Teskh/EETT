@@ -11,11 +11,19 @@ export type PermissionSet = {
   user_admin: boolean;
 };
 
+export type PageAccess = {
+  can_read: boolean;
+  can_edit: boolean;
+};
+
+export type PageAccessMap = Record<string, PageAccess>;
+
 export type SessionUser = {
   username: string;
   display_name: string;
   roles: string[];
   permissions: PermissionSet;
+  page_access: PageAccessMap;
 };
 
 export type MaterialDashboardPurchaseOrder = {
@@ -351,6 +359,12 @@ export type RoleOption = {
   name: string;
   description: string;
   assignable: boolean;
+  page_access: PageAccessMap;
+};
+
+export type PageOption = {
+  key: string;
+  label: string;
 };
 
 export type ManagedUser = {
@@ -366,6 +380,7 @@ export type ManagedUser = {
 export type UserDirectory = {
   users: ManagedUser[];
   roles: RoleOption[];
+  pages: PageOption[];
 };
 
 export type CreateUserRequest = {
@@ -383,6 +398,10 @@ export type UpdateUserRequest = {
   password?: string | null;
   role_codes: string[];
   is_active: boolean;
+};
+
+export type RolePageAccessUpdateRequest = {
+  role_access: Record<string, PageAccessMap>;
 };
 
 export type BackupRecord = {
@@ -747,6 +766,10 @@ export type ProjectInstance = {
   media: MediaAsset[];
   export_settings: Array<{ target: string; settings: Record<string, unknown> }>;
   material_mode: string;
+  comment_summary: {
+    total_count: number;
+    unread_count: number;
+  };
 };
 
 export type ProjectCategorySection = {
@@ -983,6 +1006,51 @@ export type UpdateProjectOccurrenceRequest = {
   context_label: string | null;
   target_instance_id: number | null;
   attribute_values: AttributeValueInput[];
+};
+
+export type ProjectComment = {
+  id: number;
+  body: string;
+  author: string;
+  author_display_name: string | null;
+  project_id: number;
+  instance_id: number | null;
+  instance: string | null;
+  parent_comment_id: number | null;
+  created_at: string;
+  updated_at: string;
+  is_author: boolean;
+  is_deleted: boolean;
+  mentions: string[];
+  replies: ProjectComment[];
+};
+
+export type CreateProjectCommentRequest = {
+  body: string;
+  instance_id?: number | null;
+  parent_comment_id?: number | null;
+};
+
+export type CommentNotification = {
+  id: number;
+  type: string;
+  route: string;
+  is_read: boolean;
+  comment_id: number;
+  project_id: number;
+  instance_id: number | null;
+  body: string | null;
+  author: string | null;
+  project_name: string | null;
+  instance_name: string | null;
+  created_at: string;
+};
+
+export type CommentContext = {
+  project_id: number;
+  instance_id: number | null;
+  comment_id: number;
+  parent_comment_id: number | null;
 };
 
 export type CreateProjectSubtypeRequest = {

@@ -17,7 +17,7 @@ def render_layout(*, title: str, active_nav: str, content: str, extra_scripts: l
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{escape(title)} | Spec Sheets</title>
+    <title>{escape(title)} | EETT</title>
     <link rel="stylesheet" href="/static/css/app.css">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -91,7 +91,7 @@ def render_layout(*, title: str, active_nav: str, content: str, extra_scripts: l
       <main class="flex-1 flex flex-col h-full relative">
         <header class="h-16 border-b border-white/5 bg-zinc-950/50 backdrop-blur-xl flex items-center justify-between px-6 shrink-0 z-40">
           <div class="flex items-center gap-4">
-            <div class="font-mono text-xs text-zinc-500 tracking-widest uppercase">Spec Sheets</div>
+            <div class="font-mono text-xs text-zinc-500 tracking-widest uppercase">EETT</div>
             <div class="h-4 w-px bg-white/10"></div>
             <h1 class="text-sm font-semibold text-zinc-100 flex items-center gap-2">
               {escape(title)}

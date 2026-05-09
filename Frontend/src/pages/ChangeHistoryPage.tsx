@@ -37,6 +37,104 @@ function renderValue(value: string | null) {
   return value && value.trim() ? value : "—";
 }
 
+type DiffPart = {
+  text: string;
+  type: "equal" | "added" | "deleted";
+};
+
+function tokenizeDiffText(value: string) {
+  return value.match(/\s+|[^\s]+/g) || [];
+}
+
+function compactDiffParts(parts: DiffPart[]) {
+  return parts.reduce<DiffPart[]>((result, part) => {
+    const previous = result[result.length - 1];
+    if (previous && previous.type === part.type) {
+      previous.text += part.text;
+    } else {
+      result.push({ ...part });
+    }
+    return result;
+  }, []);
+}
+
+function buildTextDiff(before: string, after: string) {
+  if (before === after) {
+    return {
+      before: [{ text: before, type: "equal" as const }],
+      after: [{ text: after, type: "equal" as const }],
+    };
+  }
+
+  const beforeTokens = tokenizeDiffText(before);
+  const afterTokens = tokenizeDiffText(after);
+  const lengths = Array.from({ length: beforeTokens.length + 1 }, () =>
+    Array<number>(afterTokens.length + 1).fill(0),
+  );
+
+  for (let beforeIndex = beforeTokens.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
+    for (let afterIndex = afterTokens.length - 1; afterIndex >= 0; afterIndex -= 1) {
+      lengths[beforeIndex][afterIndex] =
+        beforeTokens[beforeIndex] === afterTokens[afterIndex]
+          ? lengths[beforeIndex + 1][afterIndex + 1] + 1
+          : Math.max(lengths[beforeIndex + 1][afterIndex], lengths[beforeIndex][afterIndex + 1]);
+    }
+  }
+
+  const beforeParts: DiffPart[] = [];
+  const afterParts: DiffPart[] = [];
+  let beforeIndex = 0;
+  let afterIndex = 0;
+
+  while (beforeIndex < beforeTokens.length && afterIndex < afterTokens.length) {
+    if (beforeTokens[beforeIndex] === afterTokens[afterIndex]) {
+      const text = beforeTokens[beforeIndex];
+      beforeParts.push({ text, type: "equal" });
+      afterParts.push({ text, type: "equal" });
+      beforeIndex += 1;
+      afterIndex += 1;
+    } else if (lengths[beforeIndex + 1][afterIndex] >= lengths[beforeIndex][afterIndex + 1]) {
+      beforeParts.push({ text: beforeTokens[beforeIndex], type: "deleted" });
+      beforeIndex += 1;
+    } else {
+      afterParts.push({ text: afterTokens[afterIndex], type: "added" });
+      afterIndex += 1;
+    }
+  }
+
+  while (beforeIndex < beforeTokens.length) {
+    beforeParts.push({ text: beforeTokens[beforeIndex], type: "deleted" });
+    beforeIndex += 1;
+  }
+  while (afterIndex < afterTokens.length) {
+    afterParts.push({ text: afterTokens[afterIndex], type: "added" });
+    afterIndex += 1;
+  }
+
+  return {
+    before: compactDiffParts(beforeParts),
+    after: compactDiffParts(afterParts),
+  };
+}
+
+function renderDiffParts(parts: DiffPart[], mode: "before" | "after") {
+  return parts.map((part, index) => {
+    const className =
+      part.type === "deleted"
+        ? "rounded-sm bg-red-50 px-0.5 text-red-700 line-through decoration-red-400 dark:bg-red-500/10 dark:text-red-300 dark:decoration-red-500"
+        : part.type === "added"
+          ? "rounded-sm bg-emerald-50 px-0.5 font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+          : mode === "before"
+            ? "text-zinc-500 dark:text-zinc-500"
+            : "text-zinc-900 dark:text-zinc-100";
+    return (
+      <span key={`${part.type}-${index}`} className={className}>
+        {renderQuantityText(part.text)}
+      </span>
+    );
+  });
+}
+
 type ChangeTypeFilter = "material_quantities" | "material_membership" | "instance_changes";
 
 const CHANGE_TYPE_OPTIONS: Array<{ id: ChangeTypeFilter; label: string }> = [
@@ -401,20 +499,24 @@ function getActivityEntryChangeTypes(group: ActivityGroup, entry: ActivityEntry)
 }
 
 function ChangeRow({ change }: { change: ActivityChange }) {
+  const beforeValue = renderValue(translateActivityValue(change.before));
+  const afterValue = renderValue(translateActivityValue(change.after));
+  const diff = useMemo(() => buildTextDiff(beforeValue, afterValue), [afterValue, beforeValue]);
+
   return (
     <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 py-1.5 text-xs hover:bg-zinc-50 dark:hover:bg-white/[0.02] transition-colors -mx-2 px-2 rounded">
        <div className="sm:w-[140px] flex-shrink-0 font-mono text-[10px] text-zinc-500 uppercase tracking-widest sm:pt-[3px] break-words">
          {renderQuantityText(translateActivityLabel(change.label))}
        </div>
        <div className="flex-1 font-mono min-w-0 break-words leading-relaxed">
-         <span className="text-zinc-500 dark:text-zinc-500 line-through decoration-zinc-300 dark:decoration-zinc-700">
-           {renderQuantityText(renderValue(translateActivityValue(change.before)))}
+         <span>
+           {renderDiffParts(diff.before, "before")}
          </span>
          <span className="mx-2.5 inline-flex align-middle">
            <ArrowRight className="w-3 h-3 text-zinc-400" />
          </span>
-         <span className="font-medium text-zinc-900 dark:text-zinc-100">
-           {renderQuantityText(renderValue(translateActivityValue(change.after)))}
+         <span className="font-medium">
+           {renderDiffParts(diff.after, "after")}
          </span>
        </div>
     </div>

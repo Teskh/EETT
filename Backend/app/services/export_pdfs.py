@@ -66,7 +66,13 @@ def build_full_technical_pdf(project_data: dict[str, Any], output_path: Any) -> 
     doc.multiBuild(story)
 
 
-def build_detailed_material_pdf(project_data: dict[str, Any], output_path: Any, *, show_prices: bool) -> None:
+def build_detailed_material_pdf(
+    project_data: dict[str, Any],
+    output_path: Any,
+    *,
+    show_prices: bool,
+    quantity_label: str = "Cant.",
+) -> None:
     _ensure_reportlab("Detailed material PDF export requires the 'reportlab' package.")
 
     from reportlab.lib import colors
@@ -181,7 +187,7 @@ def build_detailed_material_pdf(project_data: dict[str, Any], output_path: Any, 
         header_row.append(Paragraph("Subtipo", styles["DetailedTableHeader"]))
     header_row.extend(
         [
-            Paragraph("Cant.", styles["DetailedTableHeader"]),
+            Paragraph(quantity_label, styles["DetailedTableHeader"]),
             Paragraph("Unidad", styles["DetailedTableHeader"]),
             Paragraph("Stock actual", styles["DetailedTableHeader"]),
         ]

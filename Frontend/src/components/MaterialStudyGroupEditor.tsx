@@ -255,7 +255,7 @@ export function MaterialStudyGroupEditor({ open, groups, onClose, onChanged }: M
                 value={editorState.name}
                 onChange={(event) => setEditorState((current) => ({ ...current, name: event.target.value }))}
                 className="w-full rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
-                placeholder="Insulation group"
+                placeholder="Grupo de aislación"
               />
             </label>
             <label className="block">

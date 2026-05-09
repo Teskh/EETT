@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
-import type { CreateUserRequest, ManagedUser, RoleOption, UpdateUserRequest, UserDirectory } from "../lib/types";
+import { normalizePageAccess } from "../lib/pageAccess";
+import type { CreateUserRequest, ManagedUser, PageAccessMap, PageOption, RoleOption, UpdateUserRequest, UserDirectory } from "../lib/types";
 
 type UsersPageProps = {
   currentUsername: string;
@@ -70,6 +71,74 @@ function RoleChecklist({
   );
 }
 
+function setPageAccess(access: PageAccessMap, pageKey: string, field: "can_read" | "can_edit", checked: boolean) {
+  const current = access[pageKey] ?? { can_read: false, can_edit: false };
+  const next = {
+    ...access,
+    [pageKey]: {
+      ...current,
+      [field]: checked,
+    },
+  };
+  if (field === "can_edit" && checked) {
+    next[pageKey].can_read = true;
+  }
+  if (field === "can_read" && !checked) {
+    next[pageKey].can_edit = false;
+  }
+  return normalizePageAccess(next);
+}
+
+function buildRoleAccessDraft(roles: RoleOption[]) {
+  return Object.fromEntries(roles.map((role) => [role.code, normalizePageAccess(role.page_access)]));
+}
+
+function PageAccessMatrix({
+  pages,
+  access,
+  onChange,
+}: {
+  pages: PageOption[];
+  access: PageAccessMap;
+  onChange: (nextAccess: PageAccessMap) => void;
+}) {
+  const normalizedAccess = normalizePageAccess(access);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-black/10 dark:border-white/10">
+      <div className="grid grid-cols-[minmax(0,1fr)_72px_72px] bg-black/5 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:bg-white/5">
+        <span>Pagina</span>
+        <span className="text-center">Leer</span>
+        <span className="text-center">Editar</span>
+      </div>
+      <div className="divide-y divide-black/10 dark:divide-white/10">
+        {pages.map((page) => {
+          const row = normalizedAccess[page.key] ?? { can_read: false, can_edit: false };
+          return (
+            <div key={page.key} className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center px-3 py-2 text-sm">
+              <span className="truncate font-medium text-zinc-800 dark:text-zinc-200">{page.label}</span>
+              <label className="flex justify-center">
+                <input
+                  type="checkbox"
+                  checked={row.can_read}
+                  onChange={(event) => onChange(setPageAccess(normalizedAccess, page.key, "can_read", event.target.checked))}
+                />
+              </label>
+              <label className="flex justify-center">
+                <input
+                  type="checkbox"
+                  checked={row.can_edit}
+                  onChange={(event) => onChange(setPageAccess(normalizedAccess, page.key, "can_edit", event.target.checked))}
+                />
+              </label>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function UsersPage({ currentUsername }: UsersPageProps) {
   const [data, setData] = useState<UserDirectory | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,12 +148,16 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<EditFormState | null>(null);
   const [editSaving, setEditSaving] = useState(false);
+  const [roleAccessDraft, setRoleAccessDraft] = useState<Record<string, PageAccessMap>>({});
+  const [roleAccessSaving, setRoleAccessSaving] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
     setError(null);
     try {
-      setData(await api.getUsers());
+      const nextData = await api.getUsers();
+      setData(nextData);
+      setRoleAccessDraft(buildRoleAccessDraft(nextData.roles));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudieron cargar los usuarios.");
     } finally {
@@ -152,6 +225,20 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
       await loadUsers();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "No se pudo eliminar el usuario.");
+    }
+  }
+
+  async function handleSaveRoleAccess() {
+    setRoleAccessSaving(true);
+    setError(null);
+    try {
+      const nextData = await api.updateRolePageAccess({ role_access: roleAccessDraft });
+      setData(nextData);
+      setRoleAccessDraft(buildRoleAccessDraft(nextData.roles));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo actualizar el acceso por rol.");
+    } finally {
+      setRoleAccessSaving(false);
     }
   }
 
@@ -378,6 +465,45 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
           ) : null}
         </section>
       </div>
+
+      {data ? (
+        <section className="liquid-glass rounded-2xl p-6">
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Acceso por rol</p>
+              <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Permisos de páginas</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleSaveRoleAccess()}
+              disabled={roleAccessSaving}
+              className="rounded-xl bg-accent-500 px-4 py-3 text-sm font-bold text-zinc-950 disabled:opacity-60"
+            >
+              {roleAccessSaving ? "Guardando..." : "Guardar accesos"}
+            </button>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+            {data.roles.map((role) => (
+              <div key={role.code} className="rounded-xl border border-black/10 bg-black/5 p-4 dark:border-white/10 dark:bg-black/30">
+                <div className="mb-3">
+                  <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{role.name}</h3>
+                  <p className="mt-1 text-xs text-zinc-500">{role.description}</p>
+                </div>
+                <PageAccessMatrix
+                  pages={data.pages}
+                  access={roleAccessDraft[role.code] ?? normalizePageAccess(role.page_access)}
+                  onChange={(pageAccess) =>
+                    setRoleAccessDraft((current) => ({
+                      ...current,
+                      [role.code]: pageAccess,
+                    }))
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -28,7 +28,7 @@ def _read_env_value(env_path: Path, key: str) -> str | None:
 
 
 class Settings(BaseSettings):
-    app_name: str = "Spec Sheets"
+    app_name: str = "EETT"
     environment: str = "development"
     database_url: str = DEFAULT_DATABASE_URL
     database_connect_timeout_seconds: int = 5

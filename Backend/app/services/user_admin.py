@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Role, User, UserRole
-from app.services.auth import ASSIGNABLE_ROLE_CODES, get_role_catalog, get_user_by_username, hash_password, role_codes
+from app.models import Role, RolePageAccess, User, UserRole
+from app.services.auth import ASSIGNABLE_ROLE_CODES, PAGE_KEYS, build_role_page_access_payload, get_role_catalog, get_user_by_username, hash_password, role_codes
 
 
 def list_users(session: Session) -> list[User]:
@@ -12,6 +12,14 @@ def list_users(session: Session) -> list[User]:
         select(User)
         .options(selectinload(User.roles).selectinload(UserRole.role))
         .order_by(User.username)
+    ).all()
+
+
+def list_roles(session: Session) -> list[Role]:
+    return session.scalars(
+        select(Role)
+        .options(selectinload(Role.page_access))
+        .order_by(Role.code)
     ).all()
 
 
@@ -27,6 +35,21 @@ def serialize_role_catalog() -> list[dict]:
     ]
 
 
+def serialize_roles_with_access(roles: list[Role]) -> list[dict]:
+    roles_by_code = {role.code: role for role in roles}
+    return [
+        {
+            "code": role_definition.code,
+            "name": role_definition.name,
+            "description": role_definition.description,
+            "assignable": role_definition.assignable,
+            "page_access": build_role_page_access_payload(roles_by_code[role_definition.code]),
+        }
+        for role_definition in get_role_catalog()
+        if role_definition.code in roles_by_code
+    ]
+
+
 def serialize_user(user: User) -> dict:
     return {
         "id": user.id,
@@ -37,6 +60,35 @@ def serialize_user(user: User) -> dict:
         "roles": sorted(role_codes(user)),
         "created_at": user.created_at.isoformat(),
     }
+
+
+def normalize_page_access(page_access: dict[str, dict[str, bool]] | None) -> dict[str, tuple[bool, bool]]:
+    if not page_access:
+        return {}
+    normalized: dict[str, tuple[bool, bool]] = {}
+    for page_key, raw_access in page_access.items():
+        if page_key not in PAGE_KEYS:
+            raise ValueError(f"Unsupported page access selection: {page_key}")
+        access_data = raw_access.model_dump() if hasattr(raw_access, "model_dump") else raw_access
+        can_edit = bool(access_data.get("can_edit", False))
+        can_read = bool(access_data.get("can_read", False)) or can_edit
+        normalized[page_key] = (can_read, can_edit)
+    return normalized
+
+
+def replace_role_page_access(session: Session, role: Role, page_access: dict[str, dict[str, bool]] | None) -> None:
+    normalized = normalize_page_access(page_access)
+    existing_by_key = {row.page_key: row for row in role.page_access}
+    for page_key, (can_read, can_edit) in normalized.items():
+        row = existing_by_key.get(page_key)
+        if row is None:
+            row = RolePageAccess(role=role, page_key=page_key)
+            session.add(row)
+        row.can_read = can_read
+        row.can_edit = can_edit
+    for page_key, row in existing_by_key.items():
+        if page_key not in normalized:
+            session.delete(row)
 
 
 def validate_assignable_role_codes(requested_role_codes: list[str]) -> list[str]:
@@ -155,6 +207,26 @@ def update_user(
 
     session.commit()
     return get_user_by_username(session, user.username)
+
+
+def update_role_page_access(session: Session, role_access: dict[str, dict[str, dict[str, bool]]]) -> list[Role]:
+    requested_role_codes = sorted(role_access.keys())
+    invalid = [code for code in requested_role_codes if code not in ASSIGNABLE_ROLE_CODES]
+    if invalid:
+        raise ValueError(f"Unsupported role selection: {', '.join(invalid)}")
+    roles = session.scalars(
+        select(Role)
+        .where(Role.code.in_(requested_role_codes))
+        .options(selectinload(Role.page_access))
+    ).all()
+    roles_by_code = {role.code: role for role in roles}
+    missing = [code for code in requested_role_codes if code not in roles_by_code]
+    if missing:
+        raise ValueError(f"Roles are missing in the database: {', '.join(missing)}")
+    for code, page_access in role_access.items():
+        replace_role_page_access(session, roles_by_code[code], page_access)
+    session.commit()
+    return list_roles(session)
 
 
 def delete_user(session: Session, *, user_id: int) -> bool:
