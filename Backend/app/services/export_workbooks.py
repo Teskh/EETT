@@ -68,17 +68,29 @@ def build_cost_model_workbook(
 def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> None:
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
-    ws.append(["Material", "SKU", "Q fabrica", "Unidad"])
-    _style_header_row(ws, row_index=1, column_count=4)
+    include_subtype = any(
+        (row.get("subtype") or "General") != "General"
+        and _include_context_row(row, quantity_key="quantity", quantity_state_key="quantity_state")
+        for row in context_rows
+    )
+    headers = ["Material", "SKU"]
+    if include_subtype:
+        headers.append("Subtipo")
+    headers.extend(["Q fabrica", "Unidad"])
+    ws.append(headers)
+    _style_header_row(ws, row_index=1, column_count=len(headers))
 
-    totals: dict[str, dict[str, Any]] = {}
+    totals: dict[tuple[str, str], dict[str, Any]] = {}
     for row in context_rows:
         sku = row["sku"]
+        subtype = row.get("subtype") or "General"
+        key = (sku, subtype)
         entry = totals.setdefault(
-            sku,
+            key,
             {
                 "material_name": row["material_name"],
                 "sku": sku,
+                "subtype": subtype,
                 "unit": row["unit"],
                 "quantity_total": 0.0,
                 "has_numeric_quantity": False,
@@ -94,15 +106,20 @@ def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> N
             entry["has_blank_quantity"] = True
 
     next_row = 2
-    for entry in sorted(totals.values(), key=lambda item: (item["material_name"], item["sku"])):
+    quantity_column = 4 if include_subtype else 3
+    for entry in sorted(totals.values(), key=lambda item: (item["material_name"], item["sku"], item["subtype"] != "General", item["subtype"].lower())):
         if not entry["has_numeric_quantity"] and not entry["has_blank_quantity"]:
             continue
         quantity_value = entry["quantity_total"] if entry["has_numeric_quantity"] else None
-        ws.append([entry["material_name"], entry["sku"], quantity_value, entry["unit"]])
-        _style_data_row(ws, next_row, numeric_columns={3})
+        row_values = [entry["material_name"], entry["sku"]]
+        if include_subtype:
+            row_values.append(entry["subtype"])
+        row_values.extend([quantity_value, entry["unit"]])
+        ws.append(row_values)
+        _style_data_row(ws, next_row, numeric_columns={quantity_column})
         next_row += 1
 
-    _set_column_widths(ws, {"A": 42, "B": 16, "C": 14, "D": 10})
+    _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10} if include_subtype else {"A": 42, "B": 16, "C": 14, "D": 10})
 
 
 def _build_cost_model_rows(

@@ -771,7 +771,7 @@ function InstanceFormModal({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Nombre Corto (SKU)</label>
+            <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Nombre Comercial</label>
             <input
               value={shortName}
               onChange={(event) => setShortName(event.target.value)}
@@ -1048,7 +1048,7 @@ function translateProjectDetailLabel(label: string | null | undefined) {
     "base attributes": "Atributos base",
     "imported attributes": "Atributos importados",
     name: "Nombre",
-    "short name": "Nombre corto",
+    "short name": "Nombre comercial",
     description: "Descripción",
     "short description": "Descripción corta",
     installation: "Instalación",
@@ -2430,10 +2430,10 @@ function InstanceCard({
                 {instance.short_name && instance.short_name.trim() !== "" && instance.short_name !== instance.name ? (
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Nombre Corto</span>
+                      <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Nombre Comercial</span>
                       <SyncIndicatorButton
                         status={shortNameSync?.status}
-                        title="Ver detalles de sincronización del nombre corto"
+                        title="Ver detalles de sincronización del nombre comercial"
                         onClick={() => onOpenSyncModal("short_name")}
                       />
                     </div>

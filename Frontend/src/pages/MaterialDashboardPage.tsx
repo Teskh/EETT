@@ -46,7 +46,11 @@ import type {
 } from "../lib/types";
 
 type BaseSortKey = "material_name" | "sku" | "last_movement_date" | "movement_quantity_60d" | "movement_count_60d";
-type EconomicSortKey = "consumption_delta_percent" | "consumption_cost_delta_per_house";
+type EconomicSortKey =
+  | "consumption_delta_percent"
+  | "consumption_cost_delta_per_house"
+  | "historical_weighted_overprice"
+  | "estimated_weighted_overprice";
 type SortKey = BaseSortKey | EconomicSortKey;
 
 type SortState = {
@@ -119,8 +123,40 @@ function formatPercent(value: number | null | undefined, digits = 1) {
   return `${value > 0 ? "+" : "-"}${absolute}%`;
 }
 
+function formatUnsignedPercent(value: number | null | undefined, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "—";
+  }
+  return `${new Intl.NumberFormat("es-CL", { maximumFractionDigits: digits }).format(value)}%`;
+}
+
 function isFiniteNumber(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function getPurchaseOrderPriceStats(purchaseOrders: MaterialDashboardPurchaseOrderLine[] | null | undefined) {
+  const prices = (purchaseOrders || [])
+    .map((order) => order.unit_price)
+    .filter(isFiniteNumber);
+  if (!prices.length) {
+    return {
+      lastPrice: null,
+      minPrice: null,
+      maxPrice: null,
+      delta: null,
+      deltaPercent: null,
+    };
+  }
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
+  const delta = maxPrice - minPrice;
+  return {
+    lastPrice: prices[0],
+    minPrice,
+    maxPrice,
+    delta,
+    deltaPercent: minPrice > 0 ? (delta / minPrice) * 100 : null,
+  };
 }
 
 function getAdaptiveDecimalPlaces(...values: Array<number | null | undefined>) {
@@ -227,7 +263,16 @@ function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardLis
 }
 
 function isEconomicSortKey(key: SortKey): key is EconomicSortKey {
-  return key === "consumption_delta_percent" || key === "consumption_cost_delta_per_house";
+  return (
+    key === "consumption_delta_percent" ||
+    key === "consumption_cost_delta_per_house" ||
+    key === "historical_weighted_overprice" ||
+    key === "estimated_weighted_overprice"
+  );
+}
+
+function toBaseSort(sort: SortState): { key: BaseSortKey; direction: 1 | -1 } {
+  return isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : { key: sort.key as BaseSortKey, direction: sort.direction };
 }
 
 const CHART_PADDING = { top: 18, right: 18, bottom: 26, left: 40 };
@@ -258,6 +303,7 @@ type HouseRange = {
 };
 
 type LeadTimeMode = "worst" | "median" | "average";
+type PriceDisplayMode = "average" | "last";
 
 type LeadTimeReference = {
   days: number;
@@ -1303,19 +1349,48 @@ const SidebarSearchInput = memo(function SidebarSearchInput({
   );
 });
 
+function ReloadIconButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl bg-accent-500 text-zinc-950 shadow-sm transition-colors hover:bg-accent-400"
+      title="Recargar"
+      aria-label="Recargar"
+    >
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M4 4v6h6M20 20v-6h-6M5.5 15A7 7 0 0 0 17 18.5M18.5 9A7 7 0 0 0 7 5.5" />
+      </svg>
+    </button>
+  );
+}
+
 const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
   metric,
 }: {
   metric: MaterialDashboardEconomicMetric | null | undefined;
 }) {
   const costDelta = metric?.consumption_cost_delta_per_house;
-  if (!isFiniteNumber(costDelta)) {
+  const deltaPercent = metric?.consumption_delta_percent;
+  const priceDeltaPercent = metric?.purchase_price_delta_percent;
+  const historicalOverprice = metric?.historical_weighted_overprice;
+  const estimatedOverprice = metric?.estimated_weighted_overprice;
+  if (
+    !isFiniteNumber(costDelta) &&
+    !isFiniteNumber(deltaPercent) &&
+    !isFiniteNumber(priceDeltaPercent) &&
+    !isFiniteNumber(historicalOverprice) &&
+    !isFiniteNumber(estimatedOverprice)
+  ) {
     return null;
   }
 
-  const deltaPercent = metric?.consumption_delta_percent;
   const isOvercost = costDelta > 0;
   const isSavings = costDelta < 0;
+  const hasCostDelta = isFiniteNumber(costDelta);
+  const hasConsumptionDelta = isFiniteNumber(deltaPercent);
+  const hasPriceDelta = isFiniteNumber(priceDeltaPercent);
+  const hasWeightedOverprice = isFiniteNumber(historicalOverprice) || isFiniteNumber(estimatedOverprice);
 
   const colorClasses = isOvercost
     ? "text-red-600 dark:text-red-400"
@@ -1325,25 +1400,49 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
 
   return (
     <div className="mt-1 flex items-center gap-1.5 text-[11px]">
-      <span className={`inline-flex items-center gap-1 font-medium ${colorClasses}`}>
-        {isOvercost && (
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-          </svg>
-        )}
-        {isSavings && (
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-          </svg>
-        )}
-        <span>{formatCurrency(Math.abs(costDelta))}/house</span>
-      </span>
-      {isFiniteNumber(deltaPercent) && (
+      {hasCostDelta ? (
+        <span className={`inline-flex items-center gap-1 font-medium ${colorClasses}`}>
+          {isOvercost && (
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+            </svg>
+          )}
+          {isSavings && (
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          )}
+          <span>{formatCurrency(Math.abs(costDelta))}/house</span>
+        </span>
+      ) : null}
+      {hasConsumptionDelta && (
         <>
-          <span className="text-zinc-300 dark:text-zinc-600">•</span>
+          {hasCostDelta ? <span className="text-zinc-300 dark:text-zinc-600">•</span> : null}
           <span className="text-zinc-500 dark:text-zinc-400">{formatPercent(deltaPercent)}</span>
         </>
       )}
+      {hasPriceDelta ? (
+        <>
+          {hasCostDelta || hasConsumptionDelta ? <span className="text-zinc-300 dark:text-zinc-600">•</span> : null}
+          <span
+            className="text-amber-600 dark:text-amber-400"
+            title={`Volatilidad OC: ${formatCurrency(metric?.purchase_price_delta)} entre precio mínimo y máximo`}
+          >
+            ↕ {formatUnsignedPercent(priceDeltaPercent)}
+          </span>
+        </>
+      ) : null}
+      {hasWeightedOverprice ? (
+        <>
+          {hasCostDelta || hasConsumptionDelta || hasPriceDelta ? <span className="text-zinc-300 dark:text-zinc-600">•</span> : null}
+          <span
+            className="text-zinc-500 dark:text-zinc-400"
+            title="Sobreprecio ponderado por consumo histórico / cantidad estimada"
+          >
+            H {formatCurrency(historicalOverprice)} · E {formatCurrency(estimatedOverprice)}
+          </span>
+        </>
+      ) : null}
     </div>
   );
 });
@@ -1725,6 +1824,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   houseComparisonRefreshing,
   historyError,
   houseComparisonError,
+  economicMetric,
   onInspectProjectUsage,
 }: {
   selected: DashboardSelectionRow | null;
@@ -1749,6 +1849,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   houseComparisonRefreshing: boolean;
   historyError: string | null;
   houseComparisonError: string | null;
+  economicMetric: MaterialDashboardEconomicMetric | null;
   onInspectProjectUsage: (() => void) | null;
 }) {
   const [selection, setSelection] = useState<ChartSelection | null>(null);
@@ -1758,6 +1859,7 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const [bufferWeeksInput, setBufferWeeksInput] = useState("2");
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
   const [isEditingLeadTimeMode, setIsEditingLeadTimeMode] = useState(false);
+  const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("average");
   const selectedGroup = isGroupRow(selected) ? selected : null;
   const groupSelection = Boolean(selectedGroup);
 
@@ -1876,6 +1978,21 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const actualConsumptionPerHouse = houseSummary?.averageConsumptionPerHouse ?? houseComparisonInRange?.material_per_house ?? null;
   const projectedConsumptionPerHouse = projectComparisonInRange?.predicted_quantity_per_house ?? null;
+  const purchaseOrders = detail && "purchase_orders" in detail ? detail.purchase_orders : [];
+  const purchasePriceStats = groupSelection ? null : getPurchaseOrderPriceStats(purchaseOrders);
+  const priceVolatility = !groupSelection
+    ? {
+        deltaPercent: economicMetric?.purchase_price_delta_percent ?? purchasePriceStats?.deltaPercent ?? null,
+        delta: economicMetric?.purchase_price_delta ?? purchasePriceStats?.delta ?? null,
+        minPrice: economicMetric?.min_purchase_price ?? purchasePriceStats?.minPrice ?? null,
+        maxPrice: economicMetric?.max_purchase_price ?? purchasePriceStats?.maxPrice ?? null,
+      }
+    : null;
+  const lastPurchasePrice = detail && "last_purchase_price" in detail ? detail.last_purchase_price : null;
+  const displayPrice =
+    priceDisplayMode === "last"
+      ? lastPurchasePrice ?? purchasePriceStats?.lastPrice ?? null
+      : detail?.average_price ?? null;
   const houseMetricDigits = getAdaptiveDecimalPlaces(actualConsumptionPerHouse, projectedConsumptionPerHouse);
   const consumptionDeltaPercent =
     actualConsumptionPerHouse !== null && projectedConsumptionPerHouse && projectedConsumptionPerHouse !== 0
@@ -2112,10 +2229,57 @@ const MovementHistoryCard = memo(function MovementHistoryCard({
           ) : null}
           <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />
           <div className="text-right">
-            <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{groupSelection ? "Unidad de Estudio" : "Precio Prom."}</div>
-            <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-              {groupSelection ? detail?.unit || selectedGroup?.study_unit : detail ? formatCurrency(detail.average_price) : detailLoading ? "..." : "—"}
-            </div>
+            {groupSelection ? (
+              <>
+                <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">Unidad de Estudio</div>
+                <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail?.unit || selectedGroup?.study_unit}</div>
+              </>
+            ) : (
+              <>
+                <div className="mb-1 flex items-center justify-end gap-2">
+                  <div
+                    className="group/price relative inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500"
+                    tabIndex={0}
+                  >
+                    <span>{priceDisplayMode === "last" ? "Último Precio" : "Precio Prom."}</span>
+                    <i className="ph-bold ph-info text-[11px]" />
+                    <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-80 rounded-lg border border-black/10 bg-white p-3 text-left text-[11px] font-medium normal-case leading-5 tracking-normal text-zinc-600 shadow-xl group-hover/price:block group-focus/price:block dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300">
+                      Precio Prom. es el costo promedio ERP calculado a la fecha actual para el SKU completo. No promedia solo el rango visible, ni solo movimientos consumidos, ni CECOs del historial. Último precio usa la OC más reciente con precio unitario. La volatilidad compara el mayor y menor precio unitario dentro de las últimas 10 líneas de OC mostradas para este SKU.
+                    </div>
+                  </div>
+                  <div className="inline-flex rounded-full border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
+                    {(["average", "last"] as PriceDisplayMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setPriceDisplayMode(mode)}
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                          priceDisplayMode === mode
+                            ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-white"
+                            : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                        }`}
+                      >
+                        {mode === "average" ? "Prom." : "Últ."}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                    {detail ? formatCurrency(displayPrice) : detailLoading ? "..." : "—"}
+                  </div>
+                  {priceVolatility && isFiniteNumber(priceVolatility.deltaPercent) ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                      title={`Mayor ${formatCurrency(priceVolatility.maxPrice)} - menor ${formatCurrency(priceVolatility.minPrice)} = ${formatCurrency(priceVolatility.delta)}`}
+                    >
+                      <span>↕</span>
+                      <span>{formatUnsignedPercent(priceVolatility.deltaPercent)}</span>
+                    </span>
+                  ) : null}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -3833,8 +3997,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     };
   }, [activeTab, deferredMaterialSearch]);
 
-  const fallbackMaterialSort: { key: BaseSortKey; direction: 1 | -1 } = isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : sort;
-  const groupSort: { key: BaseSortKey; direction: 1 | -1 } = isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : sort;
+  const fallbackMaterialSort = toBaseSort(sort);
+  const groupSort = toBaseSort(sort);
   const rows = useMemo(
     () =>
       (data?.materials || [])
@@ -3851,14 +4015,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           }
           const leftMetric = economicMetricsBySku.get(left.sku);
           const rightMetric = economicMetricsBySku.get(right.sku);
-          const leftValue =
-            sort.key === "consumption_delta_percent"
-              ? leftMetric?.consumption_delta_percent
-              : leftMetric?.consumption_cost_delta_per_house;
-          const rightValue =
-            sort.key === "consumption_delta_percent"
-              ? rightMetric?.consumption_delta_percent
-              : rightMetric?.consumption_cost_delta_per_house;
+          const leftValue = leftMetric?.[sort.key];
+          const rightValue = rightMetric?.[sort.key];
           const leftMissing = leftValue === null || leftValue === undefined || Number.isNaN(leftValue);
           const rightMissing = rightValue === null || rightValue === undefined || Number.isNaN(rightValue);
           if (leftMissing && rightMissing) {
@@ -3948,6 +4106,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       ? [
           { key: "consumption_cost_delta_per_house" as const, label: "Delta de costo / vivienda" },
           { key: "consumption_delta_percent" as const, label: "Delta % / vivienda" },
+          { key: "historical_weighted_overprice" as const, label: "Sobreprecio ponderado hist." },
+          { key: "estimated_weighted_overprice" as const, label: "Sobreprecio ponderado est." },
         ]
       : []),
   ];
@@ -4080,27 +4240,16 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           {activeTab === "materials" ? (
             <div className="flex-1 flex flex-col min-h-0">
               <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
-                <SidebarSearchInput
-                  value={materialSearchInput}
-                  pending={isMaterialSearchPending}
-                  placeholder="SKU o nombre de material"
-                  onChange={handleMaterialSearchChange}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleReload}
-                    className="flex-1 rounded-xl bg-accent-500 text-zinc-950 font-semibold text-sm px-4 py-2 hover:bg-accent-400 transition-colors shadow-sm"
-                  >
-                    Recargar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResetCecoFilter}
-                    className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-sm font-medium px-4 py-2 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-white/10 transition-colors shadow-sm"
-                  >
-                    Reiniciar filtro CECO
-                  </button>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <SidebarSearchInput
+                      value={materialSearchInput}
+                      pending={isMaterialSearchPending}
+                      placeholder="SKU o nombre de material"
+                      onChange={handleMaterialSearchChange}
+                    />
+                  </div>
+                  <ReloadIconButton onClick={handleReload} />
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                   <select
@@ -4168,20 +4317,18 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           ) : activeTab === "groups" ? (
             <div className="flex-1 flex flex-col min-h-0">
               <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
-                <SidebarSearchInput
-                  value={materialSearchInput}
-                  pending={isMaterialSearchPending}
-                  placeholder="Nombre del grupo"
-                  onChange={handleMaterialSearchChange}
-                />
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleReload}
-                    className="flex-1 rounded-xl bg-accent-500 text-zinc-950 font-semibold text-sm px-4 py-2 hover:bg-accent-400 transition-colors shadow-sm"
-                  >
-                    Recargar
-                  </button>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <SidebarSearchInput
+                      value={materialSearchInput}
+                      pending={isMaterialSearchPending}
+                      placeholder="Nombre del grupo"
+                      onChange={handleMaterialSearchChange}
+                    />
+                  </div>
+                  <ReloadIconButton onClick={handleReload} />
+                </div>
+                <div className="flex justify-end gap-2">
                   {canEditGroups ? (
                     <button
                       type="button"
@@ -4217,6 +4364,15 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
                   placeholder="Buscar CECO..."
                 />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleResetCecoFilter}
+                    className="rounded-xl border border-black/10 bg-white px-4 py-2 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:bg-white/10"
+                  >
+                    Reiniciar filtro CECO
+                  </button>
+                </div>
 
                 <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
                   <div className="grid grid-cols-2 gap-1">
@@ -4345,6 +4501,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           houseComparisonRefreshing={houseComparisonLoading && Boolean(selectedHouseComparisonLike)}
           historyError={historyError}
           houseComparisonError={houseComparisonError}
+          economicMetric={selectedMaterialSku ? economicMetricsBySku.get(selectedMaterialSku) ?? null : null}
           onInspectProjectUsage={selectedMaterialRow && selectedProjectId ? () => handleOpenProjectUsage(selectedMaterialRow) : null}
         />
       </main>

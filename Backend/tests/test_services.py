@@ -56,6 +56,7 @@ from app.services.erp import (
     _get_purchase_order_lines_for_products_batch,
 )
 from app.services.export_projection import build_detailed_material_export_sections
+from app.services.export_workbooks import build_materials_workbook
 from app.services.material_groups import (
     create_material_study_group,
     get_material_dashboard_group_detail,
@@ -75,7 +76,7 @@ from app.ui import render_catalog_page, render_project_detail_page, render_proje
 
 
 class ExportProjectionTests(unittest.TestCase):
-    def test_detailed_material_export_can_use_work_quantities(self) -> None:
+    def test_detailed_material_export_can_use_work_and_total_quantities(self) -> None:
         project_data = {
             "categories": [
                 {
@@ -127,9 +128,63 @@ class ExportProjectionTests(unittest.TestCase):
 
         factory_sections = build_detailed_material_export_sections(project_data, quantity_basis="factory")
         work_sections = build_detailed_material_export_sections(project_data, quantity_basis="work")
+        total_sections = build_detailed_material_export_sections(project_data, quantity_basis="total")
 
         self.assertEqual(factory_sections[0]["materials"][0]["rows"][0]["quantity"], 24.0)
         self.assertEqual(work_sections[0]["materials"][0]["rows"][0]["quantity"], 4.0)
+        self.assertEqual(total_sections[0]["materials"][0]["rows"][0]["quantity"], 28.0)
+
+    def test_materials_workbook_totals_split_non_general_subtypes(self) -> None:
+        project_data = {
+            "project": {"name": "Subtype Project"},
+            "categories": [
+                {
+                    "name": "Windows",
+                    "depth": 0,
+                    "instances": [
+                        {
+                            "name": "Living Window",
+                            "materials": [
+                                {
+                                    "material_name": "Laminated Glass Panel",
+                                    "sku": "MAT-006",
+                                    "unit": "M2",
+                                    "bom_entries": [
+                                        {
+                                            "subtype": "Standard",
+                                            "quantity": 3,
+                                            "quantity_state": "value",
+                                            "assembly_quantity": 1,
+                                            "assembly_quantity_state": "value",
+                                        },
+                                        {
+                                            "subtype": "Premium",
+                                            "quantity": 5,
+                                            "quantity_state": "value",
+                                            "assembly_quantity": 1,
+                                            "assembly_quantity_state": "value",
+                                        },
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        output = BytesIO()
+        build_materials_workbook(project_data, output)
+        output.seek(0)
+
+        workbook = load_workbook(filename=output)
+        totals = workbook["Total Materiales"]
+        self.assertEqual([totals.cell(row=1, column=column).value for column in range(1, 6)], ["Material", "SKU", "Subtipo", "Q fabrica", "Unidad"])
+        quantities_by_subtype = {
+            totals.cell(row=row_index, column=3).value: totals.cell(row=row_index, column=4).value
+            for row_index in range(2, totals.max_row + 1)
+        }
+        self.assertEqual(quantities_by_subtype, {"Premium": 5, "Standard": 3})
 
 
 class ServiceLayerTests(unittest.TestCase):
@@ -1163,10 +1218,13 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(workbook.sheetnames, ["Total Materiales", "Por Contexto", "Q obra"])
 
         totals = workbook["Total Materiales"]
+        totals_headers = [totals.cell(row=1, column=column).value for column in range(1, totals.max_column + 1)]
+        sku_column = totals_headers.index("SKU") + 1
+        quantity_column = totals_headers.index("Q fabrica") + 1
         totals_by_sku = {
-            totals.cell(row=row_index, column=2).value: totals.cell(row=row_index, column=3).value
+            totals.cell(row=row_index, column=sku_column).value: totals.cell(row=row_index, column=quantity_column).value
             for row_index in range(2, totals.max_row + 1)
-            if totals.cell(row=row_index, column=2).value
+            if totals.cell(row=row_index, column=sku_column).value
         }
         self.assertEqual(totals_by_sku["MAT-001"], 24)
         self.assertEqual(totals_by_sku["MAT-002"], 3)
@@ -2225,6 +2283,7 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIsNotNone(cached_entry)
         self.assertEqual(cached_entry.payload["materials"][0]["sku"], "ERP-001")
 
+    @patch("app.services.dashboard.get_purchase_order_price_stats_for_products")
     @patch("app.services.dashboard.get_average_prices_for_products")
     @patch("app.services.dashboard.get_material_dashboard_house_start_summary")
     @patch("app.services.dashboard.get_recent_material_dashboard")
@@ -2233,6 +2292,7 @@ class ServiceLayerTests(unittest.TestCase):
         recent_dashboard_mock,
         house_start_summary_mock,
         average_prices_mock,
+        purchase_price_stats_mock,
     ) -> None:
         recent_dashboard_mock.return_value = {
             "materials": [
@@ -2273,6 +2333,10 @@ class ServiceLayerTests(unittest.TestCase):
             "ERP-001": 2500.0,
             "ERP-002": 1500.0,
         }
+        purchase_price_stats_mock.return_value = {
+            "ERP-001": {"last_purchase_price": 2800.0, "min_purchase_price": 2000.0, "max_purchase_price": 3000.0},
+            "ERP-002": {"last_purchase_price": 1500.0, "min_purchase_price": 1500.0, "max_purchase_price": 1500.0},
+        }
 
         with self.session_factory() as session:
             first = get_material_dashboard_economic_metrics(
@@ -2304,10 +2368,14 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(metrics_by_sku["ERP-001"]["material_per_house"], 5.0)
         self.assertEqual(metrics_by_sku["ERP-001"]["consumption_delta_percent"], 25.0)
         self.assertEqual(metrics_by_sku["ERP-001"]["consumption_cost_delta_per_house"], 2500.0)
+        self.assertEqual(metrics_by_sku["ERP-001"]["purchase_price_delta"], 1000.0)
+        self.assertEqual(metrics_by_sku["ERP-001"]["historical_weighted_overprice"], 5000.0)
+        self.assertEqual(metrics_by_sku["ERP-001"]["estimated_weighted_overprice"], 4000.0)
         self.assertEqual(metrics_by_sku["ERP-002"]["consumption_delta_percent"], 0.0)
         self.assertEqual(recent_dashboard_mock.call_count, 1)
         self.assertEqual(house_start_summary_mock.call_count, 1)
         self.assertEqual(average_prices_mock.call_count, 1)
+        self.assertEqual(purchase_price_stats_mock.call_count, 1)
         self.assertEqual(len(cached_entries), 1)
 
     @patch("app.services.dashboard.get_material_movement_details")

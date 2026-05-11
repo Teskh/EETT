@@ -24,7 +24,7 @@ def build_commercial_pdf(project_data: dict[str, Any], output_path: Any) -> None
     story = _build_cover_story(
         project_name=project_data["project"]["name"],
         styles=styles,
-        title="Especificacion tecnica comercial",
+        title="Especificación técnica comercial",
     )
 
     sections = project_data.get("sections", [])
@@ -53,7 +53,7 @@ def build_full_technical_pdf(project_data: dict[str, Any], output_path: Any) -> 
     story = _build_cover_story(
         project_name=project_data["project"]["name"],
         styles=styles,
-        title="Especificacion tecnica completa",
+        title="Especificación técnica completa",
     )
     story.extend(_build_toc_story(styles))
 
@@ -580,9 +580,11 @@ def _build_instance_story(instance: dict[str, Any], styles, available_width: flo
     image_flowable = _load_image_flowable(instance.get("image_path"), max_width=available_width * (2 / 3))
 
     if image_flowable is not None:
+        image_width = min(_flowable_width(image_flowable), available_width * (2 / 3))
+        body_width = max(available_width - image_width - 2, available_width * (1 / 3))
         layout_table = Table(
             [[image_flowable, body_flowables or [Spacer(1, 0.01 * inch)]]],
-            colWidths=[available_width * (2 / 3), available_width * (1 / 3)],
+            colWidths=[image_width, body_width],
             hAlign="LEFT",
         )
         layout_table.setStyle(
@@ -590,8 +592,8 @@ def _build_instance_story(instance: dict[str, Any], styles, available_width: flo
                 [
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (0, 0), 0),
-                    ("RIGHTPADDING", (0, 0), (0, 0), 6),
-                    ("LEFTPADDING", (1, 0), (1, 0), 6),
+                    ("RIGHTPADDING", (0, 0), (0, 0), 1),
+                    ("LEFTPADDING", (1, 0), (1, 0), 1),
                     ("RIGHTPADDING", (1, 0), (1, 0), 0),
                     ("TOPPADDING", (0, 0), (-1, -1), 0),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
@@ -650,15 +652,12 @@ def _instance_attribute_flowable(attributes: list[dict[str, Any]], styles, *, in
     if include_group:
         return _attribute_table(attributes, styles, include_group=True)
 
-    if len(attributes) < 3:
-        lines = []
-        for attribute in attributes:
-            name = escape(str(attribute.get("name") or ""))
-            value = escape("" if attribute.get("value") is None else str(attribute.get("value")))
-            lines.append(f"<b>{name}:</b> {value}")
-        return Paragraph("<br />".join(lines), styles["Normal"])
-
-    return _attribute_table(attributes, styles, include_group=False)
+    lines = []
+    for attribute in attributes:
+        name = escape(str(attribute.get("name") or ""))
+        value = escape("" if attribute.get("value") is None else str(attribute.get("value")))
+        lines.append(f"<b>{name}:</b> {value}")
+    return Paragraph("<br />".join(lines), styles["Normal"])
 
 
 def _linked_accessory_flowables(accessories: list[dict[str, Any]], styles) -> list[Any]:
@@ -716,6 +715,16 @@ def _attribute_table(attributes: list[dict[str, Any]], styles, *, include_group:
         )
     )
     return table
+
+
+def _flowable_width(flowable: Any) -> float:
+    width = getattr(flowable, "_export_draw_width", None)
+    if width is not None:
+        return float(width)
+    width = getattr(flowable, "drawWidth", None)
+    if width is not None:
+        return float(width)
+    return float(getattr(flowable, "width", 0) or 0)
 
 
 def _materials_table(materials: list[dict[str, Any]], styles, available_width: float) -> Any:
@@ -922,6 +931,7 @@ def _load_image_flowable(image_path: Any, *, max_width: float):
             width *= scale
             height = max_height
         image.scale(width / float(image.width), height / float(image.height))
+        image._export_draw_width = width
         return image
 
     image = Image(str(path))
@@ -938,6 +948,7 @@ def _load_image_flowable(image_path: Any, *, max_width: float):
 
     image.drawWidth = width
     image.drawHeight = height
+    image._export_draw_width = width
     return image
 
 

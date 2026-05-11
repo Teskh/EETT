@@ -126,7 +126,7 @@ LEGACY_ACTIVITY_FIELD_TRANSLATIONS = {
     "Quantity per unit": "Cantidad por unidad",
     "Condition": "Condición",
     "Name": "Nombre",
-    "Short name": "Nombre corto",
+    "Short name": "Nombre comercial",
     "Description": "Descripción",
     "Short description": "Descripción corta",
     "Installation": "Instalación",

@@ -68,8 +68,8 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
 
 
 def build_detailed_material_export_sections(project_data: dict[str, Any], *, quantity_basis: str = "factory") -> list[dict[str, Any]]:
-    if quantity_basis not in {"factory", "work"}:
-        raise ValueError("quantity_basis must be 'factory' or 'work'")
+    if quantity_basis not in {"factory", "work", "total"}:
+        raise ValueError("quantity_basis must be 'factory', 'work', or 'total'")
 
     quantity_key = "quantity" if quantity_basis == "factory" else "assembly_quantity"
     quantity_state_key = "quantity_state" if quantity_basis == "factory" else "assembly_quantity_state"
@@ -93,7 +93,6 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
                 )
 
                 for bom_entry in material.get("bom_entries", []):
-                    quantity_state = bom_entry.get(quantity_state_key)
                     subtype_name = bom_entry.get("subtype") or "General"
                     subtype_entry = material_entry["subtypes"].setdefault(
                         subtype_name,
@@ -105,10 +104,18 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
                         },
                     )
 
-                    if quantity_state == "value" and bom_entry.get(quantity_key) is not None:
+                    if quantity_basis == "total":
+                        factory_quantity = _numeric_bom_quantity(bom_entry, "quantity", "quantity_state")
+                        work_quantity = _numeric_bom_quantity(bom_entry, "assembly_quantity", "assembly_quantity_state")
+                        if factory_quantity is not None or work_quantity is not None:
+                            subtype_entry["quantity_total"] += (factory_quantity or 0.0) + (work_quantity or 0.0)
+                            subtype_entry["has_numeric_quantity"] = True
+                        elif bom_entry.get("quantity_state") == "blank" or bom_entry.get("assembly_quantity_state") == "blank":
+                            subtype_entry["has_blank_quantity"] = True
+                    elif bom_entry.get(quantity_state_key) == "value" and bom_entry.get(quantity_key) is not None:
                         subtype_entry["quantity_total"] += float(bom_entry[quantity_key])
                         subtype_entry["has_numeric_quantity"] = True
-                    elif quantity_state == "blank":
+                    elif bom_entry.get(quantity_state_key) == "blank":
                         subtype_entry["has_blank_quantity"] = True
 
     aggregated_materials: list[dict[str, Any]] = []
@@ -151,6 +158,12 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
             ),
         }
     ]
+
+
+def _numeric_bom_quantity(bom_entry: dict[str, Any], quantity_key: str, quantity_state_key: str) -> float | None:
+    if bom_entry.get(quantity_state_key) != "value" or bom_entry.get(quantity_key) is None:
+        return None
+    return float(bom_entry[quantity_key])
 
 
 def build_commercial_export_sections(

@@ -377,9 +377,9 @@ def _render_detailed_material_pdf_export(
         {"project": project_data["project"], "sections": enriched_sections},
         output,
         show_prices=show_prices,
-        quantity_label="Q obra" if quantity_basis == "work" else "Q fabrica",
+        quantity_label=_detailed_material_quantity_label(quantity_basis),
     )
-    filename_suffix = "detailed-materials-q-obra" if quantity_basis == "work" else "detailed-materials-q-fabrica"
+    filename_suffix = _detailed_material_filename_suffix(quantity_basis)
     filename = _artifact_name(job_id, project_data["project"]["name"], filename_suffix, "pdf")
     return ExportArtifact(output.getvalue(), filename, "application/pdf", True)
 
@@ -397,7 +397,25 @@ def _detailed_material_quantity_basis(payload: dict | None) -> str:
         return "factory"
     if raw_value in {"work", "q_obra", "Q_obra"}:
         return "work"
+    if raw_value in {"total", "q_total", "Q_total"}:
+        return "total"
     return "factory"
+
+
+def _detailed_material_quantity_label(quantity_basis: str) -> str:
+    if quantity_basis == "work":
+        return "Q obra"
+    if quantity_basis == "total":
+        return "Q total"
+    return "Q fabrica"
+
+
+def _detailed_material_filename_suffix(quantity_basis: str) -> str:
+    if quantity_basis == "work":
+        return "detailed-materials-q-obra"
+    if quantity_basis == "total":
+        return "detailed-materials-q-total"
+    return "detailed-materials-q-fabrica"
 
 
 def _enrich_detailed_material_sections(

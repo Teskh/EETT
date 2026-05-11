@@ -236,6 +236,40 @@ def get_average_prices_for_products(settings: Settings, product_codes: Sequence[
         raise RuntimeError("Could not load ERP material pricing data") from exc
 
 
+def get_purchase_order_price_stats_for_products(settings: Settings, product_codes: Sequence[str]) -> dict[str, dict[str, float | None]]:
+    normalized_codes = []
+    seen: set[str] = set()
+    for raw_code in product_codes:
+        code = str(raw_code or "").strip().upper()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        normalized_codes.append(code)
+    if not normalized_codes:
+        return {}
+
+    try:
+        with _open_connection(settings) as connection:
+            cursor = connection.cursor()
+            lines_by_sku = _get_purchase_order_lines_for_products_batch(cursor, normalized_codes)
+            stats: dict[str, dict[str, float | None]] = {}
+            for code in normalized_codes:
+                prices = [
+                    round(float(line["unit_price"]), 2)
+                    for line in lines_by_sku.get(code, [])
+                    if line.get("unit_price") is not None
+                ]
+                stats[code] = {
+                    "last_purchase_price": prices[0] if prices else None,
+                    "min_purchase_price": min(prices) if prices else None,
+                    "max_purchase_price": max(prices) if prices else None,
+                }
+            return stats
+    except Exception as exc:
+        logger.warning("ERP purchase order price stats lookup failed: %s", exc)
+        raise RuntimeError("Could not load ERP material purchase price stats") from exc
+
+
 def get_material_procurement_details(
     settings: Settings,
     sku: str,

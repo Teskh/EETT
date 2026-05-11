@@ -11,12 +11,12 @@ export type PageDefinition = {
 };
 
 export const APP_PAGES: PageDefinition[] = [
-  { key: "catalog", label: "Editor de Base de Datos", href: "/catalog", navKey: "catalog", icon: "ph-tree-structure" },
-  { key: "material_dashboard", label: "Panel de Materiales", href: "/dashboard/materials", navKey: "dashboard", icon: "ph-chart-line" },
-  { key: "cost_model", label: "Modelo de Costos", href: "/cost-model", navKey: "cost-model", icon: "ph-calculator" },
-  { key: "history", label: "Historial de Cambios", href: "/history", navKey: "history", icon: "ph-clock-clockwise" },
-  { key: "projects", label: "Proyectos", href: "/projects", navKey: "projects", icon: "ph-folder-open" },
-  { key: "settings", label: "Configuracion", href: "/settings", navKey: "settings", icon: "ph-sliders-horizontal" },
+  { key: "catalog", label: "Editor de Base de Datos", href: "/catalog", navKey: "catalog", icon: "ph-database" },
+  { key: "material_dashboard", label: "Panel de Materiales", href: "/dashboard/materials", navKey: "dashboard", icon: "ph-chart-bar" },
+  { key: "cost_model", label: "Modelo de Costos", href: "/cost-model", navKey: "cost-model", icon: "ph-coins" },
+  { key: "history", label: "Historial de Cambios", href: "/history", navKey: "history", icon: "ph-clock-counter-clockwise" },
+  { key: "projects", label: "Proyectos", href: "/projects", navKey: "projects", icon: "ph-kanban" },
+  { key: "settings", label: "Configuracion", href: "/settings", navKey: "settings", icon: "ph-gear" },
 ];
 
 export function canReadPage(user: SessionUser, pageKey: PageKey) {

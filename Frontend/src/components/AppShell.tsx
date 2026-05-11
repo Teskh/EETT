@@ -35,17 +35,21 @@ function NavButton({
   return (
     <a
       href={href}
+      aria-current={active ? "page" : undefined}
       className={
         active
-          ? "w-full aspect-square rounded-xl bg-zinc-200 dark:bg-white/10 text-zinc-900 dark:text-white flex items-center justify-center border border-zinc-300 dark:border-white/10 transition-transform active:scale-95 group relative"
-          : "w-full aspect-square rounded-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-50 dark:hover:bg-white/5 flex items-center justify-center transition-all group relative"
+          ? "w-full aspect-square rounded-xl bg-accent-500/10 text-accent-600 dark:text-accent-400 flex items-center justify-center transition-colors group relative"
+          : "w-full aspect-square rounded-xl text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200/70 dark:hover:bg-white/5 flex items-center justify-center transition-colors group relative"
       }
       onClick={(event) => {
         event.preventDefault();
         onNavigate(href);
       }}
     >
-      <i className={`${active ? "ph-fill" : "ph-bold"} ${icon} text-xl`} />
+      {active ? (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-r-full bg-accent-500" />
+      ) : null}
+      <i className={`ph-bold ${icon} text-xl`} />
       <div className="absolute left-full ml-4 px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-200 text-xs rounded border border-zinc-200 dark:border-white/10 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
         {label}
       </div>
@@ -176,10 +180,16 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
           <button
             type="button"
             onClick={() => onNavigate("/")}
-            className="mb-8 flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 p-1.5 transition-transform active:scale-95 dark:bg-white/10"
+            className="mb-8 flex h-9 w-9 items-center justify-center transition-transform active:scale-95 hover:opacity-80"
             aria-label="Abrir lanzador"
           >
-            <img src="/patagual-logo-white.png" alt="" className="h-full w-full object-contain" />
+            <div 
+              className="h-full w-full bg-accent-500" 
+              style={{ 
+                WebkitMask: "url('/patagual-logo-white.png') no-repeat center / contain",
+                mask: "url('/patagual-logo-white.png') no-repeat center / contain" 
+              }} 
+            />
           </button>
           <div className="flex flex-col gap-4 w-full px-2">
             {APP_PAGES.filter((page) => page.key !== "settings" && canReadPage(currentUser, page.key)).map((page) => (

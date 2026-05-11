@@ -812,6 +812,7 @@ class MaterialDashboardDetailModel(BaseModel):
     stock_on_hand: float | None
     pending_purchase_quantity: float | None
     average_price: float | None
+    last_purchase_price: float | None = None
     average_lead_time_days: float | None
     median_lead_time_days: float | None
     max_lead_time_days: float | None
@@ -922,6 +923,13 @@ class MaterialDashboardEconomicMetricModel(BaseModel):
     consumption_delta_percent: float | None
     consumption_cost_delta_per_house: float | None
     average_price: float | None
+    last_purchase_price: float | None = None
+    min_purchase_price: float | None = None
+    max_purchase_price: float | None = None
+    purchase_price_delta: float | None = None
+    purchase_price_delta_percent: float | None = None
+    historical_weighted_overprice: float | None = None
+    estimated_weighted_overprice: float | None = None
 
 
 class MaterialDashboardEconomicMetricsResponse(BaseModel):

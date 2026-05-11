@@ -24,12 +24,13 @@ from app.services.erp import (
     get_material_movement_details,
     get_material_movement_history,
     get_material_procurement_details,
+    get_purchase_order_price_stats_for_products,
     get_recent_movement_materials,
 )
 from app.services.production_dashboard import get_material_dashboard_house_start_summary
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 5
+MATERIAL_DASHBOARD_CACHE_VERSION = 7
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -453,6 +454,10 @@ def get_material_dashboard_economic_metrics(
             prices_by_sku = get_average_prices_for_products(settings, sku_codes)
         except RuntimeError:
             prices_by_sku = {sku: None for sku in sku_codes}
+        try:
+            purchase_price_stats_by_sku = get_purchase_order_price_stats_for_products(settings, sku_codes)
+        except RuntimeError:
+            purchase_price_stats_by_sku = {sku: {} for sku in sku_codes}
         total_house_starts = int(house_start_summary.get("total_house_starts") or 0)
         metrics: list[dict] = []
 
@@ -462,6 +467,30 @@ def get_material_dashboard_economic_metrics(
             material_per_house = round(movement_quantity / total_house_starts, 4) if total_house_starts > 0 else None
             predicted_quantity_per_house = normalized_project_quantities.get(sku)
             average_price = prices_by_sku.get(sku)
+            purchase_price_stats = purchase_price_stats_by_sku.get(sku) or {}
+            last_purchase_price = _coerce_float(purchase_price_stats.get("last_purchase_price"))
+            min_purchase_price = _coerce_float(purchase_price_stats.get("min_purchase_price"))
+            max_purchase_price = _coerce_float(purchase_price_stats.get("max_purchase_price"))
+            purchase_price_delta = (
+                round(max_purchase_price - min_purchase_price, 4)
+                if min_purchase_price is not None and max_purchase_price is not None
+                else None
+            )
+            purchase_price_delta_percent = (
+                round((purchase_price_delta / min_purchase_price) * 100, 4)
+                if purchase_price_delta is not None and min_purchase_price not in (None, 0)
+                else None
+            )
+            historical_weighted_overprice = (
+                round(purchase_price_delta * material_per_house, 4)
+                if purchase_price_delta is not None and material_per_house is not None
+                else None
+            )
+            estimated_weighted_overprice = (
+                round(purchase_price_delta * predicted_quantity_per_house, 4)
+                if purchase_price_delta is not None and predicted_quantity_per_house is not None
+                else None
+            )
             consumption_delta_percent = (
                 round(((material_per_house - predicted_quantity_per_house) / predicted_quantity_per_house) * 100, 4)
                 if material_per_house is not None and predicted_quantity_per_house not in (None, 0)
@@ -480,6 +509,13 @@ def get_material_dashboard_economic_metrics(
                     "consumption_delta_percent": consumption_delta_percent,
                     "consumption_cost_delta_per_house": consumption_cost_delta_per_house,
                     "average_price": average_price,
+                    "last_purchase_price": last_purchase_price,
+                    "min_purchase_price": min_purchase_price,
+                    "max_purchase_price": max_purchase_price,
+                    "purchase_price_delta": purchase_price_delta,
+                    "purchase_price_delta_percent": purchase_price_delta_percent,
+                    "historical_weighted_overprice": historical_weighted_overprice,
+                    "estimated_weighted_overprice": estimated_weighted_overprice,
                 }
             )
 
@@ -584,6 +620,14 @@ def _build_material_dashboard_detail(
         "stock_on_hand": stock_on_hand,
         "pending_purchase_quantity": _coerce_float(material.get("pending_purchase_quantity")),
         "average_price": _coerce_float(material.get("average_price")),
+        "last_purchase_price": next(
+            (
+                _coerce_float(order.get("unit_price"))
+                for order in material.get("purchase_orders") or []
+                if _coerce_float(order.get("unit_price")) is not None
+            ),
+            None,
+        ),
         "average_lead_time_days": _coerce_float(material.get("average_lead_time_days")),
         "median_lead_time_days": _coerce_float(material.get("median_lead_time_days")),
         "max_lead_time_days": _coerce_float(material.get("max_lead_time_days")),

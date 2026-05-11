@@ -742,7 +742,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     if (projectId !== null && allProjects.some((project) => project.id === projectId)) {
       return projectId;
     }
-    return allProjects[0]?.id ?? null;
+    return null;
   }, [allProjects, projectId]);
 
   const economicMetricsKey = useMemo(
@@ -882,7 +882,9 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     const selectedProject = allProjects.find((project) => project.id === selectedProjectId);
     if (selectedProject?.name) {
       onTitleChange?.(selectedProject.name);
+      return;
     }
+    onTitleChange?.("Modelo de Costos");
   }, [allProjects, onTitleChange, selectedProjectId, view?.project.name]);
 
   const subtypeColumns = useMemo(() => {
@@ -1112,6 +1114,29 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
   }
 
+  const projectSelect = (
+    <div className="w-full max-w-[320px] shrink-0">
+      <label className="block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2">
+        Project
+      </label>
+      <select
+        value={selectedProjectId ?? ""}
+        onChange={(event) => {
+          const nextProjectId = event.target.value ? Number(event.target.value) : null;
+          onNavigate(nextProjectId ? `/cost-model?project_id=${nextProjectId}` : "/cost-model");
+        }}
+        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500"
+      >
+        <option value="">Select a project...</option>
+        {allProjects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
   if (projectsLoading || loading) {
     return (
       <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950">
@@ -1134,8 +1159,17 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   }
   if (!view) {
     return (
-      <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950 text-sm text-zinc-600 dark:text-zinc-400">
-        Cost model not available.
+      <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950">
+        <div className="flex w-full max-w-lg flex-col items-center gap-5 px-6 text-center">
+          <div>
+            <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Modelo de Costos</p>
+            <h2 className="text-xl font-medium text-zinc-900 dark:text-white">Selecciona un proyecto</h2>
+            <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+              El modelo de costos se cargará cuando elijas un proyecto.
+            </p>
+          </div>
+          {projectSelect}
+        </div>
       </section>
     );
   }
@@ -1151,25 +1185,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
             {view.rows.length} materials · {view.project.instance_count} instances · mode: {view.material_mode}
           </p>
         </div>
-        <div className="w-full max-w-[320px] shrink-0">
-          <label className="block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2">
-            Project
-          </label>
-          <select
-            value={selectedProjectId ?? ""}
-            onChange={(event) => {
-              const nextProjectId = event.target.value ? Number(event.target.value) : null;
-              onNavigate(nextProjectId ? `/cost-model?project_id=${nextProjectId}` : "/cost-model");
-            }}
-            className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500"
-          >
-            {allProjects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {projectSelect}
       </div>
 
       <div className="flex flex-col gap-3">

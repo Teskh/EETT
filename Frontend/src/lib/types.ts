@@ -63,6 +63,7 @@ export type MaterialDashboardDetail = {
   stock_on_hand: number | null;
   pending_purchase_quantity: number | null;
   average_price: number | null;
+  last_purchase_price: number | null;
   average_lead_time_days: number | null;
   median_lead_time_days: number | null;
   max_lead_time_days: number | null;
@@ -153,6 +154,13 @@ export type MaterialDashboardEconomicMetric = {
   consumption_delta_percent: number | null;
   consumption_cost_delta_per_house: number | null;
   average_price: number | null;
+  last_purchase_price: number | null;
+  min_purchase_price: number | null;
+  max_purchase_price: number | null;
+  purchase_price_delta: number | null;
+  purchase_price_delta_percent: number | null;
+  historical_weighted_overprice: number | null;
+  estimated_weighted_overprice: number | null;
 };
 
 export type MaterialDashboardEconomicMetricsResponse = {

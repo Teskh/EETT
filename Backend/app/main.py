@@ -102,7 +102,7 @@ from app.api_models import (
 )
 from app.config import Settings
 from app.database import create_engine_for_url, schema_is_ready, session_scope
-from app.models import Project, ProjectComment, ProjectExportJob, ProjectMembership, User, UserRole
+from app.models import Project, ProjectComment, ProjectExportJob
 from app.seed import seed_demo_data_if_empty
 from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
@@ -2067,19 +2067,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        del current_user
-        role_codes = {role.code.lower() for role in list_roles(session)}
-        if project_id is not None:
-            users = session.scalars(
-                select(User)
-                .join(ProjectMembership, ProjectMembership.user_id == User.id)
-                .where(ProjectMembership.project_id == project_id, User.is_active.is_(True))
-                .options(selectinload(User.roles).selectinload(UserRole.role))
-                .order_by(User.display_name, User.username)
-            ).all()
-        else:
-            users = [user for user in list_users(session) if user.is_active]
-        users = [user for user in users if user.username.lower() not in role_codes]
+        del current_user, project_id
+        users = [user for user in list_users(session) if user.is_active]
         return {"users": [serialize_user(user) for user in users]}
 
     @app.get("/api/v1/comments/{comment_id}/context", response_model=CommentContextResponse)
