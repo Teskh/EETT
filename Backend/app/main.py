@@ -79,6 +79,7 @@ from app.api_models import (
     MutationResultModel,
     NotificationModel,
     ProjectDetailResponse,
+    ProjectCopyRequest,
     ProjectCreateRequest,
     ProjectStatusUpdateRequest,
     ProjectInstanceMutationResultModel,
@@ -108,6 +109,7 @@ from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
     authenticate_user,
+    get_user_by_username,
     get_current_user,
     resolve_current_user,
     require_project_create,
@@ -117,11 +119,13 @@ from app.services.auth import (
     require_erp_admin,
     can_read_page,
     require_project_edit,
+    require_project_delete,
     require_project_status_change,
     require_project_view,
     require_page_edit,
     require_page_read,
     require_user_admin,
+    role_codes,
     serialize_page_catalog,
     serialize_session_user,
 )
@@ -193,11 +197,13 @@ from app.services.projects import (
     apply_instance_value_to_catalog_field,
     add_project_instance_manual_material,
     create_project,
+    copy_project,
     create_project_instance,
     create_project_instance_occurrence,
     create_project_subtype,
     delete_project_instance_occurrence,
     delete_project_instance_material,
+    delete_project,
     delete_project_subtype,
     delete_project_instance,
     get_project_instance_data,
@@ -702,11 +708,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+    async def project_detail(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
         if frontend_index.exists():
             return serve_frontend_app()
         if current_user is None:
             raise HTTPException(status_code=401, detail="Authentication required")
+        if request.session.get("guest"):
+            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -831,7 +839,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_projects_page_data(session, user=current_user)
 
     @app.get("/api/projects/{project_id}")
-    async def project_detail_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def project_detail_api(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        if request.session.get("guest"):
+            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
         data = get_project_view_data(session, project_id, user=current_user)
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -848,7 +858,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid username or password")
         request.session.clear()
         request.session["username"] = user.username
+        request.session["guest"] = False
         return serialize_session_user(user)
+
+    @app.post("/api/v1/guest-login", response_model=SessionUserResponse)
+    async def guest_login_api(
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        user = get_user_by_username(session, "viewer")
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=503, detail="Guest access is not configured")
+        codes = role_codes(user)
+        if "viewer" not in codes or any(code in codes for code in {"sysadmin", "admin", "editor", "ot"}):
+            raise HTTPException(status_code=503, detail="Guest access is not configured")
+        request.session.clear()
+        request.session["username"] = user.username
+        request.session["guest"] = True
+        return serialize_session_user(user, is_guest=True)
 
     @app.post("/api/v1/logout", status_code=204)
     async def logout_api(request: Request) -> Response:
@@ -856,8 +883,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return Response(status_code=204)
 
     @app.get("/api/v1/session", response_model=SessionUserResponse)
-    async def session_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
-        return serialize_session_user(current_user)
+    async def session_api(request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        del session
+        return serialize_session_user(current_user, is_guest=bool(request.session.get("guest")))
 
     @app.get("/api/v1/users", response_model=UserDirectoryResponse)
     async def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -1247,6 +1275,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {"ok": True, "project_id": project.id}
 
+    @app.post("/api/v1/projects/{project_id}/copy", response_model=MutationResultModel)
+    async def copy_project_v1(
+        project_id: int,
+        payload: ProjectCopyRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        source_project = get_project_with_details(session, project_id)
+        if source_project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, source_project)
+        require_project_create(current_user)
+        try:
+            copied_project = copy_project(
+                session,
+                source_project=source_project,
+                name=payload.name,
+                status=payload.status,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"ok": True, "project_id": copied_project.id}
+
+    @app.delete("/api/v1/projects/{project_id}", response_model=MutationResultModel)
+    async def delete_project_v1(
+        project_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_delete(current_user, project)
+        delete_project(session, project=project)
+        return {"ok": True, "deleted_id": project_id}
+
     @app.put("/api/v1/projects/{project_id}/status", response_model=MutationResultModel)
     async def update_project_status_v1(
         project_id: int,
@@ -1272,7 +1339,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id}
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
-    async def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def project_detail_v1(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        if request.session.get("guest"):
+            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
         require_page_read(current_user, "projects")
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1747,6 +1816,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         from app.services.cost_model import get_cost_model_view
 
+        if request.session.get("guest"):
+            raise HTTPException(status_code=403, detail="Guest access cannot open the cost model")
         require_page_read(current_user, "cost_model")
         view = get_cost_model_view(
             session,
@@ -2091,9 +2162,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_activity(session, project_id)
 
     @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
-    async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def activity_history_api(request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
-        return get_activity_history(session, current_user)
+        return get_activity_history(session, current_user, execution_only=bool(request.session.get("guest")))
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
     async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

@@ -13,6 +13,7 @@ import type {
   CostModelAdjustmentDeleteRequest,
   CostModelAdjustmentUpsertRequest,
   CreateProjectCommentRequest,
+  CopyProjectRequest,
   CostModelView,
   CreateProjectSubtypeRequest,
   CreateUserRequest,
@@ -192,6 +193,11 @@ export const api = {
     return request<SessionUser>("/api/v1/login", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+  guestLogin() {
+    return request<SessionUser>("/api/v1/guest-login", {
+      method: "POST",
     });
   },
   logout() {
@@ -512,6 +518,19 @@ export const api = {
     return request<MutationResult>("/api/v1/projects", {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  copyProject(projectId: number, payload: CopyProjectRequest, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/copy`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  deleteProject(projectId: number, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}`, {
+      method: "DELETE",
       headers: mutationHeaders(mutationBatchId),
     });
   },

@@ -35,6 +35,7 @@ class SessionUserResponse(BaseModel):
     roles: list[str]
     permissions: PermissionSet
     page_access: dict[str, PageAccessModel]
+    is_guest: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -234,6 +235,11 @@ class CatalogMaterialSearchResponse(BaseModel):
 class ProjectCreateRequest(BaseModel):
     name: str
     status: str = "template"
+
+
+class ProjectCopyRequest(BaseModel):
+    name: str | None = None
+    status: str | None = None
 
 
 class ProjectStatusUpdateRequest(BaseModel):

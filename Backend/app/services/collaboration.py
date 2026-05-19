@@ -206,7 +206,7 @@ def get_project_activity(session: Session, project_id: int) -> list[dict]:
     return _merge_activity_groups([_serialize_activity_group(group) for group in groups])
 
 
-def get_activity_history(session: Session, user: User) -> list[dict]:
+def get_activity_history(session: Session, user: User, *, execution_only: bool = False) -> list[dict]:
     groups = session.scalars(
         select(ProjectActivityGroup)
         .options(
@@ -221,7 +221,9 @@ def get_activity_history(session: Session, user: User) -> list[dict]:
     return _merge_activity_groups([
         _serialize_activity_group(group)
         for group in groups
-        if group.project is not None and can_view_project(user, group.project)
+        if group.project is not None
+        and can_view_project(user, group.project)
+        and (not execution_only or group.project.status == ProjectStatus.EXECUTION)
     ])
 
 

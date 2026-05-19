@@ -24,6 +24,7 @@ export type SessionUser = {
   roles: string[];
   permissions: PermissionSet;
   page_access: PageAccessMap;
+  is_guest?: boolean;
 };
 
 export type MaterialDashboardPurchaseOrder = {
@@ -972,6 +973,11 @@ export type UpdateComponentRequest = {
 export type CreateProjectRequest = {
   name: string;
   status: string;
+};
+
+export type CopyProjectRequest = {
+  name?: string | null;
+  status?: string | null;
 };
 
 export type UpdateProjectStatusRequest = {

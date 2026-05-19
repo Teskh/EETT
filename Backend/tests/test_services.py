@@ -916,6 +916,26 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIn("Applicable materials", project_html)
 
     def test_session_and_project_permissions_are_typed_and_filtered(self) -> None:
+        guest_login = self.client.post("/api/v1/guest-login")
+        self.assertEqual(guest_login.status_code, 200)
+        self.assertEqual(guest_login.json()["username"], "viewer")
+        self.assertIn("viewer", guest_login.json()["roles"])
+        self.assertTrue(guest_login.json()["is_guest"])
+        self.assertFalse(guest_login.json()["page_access"]["cost_model"]["can_read"])
+
+        guest_session = self.client.get("/api/v1/session")
+        self.assertEqual(guest_session.status_code, 200)
+        self.assertEqual(guest_session.json()["username"], "viewer")
+        self.assertTrue(guest_session.json()["is_guest"])
+
+        guest_detail = self.client.get("/api/v1/projects/2")
+        self.assertEqual(guest_detail.status_code, 403)
+        guest_cost_model = self.client.get("/api/v1/projects/2/cost-model")
+        self.assertEqual(guest_cost_model.status_code, 403)
+        guest_history = self.client.get("/api/v1/activity")
+        self.assertEqual(guest_history.status_code, 200)
+        self.assertTrue(all(group["project"]["status"] == "execution" for group in guest_history.json()))
+
         session_response = self.client.get("/api/v1/session", headers={"X-Spec-Sheets-User": "viewer"})
         self.assertEqual(session_response.status_code, 200)
         session_payload = session_response.json()

@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from html import escape
+import math
 from pathlib import Path
 import re
 from typing import Any
+
+
+_STATIC_APP_DIR = Path(__file__).resolve().parents[1] / "static" / "app"
+_LOGO_WHITE_PATH = _STATIC_APP_DIR / "patagual-logo-white.png"
+_LOGO_GREEN_PATH = _STATIC_APP_DIR / "logo_green.png"
+_BRAND_RGB = (57 / 255, 71 / 255, 65 / 255)
+_PAPER_RGB = (0.985, 0.982, 0.972)
 
 
 def build_commercial_pdf(project_data: dict[str, Any], output_path: Any) -> None:
@@ -506,16 +514,11 @@ def _build_styles():
 
 
 def _build_cover_story(*, project_name: str, styles, title: str) -> list[Any]:
-    from reportlab.lib.units import inch
-    from reportlab.platypus import PageBreak, Paragraph, Spacer
+    from reportlab.platypus import NextPageTemplate, PageBreak, Spacer
 
     return [
-        Spacer(1, 2 * inch),
-        Paragraph(escape(title), styles["Heading1"]),
-        Spacer(1, 0.1 * inch),
-        Paragraph(escape(project_name), styles["ProjectName"]),
-        Spacer(1, 0.4 * inch),
-        Paragraph(datetime.now().strftime("%Y-%m-%d"), styles["Normal"]),
+        NextPageTemplate("body"),
+        Spacer(1, 0.01),
         PageBreak(),
     ]
 
@@ -632,8 +635,12 @@ def _instance_body_flowables(instance: dict[str, Any], styles) -> list[Any]:
         flowables.append(Paragraph(_markup_text(installation), styles["Normal"]))
         flowables.append(Spacer(1, 0.02 * inch))
 
+    usage_rows = instance.get("usage_rows", [])
     attributes = instance.get("attributes", [])
-    if attributes:
+    if usage_rows:
+        flowables.append(_usage_rows_table(usage_rows, styles))
+        flowables.append(Spacer(1, 0.05 * inch))
+    elif attributes:
         flowables.append(
             _instance_attribute_flowable(
                 attributes,
@@ -677,6 +684,59 @@ def _linked_accessory_flowables(accessories: list[dict[str, Any]], styles) -> li
         flowables.append(Spacer(1, 0.03 * inch))
 
     return flowables
+
+
+def _usage_rows_table(rows: list[dict[str, Any]], styles) -> Any:
+    from reportlab.lib import colors
+    from reportlab.platypus import Paragraph, Table, TableStyle
+
+    attribute_names: list[str] = []
+    for row in rows:
+        for attribute in row.get("attributes", []):
+            name = str(attribute.get("name") or "").strip()
+            if name and name not in attribute_names:
+                attribute_names.append(name)
+
+    headers = [Paragraph("Aplicación", styles["TableHeader"])]
+    headers.extend(Paragraph(escape(name), styles["TableHeader"]) for name in attribute_names)
+
+    data = [headers]
+    for row in rows:
+        values_by_name = {
+            str(attribute.get("name") or "").strip(): "" if attribute.get("value") is None else str(attribute.get("value"))
+            for attribute in row.get("attributes", [])
+            if str(attribute.get("name") or "").strip()
+        }
+        data.append(
+            [
+                Paragraph(escape(str(row.get("application") or "")), styles["Normal"]),
+                *[Paragraph(escape(values_by_name.get(name, "")), styles["Normal"]) for name in attribute_names],
+            ]
+        )
+
+    if attribute_names:
+        application_width = 140
+        attribute_width = (451 - application_width) / len(attribute_names)
+        col_widths = [application_width, *[attribute_width for _ in attribute_names]]
+    else:
+        col_widths = [451]
+
+    table = Table(data, colWidths=col_widths, hAlign="LEFT", repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f8fafc")),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    return table
 
 
 def _attribute_table(attributes: list[dict[str, Any]], styles, *, include_group: bool) -> Any:
@@ -975,6 +1035,73 @@ def _bookmark_name(prefix: str, text: str) -> str:
     return f"{prefix}-{suffix}"
 
 
+def _draw_technical_cover(canvas, doc, *, project_name: str, title: str, export_date: str) -> None:
+    from reportlab.lib.colors import Color
+    from reportlab.lib.utils import ImageReader
+
+    page_width, page_height = doc.pagesize
+
+    canvas.setFillColor(Color(*_PAPER_RGB))
+    canvas.rect(0, 0, page_width, page_height, stroke=0, fill=1)
+
+    diag = page_width + page_height
+    for i in range(0, int(diag), 9):
+        t = i / diag
+        alpha = 0.02 + 0.055 * (0.5 + 0.5 * math.sin(t * math.pi * 6))
+        canvas.setStrokeColorRGB(*_BRAND_RGB, alpha=alpha)
+        canvas.setLineWidth(0.22)
+        canvas.line(i, 0, i - page_height, page_height)
+
+    logo_path = _LOGO_GREEN_PATH if _LOGO_GREEN_PATH.is_file() else _LOGO_WHITE_PATH
+    if logo_path.is_file():
+        logo = ImageReader(str(logo_path))
+        image_width, image_height = logo.getSize()
+        logo_height = 200
+        logo_width = logo_height * (image_width / image_height)
+        canvas.drawImage(
+            logo,
+            (page_width - logo_width) / 2,
+            page_height * 0.62 - logo_height / 2,
+            width=logo_width,
+            height=logo_height,
+            mask="auto",
+        )
+
+    base_y = page_height * 0.22
+    canvas.setFillColorRGB(*_BRAND_RGB)
+    canvas.setFont("Helvetica", 8)
+    canvas.drawCentredString(page_width / 2, base_y + 80, "E S P E C I F I C A C I Ó N    T É C N I C A")
+
+    canvas.setFillColorRGB(*_BRAND_RGB)
+    canvas.setFont("Helvetica-Bold", 30)
+    canvas.drawCentredString(page_width / 2, base_y + 40, project_name)
+
+    date_y = base_y + 10
+    half = 70
+    canvas.setStrokeColorRGB(*_BRAND_RGB, alpha=0.5)
+    canvas.setLineWidth(0.4)
+    canvas.line(page_width / 2 - half - 60, date_y + 3, page_width / 2 - half, date_y + 3)
+    canvas.line(page_width / 2 + half, date_y + 3, page_width / 2 + half + 60, date_y + 3)
+    canvas.setFillColorRGB(*_BRAND_RGB, alpha=0.75)
+    canvas.setFont("Helvetica", 11)
+    canvas.drawCentredString(page_width / 2, date_y, export_date)
+
+    canvas.setFillColorRGB(*_BRAND_RGB, alpha=0.5)
+    canvas.setFont("Helvetica", 7)
+    canvas.drawString(36, 30, "PH")
+    canvas.drawRightString(page_width - 36, 30, "DOCUMENTO  |  01")
+
+
+def _draw_page_logo(canvas, doc, *, logo_path: Path, logo_size: float = 24) -> None:
+    if not logo_path.is_file():
+        return
+
+    page_width, page_height = doc.pagesize
+    x = page_width - doc.rightMargin - logo_size + 16
+    y = page_height - 36
+    canvas.drawImage(str(logo_path), x, y, width=logo_size, height=logo_size, mask="auto")
+
+
 def _create_doc_template(output_path: Any, *, title: str, project_name: str):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib import colors
@@ -982,9 +1109,15 @@ def _create_doc_template(output_path: Any, *, title: str, project_name: str):
 
     export_date = datetime.now().strftime("%Y/%m/%d")
 
+    def draw_cover_page(canvas, doc) -> None:
+        canvas.saveState()
+        _draw_technical_cover(canvas, doc, project_name=project_name, title=title, export_date=export_date)
+        canvas.restoreState()
+
     def draw_page_number(canvas, doc) -> None:
         page_width, page_height = doc.pagesize
         canvas.saveState()
+        _draw_page_logo(canvas, doc, logo_path=_LOGO_GREEN_PATH, logo_size=24)
         if canvas.getPageNumber() > 1:
             canvas.setFont("Helvetica-Oblique", 7)
             canvas.setFillColor(colors.HexColor("#6b7280"))
@@ -998,7 +1131,12 @@ def _create_doc_template(output_path: Any, *, title: str, project_name: str):
         def __init__(self, filename: Any, **kwargs: Any) -> None:
             super().__init__(filename, **kwargs)
             frame = Frame(self.leftMargin, self.bottomMargin, self.width, self.height, id="body")
-            self.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=draw_page_number)])
+            self.addPageTemplates(
+                [
+                    PageTemplate(id="cover", frames=[frame], onPage=draw_cover_page),
+                    PageTemplate(id="body", frames=[frame], onPage=draw_page_number),
+                ]
+            )
 
         def afterFlowable(self, flowable: Any) -> None:
             level = getattr(flowable, "_toc_level", None)

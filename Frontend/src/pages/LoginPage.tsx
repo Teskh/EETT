@@ -2,13 +2,14 @@ import { FormEvent, useState } from "react";
 
 type LoginPageProps = {
   onLogin: (username: string, password: string) => Promise<void>;
+  onGuestLogin: () => Promise<void>;
   loading: boolean;
   error: string | null;
 };
 
-export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
-  const [username, setUsername] = useState("sysadmin");
-  const [password, setPassword] = useState("adminpass");
+export function LoginPage({ onLogin, onGuestLogin, loading, error }: LoginPageProps) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -22,10 +23,7 @@ export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
         <div className="space-y-2">
           <p className="text-[11px] font-mono uppercase tracking-[0.25em] text-zinc-500">Acceso Interno</p>
           <h1 className="text-3xl font-bold tracking-tight">Ingreso a EETT</h1>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            La autenticación interna mínima está habilitada. La cuenta inicial cargada es <span className="font-mono">sysadmin</span> con contraseña{" "}
-            <span className="font-mono">adminpass</span>.
-          </p>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">Ingresa con una cuenta interna o usa el acceso invitado para revisar proyectos en ejecución.</p>
         </div>
 
         <div className="space-y-3">
@@ -56,6 +54,14 @@ export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
           className="px-4 py-3 bg-accent-500 hover:bg-accent-400 disabled:opacity-60 text-zinc-950 border border-transparent rounded-xl text-sm font-bold transition-all"
         >
           {loading ? "Iniciando sesión..." : "Iniciar sesión"}
+        </button>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => void onGuestLogin()}
+          className="px-4 py-3 border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 disabled:opacity-60 text-zinc-800 dark:text-zinc-100 rounded-xl text-sm font-bold transition-all"
+        >
+          Entrar como invitado
         </button>
       </form>
     </div>

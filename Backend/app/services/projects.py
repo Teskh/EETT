@@ -20,6 +20,7 @@ from app.models import (
     ProjectAuxiliaryMaterialSelection,
     ProjectBomEntry,
     ProjectComment,
+    ProjectCostModelAdjustment,
     ProjectInstance,
     ProjectInstanceAttributeGroup,
     ProjectInstanceAttributeValue,
@@ -29,6 +30,8 @@ from app.models import (
     ProjectInstanceOccurrenceAttributeValue,
     ProjectInstanceOccurrenceTarget,
     ProjectInstanceSyncState,
+    ProjectMaterialCalculationCell,
+    ProjectMaterialCalculationSheet,
     ProjectMaterialMode,
     ProjectMembership,
     CommentNotification,
@@ -403,6 +406,288 @@ def create_project(
     session.commit()
     session.refresh(project)
     return project
+
+
+def _project_name_exists(session: Session, name: str) -> bool:
+    return session.scalar(select(Project.id).where(Project.name == name).limit(1)) is not None
+
+
+def _default_project_copy_name(session: Session, source_name: str) -> str:
+    base_name = f"{source_name} - copy"
+    if not _project_name_exists(session, base_name):
+        return base_name
+    suffix = 2
+    while True:
+        candidate = f"{base_name} {suffix}"
+        if not _project_name_exists(session, candidate):
+            return candidate
+        suffix += 1
+
+
+def copy_project(
+    session: Session,
+    *,
+    source_project: Project,
+    name: str | None = None,
+    status: str | None = None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> Project:
+    clean_name = (name or "").strip()
+    if clean_name:
+        if _project_name_exists(session, clean_name):
+            raise ValueError("A project with that name already exists.")
+        new_name = clean_name
+    else:
+        new_name = _default_project_copy_name(session, source_project.name)
+
+    next_status = ProjectStatus(status) if status else source_project.status
+    copied_project = Project(name=new_name, status=next_status)
+    session.add(copied_project)
+    session.flush()
+
+    if source_project.material_mode is not None:
+        session.add(
+            ProjectMaterialMode(
+                project=copied_project,
+                mode=source_project.material_mode.mode,
+                changed_by=actor_user,
+            )
+        )
+    else:
+        session.add(ProjectMaterialMode(project=copied_project, mode=MaterialMode.GENERAL, changed_by=actor_user))
+
+    if actor_user is not None:
+        session.add(ProjectMembership(project=copied_project, user=actor_user, role=MembershipRole.ADMIN))
+
+    subtype_map: dict[int, ProjectSubtype] = {}
+
+    def copy_subtype(source_subtype: ProjectSubtype, parent: ProjectSubtype | None = None) -> None:
+        copied_subtype = ProjectSubtype(project=copied_project, parent=parent, name=source_subtype.name)
+        session.add(copied_subtype)
+        session.flush()
+        subtype_map[source_subtype.id] = copied_subtype
+        for child in sorted(source_subtype.children, key=lambda item: item.name):
+            copy_subtype(child, copied_subtype)
+
+    for root_subtype in sorted((row for row in source_project.subtypes if row.parent_id is None), key=lambda item: item.name):
+        copy_subtype(root_subtype)
+
+    instance_map: dict[int, ProjectInstance] = {}
+    for source_instance in source_project.instances:
+        copied_instance = ProjectInstance(
+            project=copied_project,
+            component_id=source_instance.component_id,
+            category_id=source_instance.category_id,
+            instance_type=source_instance.instance_type,
+            name=source_instance.name,
+            short_name=source_instance.short_name,
+            description=source_instance.description,
+            short_description=source_instance.short_description,
+            installation=source_instance.installation,
+            image_uri=source_instance.image_uri,
+            unit_amount=source_instance.unit_amount,
+        )
+        session.add(copied_instance)
+        session.flush()
+        instance_map[source_instance.id] = copied_instance
+
+        for media in source_instance.media:
+            copied_instance.media.append(
+                ProjectInstanceMedia(
+                    media_asset_id=media.media_asset_id,
+                    kind=media.kind,
+                    uri=media.uri,
+                    caption=media.caption,
+                    sort_order=media.sort_order,
+                )
+            )
+
+        for group in source_instance.attribute_groups:
+            copied_group = ProjectInstanceAttributeGroup(
+                instance=copied_instance,
+                name=group.name,
+                application_label=group.application_label,
+                sort_order=group.sort_order,
+            )
+            copied_instance.attribute_groups.append(copied_group)
+            for value in group.attribute_values:
+                copied_group.attribute_values.append(
+                    ProjectInstanceAttributeValue(
+                        attribute_name=value.attribute_name,
+                        value=value.value,
+                        sort_order=value.sort_order,
+                    )
+                )
+
+        if source_instance.sync_state is not None:
+            copied_instance.sync_state = ProjectInstanceSyncState(
+                sync_status=source_instance.sync_state.sync_status,
+                last_synced_at=source_instance.sync_state.last_synced_at,
+                source_component_updated_at=source_instance.sync_state.source_component_updated_at,
+                sync_notes=source_instance.sync_state.sync_notes,
+                source_snapshot=source_instance.sync_state.source_snapshot,
+            )
+
+    session.flush()
+
+    for source_instance in source_project.instances:
+        copied_parent = instance_map[source_instance.id]
+        for link in source_instance.parent_links:
+            copied_child = instance_map.get(link.child_instance_id)
+            if copied_child is None:
+                continue
+            session.add(
+                ProjectInstanceLink(
+                    parent_instance=copied_parent,
+                    child_instance=copied_child,
+                    relationship_type=link.relationship_type,
+                    application_label=link.application_label,
+                    sort_order=link.sort_order,
+                )
+            )
+
+        for occurrence in source_instance.outgoing_occurrences:
+            copied_occurrence = ProjectInstanceOccurrence(
+                source_instance=copied_parent,
+                relationship_type=occurrence.relationship_type,
+                context_label=occurrence.context_label,
+                context_notes=occurrence.context_notes,
+                sort_order=occurrence.sort_order,
+            )
+            session.add(copied_occurrence)
+            session.flush()
+            for target in occurrence.targets:
+                copied_target = instance_map.get(target.target_instance_id)
+                if copied_target is None:
+                    continue
+                copied_occurrence.targets.append(
+                    ProjectInstanceOccurrenceTarget(
+                        target_instance=copied_target,
+                        role_label=target.role_label,
+                        sort_order=target.sort_order,
+                    )
+                )
+            for value in occurrence.attribute_values:
+                copied_occurrence.attribute_values.append(
+                    ProjectInstanceOccurrenceAttributeValue(
+                        attribute_name=value.attribute_name,
+                        value=value.value,
+                        sort_order=value.sort_order,
+                    )
+                )
+
+    for entry in source_project.bom_entries:
+        copied_instance = instance_map.get(entry.instance_id)
+        if copied_instance is None:
+            continue
+        session.add(
+            ProjectBomEntry(
+                project=copied_project,
+                instance=copied_instance,
+                material_rule_id=entry.material_rule_id,
+                material_id=entry.material_id,
+                subtype=subtype_map.get(entry.subtype_id) if entry.subtype_id is not None else None,
+                quantity=entry.quantity,
+                assembly_quantity=entry.assembly_quantity,
+                unit=entry.unit,
+                calculation_mode=entry.calculation_mode,
+                calculation_formula=entry.calculation_formula,
+            )
+        )
+
+    for selection in source_project.auxiliary_materials:
+        session.add(
+            ProjectAuxiliaryMaterialSelection(
+                project=copied_project,
+                auxiliary_material_id=selection.auxiliary_material_id,
+                subtype=subtype_map.get(selection.subtype_id) if selection.subtype_id is not None else None,
+            )
+        )
+
+    for setting in source_project.export_settings:
+        copied_instance = instance_map.get(setting.instance_id)
+        if copied_instance is None:
+            continue
+        session.add(
+            InstanceExportSetting(
+                project=copied_project,
+                instance=copied_instance,
+                target=setting.target,
+                settings=setting.settings,
+            )
+        )
+
+    for sheet in source_project.calculation_sheets:
+        copied_instance = instance_map.get(sheet.instance_id)
+        if copied_instance is None:
+            continue
+        copied_sheet = ProjectMaterialCalculationSheet(
+            project=copied_project,
+            instance=copied_instance,
+            material_id=sheet.material_id,
+        )
+        session.add(copied_sheet)
+        for cell in sheet.cells:
+            copied_sheet.cells.append(
+                ProjectMaterialCalculationCell(
+                    row_index=cell.row_index,
+                    column_index=cell.column_index,
+                    raw_input=cell.raw_input,
+                )
+            )
+
+    for adjustment in source_project.cost_model_adjustments:
+        session.add(
+            ProjectCostModelAdjustment(
+                project=copied_project,
+                material_id=adjustment.material_id,
+                subtype=subtype_map.get(adjustment.subtype_id) if adjustment.subtype_id is not None else None,
+                adjusted_quantity=adjustment.adjusted_quantity,
+                source_kind=adjustment.source_kind,
+                source_note=adjustment.source_note,
+                source_house_type_id=adjustment.source_house_type_id,
+                source_range_start=adjustment.source_range_start,
+                source_range_end=adjustment.source_range_end,
+                source_sample_houses=adjustment.source_sample_houses,
+                source_total_consumption=adjustment.source_total_consumption,
+                created_by=actor_user,
+            )
+        )
+
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=copied_project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Project copied",
+                scope_type="project",
+                scope_id=copied_project.id,
+            ),
+            entity_type="Project",
+            entity_id=copied_project.id,
+            action="created",
+            title="Project copied",
+            scope_type="project",
+            scope_id=copied_project.id,
+            details=build_activity_details(
+                headline="Project copied",
+                subject_name=copied_project.name,
+                notes=[f"Source project: {source_project.name}"],
+                kind="project",
+            ),
+        )
+
+    session.commit()
+    session.refresh(copied_project)
+    return copied_project
+
+
+def delete_project(session: Session, *, project: Project) -> None:
+    session.delete(project)
+    session.commit()
 
 
 def update_project_status(

@@ -16,6 +16,7 @@ __pycache__/
 *.png
 !Frontend/public/patagual-logo-white.png
 !Backend/app/static/app/patagual-logo-white.png
+!Backend/app/static/app/logo_green.png
 *.jpg
 Frontend/node_modules/
 dist/

@@ -198,6 +198,7 @@ def build_commercial_export_sections(
                     "description": _commercial_description(serialized_instance, settings),
                     "installation": serialized_instance.get("installation") if settings["installation"] else None,
                     "attributes": _commercial_attributes(serialized_instance, settings),
+                    "usage_rows": _accessory_usage_rows(orm_instance),
                     "linked_accessories": _commercial_linked_accessories(orm_instance, settings),
                     "image_path": _resolve_media_path(
                         serialized_instance.get("media", []),
@@ -252,6 +253,7 @@ def build_full_technical_export_sections(
                     "description": serialized_instance.get("description") or serialized_instance.get("short_description"),
                     "installation": serialized_instance.get("installation") if settings["installation"] else None,
                     "attributes": _technical_attributes(serialized_instance, settings),
+                    "usage_rows": _accessory_usage_rows(orm_instance),
                     "linked_accessories": _commercial_linked_accessories(orm_instance, {"accessory_mode": settings["accessory_mode"]}),
                     "image_path": _resolve_media_path(
                         serialized_instance.get("media", []),
@@ -495,6 +497,39 @@ def _commercial_linked_accessories(instance: ProjectInstance, settings: dict[str
     return accessories
 
 
+def _accessory_usage_rows(instance: ProjectInstance) -> list[dict[str, Any]]:
+    if instance.instance_type.value != "accessory":
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for occurrence in sorted(instance.outgoing_occurrences, key=lambda item: (item.sort_order, item.id)):
+        application = _occurrence_application_label(occurrence)
+        if not application:
+            continue
+        rows.append(
+            {
+                "application": application,
+                "attributes": [
+                    {"name": attribute.attribute_name, "value": attribute.value}
+                    for attribute in occurrence.attribute_values
+                ],
+            }
+        )
+    return rows
+
+
+def _occurrence_application_label(occurrence: Any) -> str | None:
+    target_names = [
+        target.target_instance.name
+        for target in occurrence.targets
+        if target.target_instance is not None
+    ]
+    if target_names:
+        return ", ".join(target_names)
+    label = str(occurrence.context_label or "").strip()
+    return label or None
+
+
 def _upsert_linked_accessory(
     accessories: list[dict[str, Any]],
     accessory_by_instance_id: dict[int, dict[str, Any]],
@@ -539,6 +574,8 @@ def _merge_attribute_pairs(
 
 def _is_attached_accessory_instance(instance: ProjectInstance) -> bool:
     if instance.instance_type.value != "accessory":
+        return False
+    if any(not occurrence.targets for occurrence in instance.outgoing_occurrences):
         return False
     if instance.child_links:
         return True

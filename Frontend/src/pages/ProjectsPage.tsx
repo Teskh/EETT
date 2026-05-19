@@ -215,7 +215,9 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [draggingProject, setDraggingProject] = useState<{ projectId: number; fromStatus: string } | null>(null);
   const [dropTargetStatus, setDropTargetStatus] = useState<string | null>(null);
   const [updatingProjectId, setUpdatingProjectId] = useState<number | null>(null);
+  const [pendingProjectAction, setPendingProjectAction] = useState<{ projectId: number; action: "copy" | "delete" } | null>(null);
   const canChangeProjectStatus = currentUser.permissions.project_change_status;
+  const isGuest = Boolean(currentUser.is_guest);
 
   function resolveDownloadFilename(job: ExportJob, contentDisposition: string | null) {
     const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i);
@@ -504,6 +506,58 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     }
   }
 
+  async function handleCopyProject(project: ProjectsBoardData["grouped_projects"][string][number]) {
+    const suggestedName = `${project.name} - copy`;
+    const nextName = window.prompt("Nombre para la copia del proyecto", suggestedName);
+    if (nextName === null) {
+      return;
+    }
+    const cleanName = nextName.trim();
+    if (!cleanName) {
+      setError("El nombre de la copia es obligatorio.");
+      return;
+    }
+
+    setPendingProjectAction({ projectId: project.id, action: "copy" });
+    setError(null);
+    try {
+      const result = await api.copyProject(project.id, { name: cleanName });
+      if (result.project_id) {
+        onNavigate(`/projects/${result.project_id}`);
+        return;
+      }
+      await loadProjects();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "No se pudo copiar el proyecto.";
+      setError(message);
+    } finally {
+      setPendingProjectAction(null);
+    }
+  }
+
+  async function handleDeleteProject(project: ProjectsBoardData["grouped_projects"][string][number]) {
+    const confirmation = window.prompt(`Escribe "${project.name}" para eliminar este proyecto definitivamente.`);
+    if (confirmation === null) {
+      return;
+    }
+    if (confirmation !== project.name) {
+      setError("El nombre no coincide. El proyecto no fue eliminado.");
+      return;
+    }
+
+    setPendingProjectAction({ projectId: project.id, action: "delete" });
+    setError(null);
+    try {
+      await api.deleteProject(project.id);
+      await loadProjects();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "No se pudo eliminar el proyecto.";
+      setError(message);
+    } finally {
+      setPendingProjectAction(null);
+    }
+  }
+
   return (
     <div className="max-w-[1600px] mx-auto flex flex-col gap-6">
       <div className="flex items-center justify-end">
@@ -586,13 +640,17 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                       >
                         <div>
                           <h3 className="mb-1">
-                            <button
-                              type="button"
-                              onClick={() => onNavigate(`/projects/${project.id}`)}
-                              className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
-                            >
-                              {project.name}
-                            </button>
+                            {isGuest ? (
+                              <span className="text-left text-sm font-bold text-zinc-900 dark:text-white">{project.name}</span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => onNavigate(`/projects/${project.id}`)}
+                                className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
+                              >
+                                {project.name}
+                              </button>
+                            )}
                           </h3>
                         </div>
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
@@ -600,6 +658,24 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             <i className="ph-bold ph-stack" /> {project.instance_count} instancias
                           </div>
                           <div className="flex items-center gap-2">
+                            {currentUser.permissions.project_create && !isGuest ? (
+                              <button
+                                type="button"
+                                disabled={pendingProjectAction?.projectId === project.id}
+                                className="h-7 w-7 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 disabled:opacity-50 inline-flex items-center justify-center"
+                                onClick={() => void handleCopyProject(project)}
+                                aria-label={`Copiar ${project.name}`}
+                                title="Copiar proyecto"
+                              >
+                                <i
+                                  className={`ph-bold ${
+                                    pendingProjectAction?.projectId === project.id && pendingProjectAction.action === "copy"
+                                      ? "ph-circle-notch animate-spin"
+                                      : "ph-copy"
+                                  }`}
+                                />
+                              </button>
+                            ) : null}
                             <button
                               type="button"
                               disabled={!currentUser.permissions.project_edit}
@@ -621,6 +697,24 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                               <i className="ph-bold ph-file-arrow-down" />
                               Exportar
                             </button>
+                            {currentUser.permissions.project_delete && !isGuest ? (
+                              <button
+                                type="button"
+                                disabled={pendingProjectAction?.projectId === project.id}
+                                className="h-7 w-7 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 text-red-700 dark:text-red-300 rounded text-[10px] font-semibold transition-colors border border-red-200 dark:border-red-500/20 disabled:opacity-50 inline-flex items-center justify-center"
+                                onClick={() => void handleDeleteProject(project)}
+                                aria-label={`Eliminar ${project.name}`}
+                                title="Eliminar proyecto"
+                              >
+                                <i
+                                  className={`ph-bold ${
+                                    pendingProjectAction?.projectId === project.id && pendingProjectAction.action === "delete"
+                                      ? "ph-circle-notch animate-spin"
+                                      : "ph-trash"
+                                  }`}
+                                />
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       </div>

@@ -169,13 +169,28 @@ def get_current_user(
     return user
 
 
-def serialize_session_user(user: User) -> dict:
+def serialize_session_user(user: User, *, is_guest: bool = False) -> dict:
+    permissions = build_permission_payload(user)
+    page_access = build_page_access_payload(user)
+    if is_guest:
+        permissions = {
+            **permissions,
+            "project_edit": False,
+            "project_change_status": False,
+            "project_delete": False,
+            "cost_model_export": False,
+        }
+        page_access = {
+            **page_access,
+            "cost_model": {"can_read": False, "can_edit": False},
+        }
     return {
         "username": user.username,
         "display_name": user.display_name,
         "roles": sorted(role_codes(user)),
-        "permissions": build_permission_payload(user),
-        "page_access": build_page_access_payload(user),
+        "permissions": permissions,
+        "page_access": page_access,
+        "is_guest": is_guest,
     }
 
 
@@ -396,6 +411,11 @@ def require_project_edit(user: User, project: Project) -> None:
 def require_project_status_change(user: User, project: Project) -> None:
     if not can_change_project_status(user, project):
         raise HTTPException(status_code=403, detail="Project status change permission required")
+
+
+def require_project_delete(user: User, project: Project) -> None:
+    if not can_delete_project(user, project):
+        raise HTTPException(status_code=403, detail="Project delete permission required")
 
 
 def build_permission_payload(user: User, project: Project | None = None) -> dict:
