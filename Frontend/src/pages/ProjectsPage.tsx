@@ -208,6 +208,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [subtypeModal, setSubtypeModal] = useState<SubtypeModalState>(null);
   const [exportModal, setExportModal] = useState<ExportModalState>(null);
   const [detailedMaterialQuantityBasis, setDetailedMaterialQuantityBasis] = useState<DetailedMaterialQuantityBasis>("factory");
+  const [includeFullTechnicalMaterialTables, setIncludeFullTechnicalMaterialTables] = useState(true);
   const [subtypeProject, setSubtypeProject] = useState<ProjectDetailData | null>(null);
   const [subtypeLoading, setSubtypeLoading] = useState(false);
   const [pendingSubtypeId, setPendingSubtypeId] = useState<number | "root" | null>(null);
@@ -507,7 +508,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   }
 
   async function handleCopyProject(project: ProjectsBoardData["grouped_projects"][string][number]) {
-    const suggestedName = `${project.name} - copy`;
+    const suggestedName = `${project.name} - copia`;
     const nextName = window.prompt("Nombre para la copia del proyecto", suggestedName);
     if (nextName === null) {
       return;
@@ -690,6 +691,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                               className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 flex items-center gap-1.5"
                               onClick={() => {
                                 setDetailedMaterialQuantityBasis("factory");
+                                setIncludeFullTechnicalMaterialTables(true);
                                 setExportModal({ projectId: project.id, projectName: project.name });
                               }}
                               aria-label={`Exportar ${project.name}`}
@@ -755,14 +757,59 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                 loading={!!exportModal && isExporting(exportModal.projectId, "commercial_pdf")}
                 onClick={() => void handleModalExport("commercial_pdf")}
               />
-              <ExportRow
-                kind="pdf"
-                title="PDF Técnico Completo"
-                subtitle="Ficha técnica completa."
-                disabled={!exportModal || isExporting(exportModal!.projectId, "full_technical_pdf")}
-                loading={!!exportModal && isExporting(exportModal.projectId, "full_technical_pdf")}
-                onClick={() => void handleModalExport("full_technical_pdf")}
-              />
+              <div className="group flex w-full items-center gap-3 border-b border-black/5 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:border-white/5 dark:hover:bg-white/[0.04]">
+                <FileTypeIcon kind="pdf" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-zinc-900 dark:text-white">PDF Técnico Completo</div>
+                  <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                    {exportModal && isExporting(exportModal.projectId, "full_technical_pdf")
+                      ? "Generando..."
+                      : includeFullTechnicalMaterialTables
+                        ? "Con tablas."
+                        : "Sin tablas."}
+                  </div>
+                </div>
+                <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border border-black/10 bg-zinc-50 px-2 py-1 text-[11px] font-semibold text-zinc-600 transition-colors hover:text-zinc-900 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={includeFullTechnicalMaterialTables}
+                    disabled={!!exportModal && isExporting(exportModal.projectId, "full_technical_pdf")}
+                    onChange={(event) => setIncludeFullTechnicalMaterialTables(event.target.checked)}
+                    className="sr-only"
+                    aria-label="Incluir tablas de materiales en el PDF técnico completo"
+                  />
+                  <span>Tablas</span>
+                  <span className="relative inline-flex h-4 w-7 items-center">
+                    <span
+                      className={[
+                        "absolute inset-0 rounded-full transition-colors",
+                        includeFullTechnicalMaterialTables ? "bg-accent-500" : "bg-zinc-300 dark:bg-white/15",
+                        exportModal && isExporting(exportModal.projectId, "full_technical_pdf") ? "opacity-50" : "",
+                      ].join(" ")}
+                    />
+                    <span
+                      className={[
+                        "absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform dark:bg-zinc-950",
+                        includeFullTechnicalMaterialTables ? "translate-x-3" : "",
+                      ].join(" ")}
+                    />
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!exportModal || isExporting(exportModal!.projectId, "full_technical_pdf")}
+                  onClick={() => void handleModalExport("full_technical_pdf", { include_material_tables: includeFullTechnicalMaterialTables })}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-300 transition-colors hover:text-accent-500 disabled:opacity-50 dark:text-zinc-600"
+                  aria-label="Descargar PDF técnico completo"
+                  title="Descargar PDF técnico completo"
+                >
+                  <i
+                    className={`ph-bold ${
+                      exportModal && isExporting(exportModal.projectId, "full_technical_pdf") ? "ph-circle-notch animate-spin text-accent-500" : "ph-download-simple"
+                    } text-base`}
+                  />
+                </button>
+              </div>
               <div className="border-t border-black/5 dark:border-white/5">
                 <div className="flex items-center gap-3 px-4 py-3">
                   <FileTypeIcon kind="pdf" />

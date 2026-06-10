@@ -47,9 +47,9 @@ from app.services.media import serialize_media_link
 
 
 STATUS_LABELS = {
-    ProjectStatus.TEMPLATE.value: "Project Template",
-    ProjectStatus.EXECUTION.value: "Execution Projects",
-    ProjectStatus.FINISHED.value: "Finished Projects",
+    ProjectStatus.TEMPLATE.value: "Plantillas de Proyecto",
+    ProjectStatus.EXECUTION.value: "Proyectos en Ejecución",
+    ProjectStatus.FINISHED.value: "Proyectos Terminados",
 }
 
 SNAPSHOT_FIELDS = ("name", "short_name", "description", "short_description", "installation")
@@ -413,7 +413,7 @@ def _project_name_exists(session: Session, name: str) -> bool:
 
 
 def _default_project_copy_name(session: Session, source_name: str) -> str:
-    base_name = f"{source_name} - copy"
+    base_name = f"{source_name} - copia"
     if not _project_name_exists(session, base_name):
         return base_name
     suffix = 2

@@ -238,7 +238,13 @@ def build_project_export_artifact(
         case ExportKind.COST_MODEL_WORKBOOK:
             return _render_cost_model_workbook_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
         case ExportKind.FULL_TECHNICAL_PDF:
-            return _render_full_technical_pdf_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
+            return _render_full_technical_pdf_export(
+                session,
+                project_id=job.project_id,
+                job_id=job.id,
+                settings=settings,
+                include_material_tables=_full_technical_include_material_tables(job.payload),
+            )
         case ExportKind.DETAILED_MATERIAL_PDF:
             return _render_detailed_material_pdf_export(
                 session,
@@ -330,6 +336,7 @@ def _render_full_technical_pdf_export(
     project_id: int,
     job_id: int,
     settings: Settings,
+    include_material_tables: bool,
 ) -> ExportArtifact:
     from app.services.export_pdfs import build_full_technical_pdf
 
@@ -345,7 +352,11 @@ def _render_full_technical_pdf_export(
         media_gallery_dir=settings.media_gallery_dir,
     )
     output = BytesIO()
-    build_full_technical_pdf({"project": project_data["project"], "sections": sections}, output)
+    build_full_technical_pdf(
+        {"project": project_data["project"], "sections": sections},
+        output,
+        include_material_tables=include_material_tables,
+    )
     filename = _artifact_name(job_id, project_data["project"]["name"], "full-technical", "pdf")
     return ExportArtifact(output.getvalue(), filename, "application/pdf", True)
 
@@ -386,9 +397,18 @@ def _render_detailed_material_pdf_export(
 
 def _normalize_export_payload(export_kind: str, payload: dict) -> dict:
     normalized = dict(payload)
+    if export_kind == ExportKind.FULL_TECHNICAL_PDF.value:
+        normalized["include_material_tables"] = _full_technical_include_material_tables(normalized)
     if export_kind == ExportKind.DETAILED_MATERIAL_PDF.value:
         normalized["quantity_basis"] = _detailed_material_quantity_basis(normalized)
     return normalized
+
+
+def _full_technical_include_material_tables(payload: dict | None) -> bool:
+    raw_value = (payload or {}).get("include_material_tables")
+    if isinstance(raw_value, bool):
+        return raw_value
+    return True
 
 
 def _detailed_material_quantity_basis(payload: dict | None) -> str:

@@ -8,9 +8,8 @@ import re
 from typing import Any
 
 
-_STATIC_APP_DIR = Path(__file__).resolve().parents[1] / "static" / "app"
-_LOGO_WHITE_PATH = _STATIC_APP_DIR / "patagual-logo-white.png"
-_LOGO_GREEN_PATH = _STATIC_APP_DIR / "logo_green.png"
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_LOGO_GREEN_PATH = _PROJECT_ROOT / "Frontend" / "public" / "patagual-logo-green.png"
 _BRAND_RGB = (57 / 255, 71 / 255, 65 / 255)
 _PAPER_RGB = (0.985, 0.982, 0.972)
 
@@ -44,7 +43,12 @@ def build_commercial_pdf(project_data: dict[str, Any], output_path: Any) -> None
     doc.build(story)
 
 
-def build_full_technical_pdf(project_data: dict[str, Any], output_path: Any) -> None:
+def build_full_technical_pdf(
+    project_data: dict[str, Any],
+    output_path: Any,
+    *,
+    include_material_tables: bool = True,
+) -> None:
     _ensure_reportlab("Full technical PDF export requires the 'reportlab' package.")
 
     from reportlab.platypus import Paragraph
@@ -67,7 +71,15 @@ def build_full_technical_pdf(project_data: dict[str, Any], output_path: Any) -> 
 
     sections = project_data.get("sections", [])
     if sections:
-        story.extend(_build_sections_story(sections, styles, doc.width, report_type="full"))
+        story.extend(
+            _build_sections_story(
+                sections,
+                styles,
+                doc.width,
+                report_type="full",
+                include_material_tables=include_material_tables,
+            )
+        )
     else:
         story.append(Paragraph("No hay secciones tecnicas disponibles para este proyecto.", styles["Normal"]))
 
@@ -540,7 +552,14 @@ def _build_toc_story(styles) -> list[Any]:
     ]
 
 
-def _build_sections_story(sections: list[dict[str, Any]], styles, available_width: float, *, report_type: str) -> list[Any]:
+def _build_sections_story(
+    sections: list[dict[str, Any]],
+    styles,
+    available_width: float,
+    *,
+    report_type: str,
+    include_material_tables: bool = True,
+) -> list[Any]:
     from reportlab.lib.units import inch
     from reportlab.platypus import Spacer
 
@@ -550,7 +569,15 @@ def _build_sections_story(sections: list[dict[str, Any]], styles, available_widt
         story.append(_heading_paragraph(section_text, styles["CategoryHeadingStyle"], level=0, bookmark_prefix="section"))
 
         for instance in section.get("instances", []):
-            story.extend(_build_instance_story(instance, styles, available_width, report_type=report_type))
+            story.extend(
+                _build_instance_story(
+                    instance,
+                    styles,
+                    available_width,
+                    report_type=report_type,
+                    include_material_tables=include_material_tables,
+                )
+            )
 
         if index < len(sections) - 1:
             story.append(Spacer(1, 0.1 * inch))
@@ -558,7 +585,14 @@ def _build_sections_story(sections: list[dict[str, Any]], styles, available_widt
     return story
 
 
-def _build_instance_story(instance: dict[str, Any], styles, available_width: float, *, report_type: str) -> list[Any]:
+def _build_instance_story(
+    instance: dict[str, Any],
+    styles,
+    available_width: float,
+    *,
+    report_type: str,
+    include_material_tables: bool = True,
+) -> list[Any]:
     from reportlab.lib.units import inch
     from reportlab.platypus import KeepTogether, Spacer, Table, TableStyle
 
@@ -574,7 +608,7 @@ def _build_instance_story(instance: dict[str, Any], styles, available_width: flo
 
     accessory_flowables = _linked_accessory_flowables(instance.get("linked_accessories", []), styles)
     materials_flowables: list[Any] = []
-    if report_type == "full":
+    if report_type == "full" and include_material_tables:
         materials = instance.get("materials", [])
         if materials:
             materials_flowables.append(_materials_table(materials, styles, available_width))
@@ -1052,9 +1086,8 @@ def _draw_technical_cover(canvas, doc, *, project_name: str, title: str, export_
         canvas.setLineWidth(0.22)
         canvas.line(i, 0, i - page_height, page_height)
 
-    logo_path = _LOGO_GREEN_PATH if _LOGO_GREEN_PATH.is_file() else _LOGO_WHITE_PATH
-    if logo_path.is_file():
-        logo = ImageReader(str(logo_path))
+    if _LOGO_GREEN_PATH.is_file():
+        logo = ImageReader(str(_LOGO_GREEN_PATH))
         image_width, image_height = logo.getSize()
         logo_height = 200
         logo_width = logo_height * (image_width / image_height)
@@ -1092,14 +1125,19 @@ def _draw_technical_cover(canvas, doc, *, project_name: str, title: str, export_
     canvas.drawRightString(page_width - 36, 30, "DOCUMENTO  |  01")
 
 
-def _draw_page_logo(canvas, doc, *, logo_path: Path, logo_size: float = 24) -> None:
+def _draw_page_logo(canvas, doc, *, logo_path: Path, logo_height: float = 24) -> None:
     if not logo_path.is_file():
         return
 
+    from reportlab.lib.utils import ImageReader
+
     page_width, page_height = doc.pagesize
-    x = page_width - doc.rightMargin - logo_size + 16
+    logo = ImageReader(str(logo_path))
+    image_width, image_height = logo.getSize()
+    logo_width = logo_height * (image_width / image_height)
+    x = page_width - doc.rightMargin - logo_width + 16
     y = page_height - 36
-    canvas.drawImage(str(logo_path), x, y, width=logo_size, height=logo_size, mask="auto")
+    canvas.drawImage(logo, x, y, width=logo_width, height=logo_height, mask="auto")
 
 
 def _create_doc_template(output_path: Any, *, title: str, project_name: str):
@@ -1117,14 +1155,14 @@ def _create_doc_template(output_path: Any, *, title: str, project_name: str):
     def draw_page_number(canvas, doc) -> None:
         page_width, page_height = doc.pagesize
         canvas.saveState()
-        _draw_page_logo(canvas, doc, logo_path=_LOGO_GREEN_PATH, logo_size=24)
+        _draw_page_logo(canvas, doc, logo_path=_LOGO_GREEN_PATH, logo_height=24)
         if canvas.getPageNumber() > 1:
             canvas.setFont("Helvetica-Oblique", 7)
             canvas.setFillColor(colors.HexColor("#6b7280"))
             canvas.drawString(doc.leftMargin, page_height - 28, f"{project_name} - {export_date}")
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(colors.HexColor("#64748b"))
-        canvas.drawRightString(page_width - doc.rightMargin, 30, f"Page {canvas.getPageNumber()}")
+        canvas.drawRightString(page_width - doc.rightMargin, 30, f"Página {canvas.getPageNumber()}")
         canvas.restoreState()
 
     class ExportDocTemplate(BaseDocTemplate):

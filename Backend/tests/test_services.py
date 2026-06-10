@@ -1628,11 +1628,12 @@ class ServiceLayerTests(unittest.TestCase):
         create_export = self.client.post(
             "/api/v1/projects/2/exports",
             headers={"X-Spec-Sheets-User": "editor"},
-            json={"kind": "full_technical_pdf", "payload": {}},
+            json={"kind": "full_technical_pdf", "payload": {"include_material_tables": False}},
         )
         self.assertEqual(create_export.status_code, 200)
         self.assertEqual(create_export.json()["kind"], "full_technical_pdf")
         self.assertEqual(create_export.json()["status"], "completed")
+        self.assertEqual(create_export.json()["payload"]["include_material_tables"], False)
         artifact_uri = create_export.json()["artifact_uri"]
         self.assertTrue(artifact_uri.endswith(".pdf"))
 

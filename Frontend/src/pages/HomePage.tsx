@@ -22,9 +22,6 @@ export function HomePage({ onNavigate, currentUser }: HomePageProps) {
             }} 
           />
         </div>
-        <h1 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-white">
-          {firstName ? `Hola, ${firstName}` : "Patagual"}
-        </h1>
       </div>
 
       {availablePages.length ? (
