@@ -1170,3 +1170,67 @@ class CostModelViewResponse(BaseModel):
 
 ProjectSubtypeModel.model_rebuild()
 CommentModel.model_rebuild()
+
+
+class MaterialUnitUsageRuleModel(BaseModel):
+    rule_id: int
+    component_id: int
+    component_name: str
+    unit: str | None = None
+    unit_qty_per_unit: float | None = None
+
+
+class MaterialUnitUsageBomEntryModel(BaseModel):
+    project_id: int
+    project_name: str
+    instance_name: str | None = None
+    subtype_name: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
+
+
+class MaterialUnitUsageSheetModel(BaseModel):
+    project_id: int
+    project_name: str
+    instance_name: str | None = None
+
+
+class MaterialUnitUsageGroupModel(BaseModel):
+    group_id: int
+    group_name: str
+    factor_to_study_unit: float
+    study_unit: str | None = None
+
+
+class MaterialUnitUsageModel(BaseModel):
+    catalog_rules: list[MaterialUnitUsageRuleModel] = Field(default_factory=list)
+    bom_entries: list[MaterialUnitUsageBomEntryModel] = Field(default_factory=list)
+    calculation_sheets: list[MaterialUnitUsageSheetModel] = Field(default_factory=list)
+    study_groups: list[MaterialUnitUsageGroupModel] = Field(default_factory=list)
+    catalog_rules_count: int = 0
+    bom_entries_count: int = 0
+    calculation_sheets_count: int = 0
+    study_groups_count: int = 0
+
+
+class MaterialUnitAlertModel(BaseModel):
+    id: int
+    material_id: int
+    sku: str
+    material_name: str
+    old_unit: str | None = None
+    new_unit: str | None = None
+    status: str
+    detected_at: datetime
+    last_seen_at: datetime
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None
+    resolution_note: str | None = None
+    usage: MaterialUnitUsageModel | None = None
+
+
+class MaterialUnitAlertsResponse(BaseModel):
+    pending: list[MaterialUnitAlertModel] = Field(default_factory=list)
+    history: list[MaterialUnitAlertModel] = Field(default_factory=list)
+    last_sweep_at: datetime | None = None
+    erp_available: bool = False

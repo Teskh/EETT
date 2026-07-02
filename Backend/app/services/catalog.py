@@ -648,7 +648,10 @@ def _resolve_material(
 
     material.sku = sku
     material.name = material_name
-    material.unit = unit
+    # The reference unit only changes through the unit-change resolution flow
+    # (see services.material_units); rule edits may only backfill a blank one.
+    if material.unit is None and unit:
+        material.unit = unit
     return material
 
 
