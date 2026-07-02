@@ -47,6 +47,8 @@ from app.api_models import (
     CostModelViewResponse,
     DashboardResponse,
     ExportJobModel,
+    HouseTypeLinksBundleResponse,
+    HouseTypeLinksUpdateRequest,
     LoginRequest,
     MaterialDashboardCecoResponse,
     MaterialDashboardDateRangeRequest,
@@ -58,6 +60,7 @@ from app.api_models import (
     MaterialDashboardGroupMovementResponse,
     MaterialDashboardHouseComparisonRequest,
     MaterialDashboardHouseComparisonResponse,
+    MaterialDashboardMappedHouseComparisonResponse,
     MaterialDashboardProjectUsageResponse,
     MaterialUnitAlertModel,
     MaterialUnitAlertsResponse,
@@ -80,6 +83,7 @@ from app.api_models import (
     MentionableUsersResponse,
     MutationResultModel,
     NotificationModel,
+    ProductionHouseStartsResponse,
     ProjectDetailResponse,
     ProjectCopyRequest,
     ProjectCreateRequest,
@@ -165,11 +169,17 @@ from app.services.dashboard import (
     get_material_dashboard_detail,
     get_material_dashboard_economic_metrics,
     get_material_dashboard_history,
+    get_material_dashboard_mapped_house_comparison,
     get_material_dashboard_project_comparison,
-    get_material_dashboard_project_quantity_map,
     get_material_dashboard_project_usage,
+    get_production_house_starts_with_links,
     get_project_material_dashboard,
     get_recent_material_dashboard,
+)
+from app.services.house_type_links import (
+    list_house_type_links,
+    list_link_target_projects,
+    replace_house_type_links,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
 from app.services.material_units import (
@@ -2510,9 +2520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/dashboard/material-groups/{group_id}/house-comparison", response_model=MaterialDashboardGroupHouseComparisonResponse)
     def material_dashboard_group_house_comparison_v1(
         group_id: int,
-        house_type_id: int,
         request: Request,
-        project_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2537,7 +2545,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.app.state.settings,
                 group_id,
                 session=session,
-                house_type_id=house_type_id,
                 cost_centers=ceco_filters,
                 history_days=history_days,
                 start_date=requested_start_date,
@@ -2549,21 +2556,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if comparison is None:
             raise HTTPException(status_code=404, detail="Material group not found")
-        return attach_project_comparison(
-            comparison,
-            project_id=project_id,
-            sku_factors={
-                str(member.get("sku") or ""): float(member.get("factor_to_study_unit") or 0.0)
-                for member in comparison.get("members", [])
-            },
-            session=session,
-            current_user=current_user,
-        )
+        return comparison
 
     @app.post("/api/v1/dashboard/material-groups/{group_id}/house-comparison", response_model=MaterialDashboardGroupHouseComparisonResponse)
     def material_dashboard_group_house_comparison_v1_post(
         group_id: int,
-        payload: MaterialDashboardHouseComparisonRequest,
+        payload: MaterialDashboardDateRangeRequest,
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2581,7 +2579,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.app.state.settings,
                 group_id,
                 session=session,
-                house_type_id=payload.house_type_id,
                 cost_centers=payload.cecos,
                 excluded_cost_centers=payload.excluded_cecos,
                 history_days=history_days,
@@ -2594,16 +2591,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if comparison is None:
             raise HTTPException(status_code=404, detail="Material group not found")
-        return attach_project_comparison(
-            comparison,
-            project_id=payload.project_id,
-            sku_factors={
-                str(member.get("sku") or ""): float(member.get("factor_to_study_unit") or 0.0)
-                for member in comparison.get("members", [])
-            },
-            session=session,
-            current_user=current_user,
-        )
+        return comparison
 
     @app.get("/api/v1/dashboard/material-groups/{group_id}/movements", response_model=MaterialDashboardGroupMovementResponse)
     def material_dashboard_group_movements_v1(
@@ -2683,7 +2671,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/v1/dashboard/materials/economic-metrics", response_model=MaterialDashboardEconomicMetricsResponse)
     def material_dashboard_economic_metrics_v1_post(
-        payload: MaterialDashboardHouseComparisonRequest,
+        payload: MaterialDashboardDateRangeRequest,
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2696,28 +2684,93 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if payload.start_date and payload.end_date
             else 90
         )
-        project_quantity_by_sku: dict[str, float] = {}
-        if payload.project_id is not None:
-            project, project_quantity_by_sku = get_material_dashboard_project_quantity_map(
-                session,
-                project_id=payload.project_id,
-            )
-            if project is None:
-                raise HTTPException(status_code=404, detail="Project not found")
-            require_project_view(current_user, project)
         try:
             return get_material_dashboard_economic_metrics(
                 request.app.state.settings,
                 session=session,
-                house_type_id=payload.house_type_id,
-                project_id=payload.project_id,
-                project_quantity_by_sku=project_quantity_by_sku,
                 movement_days=movement_days,
                 start_date=payload.start_date,
                 end_date=payload.end_date,
                 cost_centers=payload.cecos,
                 excluded_cost_centers=payload.excluded_cecos,
                 force_refresh=payload.refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/house-type-links", response_model=HouseTypeLinksBundleResponse)
+    def house_type_links_v1(
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        production_error: str | None = None
+        house_types: list[dict] = []
+        try:
+            house_types = get_material_dashboard_house_types(request.app.state.settings).get("house_types", [])
+        except RuntimeError as exc:
+            production_error = str(exc)
+        return {
+            "links": list_house_type_links(session),
+            "house_types": house_types,
+            "projects": list_link_target_projects(session),
+            "production_error": production_error,
+        }
+
+    @app.put("/api/v1/dashboard/house-type-links", response_model=HouseTypeLinksBundleResponse)
+    def update_house_type_links_v1(
+        payload: HouseTypeLinksUpdateRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "material_dashboard")
+        try:
+            links = replace_house_type_links(
+                session,
+                [link.model_dump() for link in payload.links],
+                user=current_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        production_error: str | None = None
+        house_types: list[dict] = []
+        try:
+            house_types = get_material_dashboard_house_types(request.app.state.settings).get("house_types", [])
+        except RuntimeError as exc:
+            production_error = str(exc)
+        return {
+            "links": links,
+            "house_types": house_types,
+            "projects": list_link_target_projects(session),
+            "production_error": production_error,
+        }
+
+    @app.get("/api/v1/dashboard/house-starts", response_model=ProductionHouseStartsResponse)
+    def production_house_starts_v1(
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+        try:
+            requested_start_date = date.fromisoformat(start_date) if start_date else None
+            requested_end_date = date.fromisoformat(end_date) if end_date else None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid date range; expected YYYY-MM-DD") from exc
+        if requested_start_date and requested_end_date and requested_start_date > requested_end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        try:
+            return get_production_house_starts_with_links(
+                request.app.state.settings,
+                session=session,
+                start_date=requested_start_date,
+                end_date=requested_end_date,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2860,12 +2913,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return usage
 
-    @app.get("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
+    @app.get("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardMappedHouseComparisonResponse)
     def material_dashboard_house_comparison_v1(
         sku: str,
-        house_type_id: int,
         request: Request,
-        project_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2895,32 +2946,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 history_days=history_days,
                 force_refresh=force_refresh,
             )
-            comparison = get_material_dashboard_house_start_comparison(
+            return get_material_dashboard_mapped_house_comparison(
                 request.app.state.settings,
+                session=session,
                 sku=sku,
                 movements=history.get("movements", []),
-                house_type_id=house_type_id,
                 cost_centers=ceco_filters,
                 history_days=int(history.get("movement_days") or history_days),
-                start_date=start_date,
-                end_date=end_date,
-            )
-            return attach_project_comparison(
-                comparison,
-                project_id=project_id,
-                sku_factors={sku: 1.0},
-                session=session,
-                current_user=current_user,
+                start_date=requested_start_date,
+                end_date=requested_end_date,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardHouseComparisonResponse)
+    @app.post("/api/v1/dashboard/materials/{sku}/house-comparison", response_model=MaterialDashboardMappedHouseComparisonResponse)
     def material_dashboard_house_comparison_v1_post(
         sku: str,
-        payload: MaterialDashboardHouseComparisonRequest,
+        payload: MaterialDashboardDateRangeRequest,
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2945,22 +2989,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 end_date=payload.end_date,
                 force_refresh=payload.refresh,
             )
-            comparison = get_material_dashboard_house_start_comparison(
+            return get_material_dashboard_mapped_house_comparison(
                 request.app.state.settings,
+                session=session,
                 sku=sku,
                 movements=history.get("movements", []),
-                house_type_id=payload.house_type_id,
                 cost_centers=payload.cecos,
                 history_days=int(history.get("movement_days") or history_days),
-                start_date=payload.start_date.isoformat() if payload.start_date else None,
-                end_date=payload.end_date.isoformat() if payload.end_date else None,
-            )
-            return attach_project_comparison(
-                comparison,
-                project_id=payload.project_id,
-                sku_factors={sku: 1.0},
-                session=session,
-                current_user=current_user,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

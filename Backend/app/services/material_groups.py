@@ -16,7 +16,6 @@ from app.services.erp import (
     get_material_procurement_details,
     get_recent_movement_materials,
 )
-from app.services.production_dashboard import get_material_dashboard_house_start_comparison
 
 
 def build_material_study_group_subject_key(group_id: int) -> str:
@@ -331,7 +330,6 @@ def get_material_dashboard_group_house_comparison(
     group_id: int,
     *,
     session: Session,
-    house_type_id: int,
     history_days: int = 90,
     start_date: date | None = None,
     end_date: date | None = None,
@@ -355,15 +353,21 @@ def get_material_dashboard_group_house_comparison(
     if history is None:
         return None
 
-    comparison = get_material_dashboard_house_start_comparison(
+    from app.services.dashboard import get_material_dashboard_mapped_house_comparison
+
+    comparison = get_material_dashboard_mapped_house_comparison(
         settings,
+        session=session,
         sku=build_material_study_group_subject_key(group.id),
         movements=history["movements"],
-        house_type_id=house_type_id,
+        sku_factors={
+            member.sku.strip().upper(): float(member.factor_to_study_unit)
+            for member in group.members
+        },
         cost_centers=_normalize_dashboard_cost_centers(cost_centers),
         history_days=history_days,
-        start_date=start_date.isoformat() if start_date else None,
-        end_date=end_date.isoformat() if end_date else None,
+        start_date=start_date,
+        end_date=end_date,
     )
     comparison.update(
         {

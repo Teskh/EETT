@@ -902,6 +902,51 @@ class ProjectAuxiliaryMaterialSelection(Base):
     subtype: Mapped[ProjectSubtype | None] = relationship(back_populates="auxiliary_materials")
 
 
+class ProductionHouseTypeLink(Base):
+    """Global mapping from a Production II house type (optionally narrowed to
+    one of its sub types) to the Spec Sheets project/subtype whose BOM defines
+    the estimated material consumption for houses of that type.
+
+    A row with ``production_sub_type_id`` NULL is the general mapping for the
+    house type; sub-type rows override it for houses produced with that sub
+    type. Production-side ids reference the external Production II database,
+    so they are plain integers with cached display names."""
+
+    __tablename__ = "production_house_type_links"
+    __table_args__ = (
+        Index(
+            "uq_production_house_type_links_general",
+            "production_house_type_id",
+            unique=True,
+            postgresql_where=text("production_sub_type_id IS NULL"),
+        ),
+        Index(
+            "uq_production_house_type_links_subtype",
+            "production_house_type_id",
+            "production_sub_type_id",
+            unique=True,
+            postgresql_where=text("production_sub_type_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    production_house_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_sub_type_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    production_house_type_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    production_sub_type_name: Mapped[str | None] = mapped_column(String(200), default=None)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    project_subtype_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_subtypes.id", ondelete="SET NULL"), default=None
+    )
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship()
+    project_subtype: Mapped[ProjectSubtype | None] = relationship()
+    updated_by: Mapped[User | None] = relationship()
+
+
 class ProjectCostModelAdjustment(Base):
     __tablename__ = "project_cost_model_adjustments"
     __table_args__ = (

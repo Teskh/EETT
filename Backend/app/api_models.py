@@ -896,14 +896,87 @@ class MaterialDashboardMovementResponse(BaseModel):
     generated_at: str
 
 
+class MaterialDashboardHouseSubTypeModel(BaseModel):
+    id: int
+    name: str
+
+
 class MaterialDashboardHouseTypeModel(BaseModel):
     id: int
     name: str
     number_of_modules: int
+    sub_types: list[MaterialDashboardHouseSubTypeModel] = Field(default_factory=list)
 
 
 class MaterialDashboardHouseTypesResponse(BaseModel):
     house_types: list[MaterialDashboardHouseTypeModel] = Field(default_factory=list)
+
+
+class HouseTypeLinkModel(BaseModel):
+    id: int
+    production_house_type_id: int
+    production_sub_type_id: int | None = None
+    production_house_type_name: str
+    production_sub_type_name: str | None = None
+    project_id: int
+    project_name: str | None = None
+    project_subtype_id: int | None = None
+    project_subtype_name: str | None = None
+    updated_at: str | None = None
+
+
+class HouseTypeLinkPayloadModel(BaseModel):
+    production_house_type_id: int = Field(ge=1)
+    production_sub_type_id: int | None = Field(default=None, ge=1)
+    production_house_type_name: str = ""
+    production_sub_type_name: str | None = None
+    project_id: int = Field(ge=1)
+    project_subtype_id: int | None = Field(default=None, ge=1)
+
+
+class HouseTypeLinksUpdateRequest(BaseModel):
+    links: list[HouseTypeLinkPayloadModel] = Field(default_factory=list)
+
+
+class LinkTargetProjectModel(BaseModel):
+    id: int
+    name: str
+    status: str
+    subtypes: list[MaterialDashboardHouseSubTypeModel] = Field(default_factory=list)
+
+
+class HouseTypeLinksBundleResponse(BaseModel):
+    links: list[HouseTypeLinkModel] = Field(default_factory=list)
+    house_types: list[MaterialDashboardHouseTypeModel] = Field(default_factory=list)
+    projects: list[LinkTargetProjectModel] = Field(default_factory=list)
+    production_error: str | None = None
+
+
+class ProductionHouseStartModel(BaseModel):
+    work_order_id: int
+    production_project_name: str
+    house_identifier: str | None = None
+    house_type_id: int
+    house_type_name: str
+    sub_type_id: int | None = None
+    sub_type_name: str | None = None
+    start_date: str
+    mapped: bool
+    mapped_project_id: int | None = None
+    mapped_project_name: str | None = None
+    mapped_project_subtype_id: int | None = None
+    mapped_project_subtype_name: str | None = None
+    mapped_via_sub_type: bool = False
+
+
+class ProductionHouseStartsResponse(BaseModel):
+    range_start: str
+    range_end: str
+    total_house_starts: int
+    mapped_house_starts: int
+    unmapped_house_starts: int
+    houses: list[ProductionHouseStartModel] = Field(default_factory=list)
+    generated_at: str
 
 
 class MaterialDashboardHouseComparisonPointModel(BaseModel):
@@ -939,13 +1012,60 @@ class MaterialDashboardEconomicMetricModel(BaseModel):
 
 
 class MaterialDashboardEconomicMetricsResponse(BaseModel):
-    house_type_id: int
-    project_id: int | None = None
     ceco_filters: list[str] = Field(default_factory=list)
     range_start: str | None
     range_end: str | None
     total_house_starts: int
+    total_mapped_house_starts: int = 0
+    link_count: int = 0
     metrics: list[MaterialDashboardEconomicMetricModel] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardMappedHouseComparisonPointModel(BaseModel):
+    date: str
+    material_quantity: float
+    house_starts: int
+    mapped_house_starts: int
+    expected_material_quantity: float
+    cumulative_material_quantity: float
+    cumulative_house_starts: int
+    cumulative_mapped_house_starts: int
+    cumulative_expected_material_quantity: float
+    material_per_house: float | None
+
+
+class MaterialDashboardMappedProjectModel(BaseModel):
+    project_id: int
+    project_name: str
+
+
+class MaterialDashboardUnmappedStartsModel(BaseModel):
+    house_type_id: int
+    house_type_name: str
+    sub_type_id: int | None = None
+    sub_type_name: str | None = None
+    house_starts: int
+
+
+class MaterialDashboardMappedHouseComparisonResponse(BaseModel):
+    sku: str
+    movement_days: int
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    total_material_quantity: float
+    total_house_starts: int
+    total_mapped_house_starts: int
+    total_unmapped_house_starts: int
+    total_expected_material_quantity: float
+    material_per_house: float | None
+    expected_material_per_mapped_house: float | None
+    latest_house_start_date: str | None
+    link_count: int = 0
+    mapped_projects: list[MaterialDashboardMappedProjectModel] = Field(default_factory=list)
+    unmapped_summary: list[MaterialDashboardUnmappedStartsModel] = Field(default_factory=list)
+    points: list[MaterialDashboardMappedHouseComparisonPointModel] = Field(default_factory=list)
     generated_at: str
 
 
@@ -1101,7 +1221,7 @@ class MaterialDashboardGroupMovementResponse(BaseModel):
     generated_at: str
 
 
-class MaterialDashboardGroupHouseComparisonResponse(MaterialDashboardHouseComparisonResponse):
+class MaterialDashboardGroupHouseComparisonResponse(MaterialDashboardMappedHouseComparisonResponse):
     group_id: int
     group_name: str
     description: str | None

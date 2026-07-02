@@ -26,16 +26,33 @@ def get_material_dashboard_house_types(settings: Settings) -> dict:
                     )
                 ).mappings()
             )
+            sub_type_rows = list(
+                session.execute(
+                    text(
+                        """
+                        SELECT id, house_type_id, name
+                        FROM house_sub_types
+                        ORDER BY name, id
+                        """
+                    )
+                ).mappings()
+            )
     except OperationalError as exc:
         raise RuntimeError("Could not connect to the Production II database") from exc
     except SQLAlchemyError as exc:
         raise RuntimeError(f"Production II query failed: {exc.__class__.__name__}") from exc
+    sub_types_by_house_type: dict[int, list[dict]] = {}
+    for row in sub_type_rows:
+        sub_types_by_house_type.setdefault(int(row["house_type_id"]), []).append(
+            {"id": int(row["id"]), "name": str(row["name"])}
+        )
     return {
         "house_types": [
             {
                 "id": int(row["id"]),
                 "name": str(row["name"]),
                 "number_of_modules": int(row["number_of_modules"] or 0),
+                "sub_types": sub_types_by_house_type.get(int(row["id"]), []),
             }
             for row in rows
         ]
@@ -146,6 +163,141 @@ def get_material_dashboard_house_start_comparison(
         "points": points,
         "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+_ALL_HOUSE_STARTS_SQL = """
+    WITH panel_events AS (
+        SELECT
+            wu.work_order_id AS work_order_id,
+            COALESCE(ti.started_at, ti.completed_at) AS event_at
+        FROM task_instances ti
+        JOIN panel_units pu ON pu.id = ti.panel_unit_id
+        JOIN work_units wu ON wu.id = pu.work_unit_id
+        WHERE UPPER(ti.scope::text) = :scope_panel
+          AND COALESCE(ti.started_at, ti.completed_at) IS NOT NULL
+        UNION ALL
+        SELECT
+            wu.work_order_id AS work_order_id,
+            te.created_at AS event_at
+        FROM task_exceptions te
+        JOIN panel_units pu ON pu.id = te.panel_unit_id
+        JOIN work_units wu ON wu.id = pu.work_unit_id
+        WHERE UPPER(te.scope::text) = :scope_panel
+          AND te.created_at IS NOT NULL
+    ),
+    first_panel_task AS (
+        SELECT
+            work_order_id,
+            MIN(event_at) AS first_started_at
+        FROM panel_events
+        GROUP BY work_order_id
+    )
+    SELECT
+        wo.id AS work_order_id,
+        wo.project_name AS production_project_name,
+        wo.house_identifier AS house_identifier,
+        wo.house_type_id AS house_type_id,
+        ht.name AS house_type_name,
+        wo.sub_type_id AS sub_type_id,
+        hst.name AS sub_type_name,
+        CAST(f.first_started_at AS DATE) AS start_date
+    FROM first_panel_task f
+    JOIN work_orders wo ON wo.id = f.work_order_id
+    JOIN house_types ht ON ht.id = wo.house_type_id
+    LEFT JOIN house_sub_types hst ON hst.id = wo.sub_type_id
+    WHERE f.first_started_at >= :start_ts
+      AND f.first_started_at < :end_ts
+    ORDER BY f.first_started_at, wo.id
+"""
+
+
+def get_production_house_starts(
+    settings: Settings,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    history_days: int = 90,
+) -> dict:
+    """Every house (work order) whose first panel task fell inside the window,
+    across all house types, with its house type and sub type."""
+
+    requested_start_day = _parse_house_comparison_date(start_date, field_name="start_date")
+    requested_end_day = _parse_house_comparison_date(end_date, field_name="end_date")
+    end_day = min(requested_end_day or datetime.utcnow().date(), datetime.utcnow().date())
+    if requested_start_day is None:
+        start_day = end_day - timedelta(days=max(int(history_days), 1) - 1)
+    else:
+        start_day = requested_start_day
+    if start_day > end_day:
+        raise ValueError("start_date must be on or before end_date")
+    end_exclusive = end_day + timedelta(days=1)
+
+    try:
+        with production_session(settings) as session:
+            rows = list(
+                session.execute(
+                    text(_ALL_HOUSE_STARTS_SQL),
+                    {
+                        "scope_panel": "PANEL",
+                        "start_ts": datetime.combine(start_day, datetime.min.time()),
+                        "end_ts": datetime.combine(end_exclusive, datetime.min.time()),
+                    },
+                ).mappings()
+            )
+    except OperationalError as exc:
+        raise RuntimeError("Could not connect to the Production II database") from exc
+    except SQLAlchemyError as exc:
+        raise RuntimeError(f"Production II house start query failed: {exc.__class__.__name__}") from exc
+
+    houses = []
+    for row in rows:
+        start_value = row["start_date"]
+        if start_value is None:
+            continue
+        if isinstance(start_value, datetime):
+            start_value = start_value.date()
+        houses.append(
+            {
+                "work_order_id": int(row["work_order_id"]),
+                "production_project_name": str(row["production_project_name"] or ""),
+                "house_identifier": (str(row["house_identifier"]).strip() or None)
+                if row["house_identifier"] is not None
+                else None,
+                "house_type_id": int(row["house_type_id"]),
+                "house_type_name": str(row["house_type_name"] or ""),
+                "sub_type_id": int(row["sub_type_id"]) if row["sub_type_id"] is not None else None,
+                "sub_type_name": str(row["sub_type_name"]) if row["sub_type_name"] is not None else None,
+                "start_date": start_value.isoformat(),
+            }
+        )
+
+    return {
+        "range_start": start_day.isoformat(),
+        "range_end": end_day.isoformat(),
+        "houses": houses,
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
+def build_house_start_grid(houses: list[dict]) -> list[dict]:
+    """Collapse per-house rows into (date, house type, sub type) start counts —
+    the shape the mapped comparison aggregates over."""
+    grid: dict[tuple[str, int, int | None], dict] = {}
+    for house in houses:
+        key = (str(house["start_date"]), int(house["house_type_id"]), house.get("sub_type_id"))
+        bucket = grid.get(key)
+        if bucket is None:
+            bucket = {
+                "date": str(house["start_date"]),
+                "house_type_id": int(house["house_type_id"]),
+                "house_type_name": str(house.get("house_type_name") or ""),
+                "sub_type_id": house.get("sub_type_id"),
+                "sub_type_name": house.get("sub_type_name"),
+                "house_starts": 0,
+            }
+            grid[key] = bucket
+        bucket["house_starts"] += 1
+    return sorted(grid.values(), key=lambda row: (row["date"], row["house_type_name"], row["sub_type_name"] or ""))
 
 
 def _load_house_start_context(
