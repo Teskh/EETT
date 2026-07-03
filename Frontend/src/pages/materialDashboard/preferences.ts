@@ -8,10 +8,10 @@ const CECO_FILTER_PREFERENCES_KEY = "material-dashboard::ceco-filter-preferences
 
 export type CecoFilterMode = "exclude" | "include";
 
+export type HouseViewMode = "houses" | "stock";
+
 export type HouseViewPreferences = {
-  hasSelectedHouseTypePreference: boolean;
-  selectedHouseTypeId: number | null;
-  selectedProjectId: number | null;
+  houseViewMode: HouseViewMode;
   leadTimeMode: LeadTimeMode;
   houseRange: HouseRange | null;
 };
@@ -25,10 +25,6 @@ function isLeadTimeMode(value: unknown): value is LeadTimeMode {
   return value === "worst" || value === "median" || value === "average";
 }
 
-function asFiniteNumberOrNull(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 export function loadHouseViewPreferences(): HouseViewPreferences | null {
   if (typeof window === "undefined") {
     return null;
@@ -39,15 +35,12 @@ export function loadHouseViewPreferences(): HouseViewPreferences | null {
       return null;
     }
     const parsed = JSON.parse(raw) as {
-      selectedHouseTypeId?: number | null;
-      selectedProjectId?: number | null;
+      houseViewMode?: string;
       leadTimeMode?: string;
       houseRange?: Partial<HouseRange> | null;
     };
     return {
-      hasSelectedHouseTypePreference: Object.prototype.hasOwnProperty.call(parsed, "selectedHouseTypeId"),
-      selectedHouseTypeId: asFiniteNumberOrNull(parsed.selectedHouseTypeId),
-      selectedProjectId: asFiniteNumberOrNull(parsed.selectedProjectId),
+      houseViewMode: parsed.houseViewMode === "stock" ? "stock" : "houses",
       leadTimeMode: isLeadTimeMode(parsed.leadTimeMode) ? parsed.leadTimeMode : "worst",
       houseRange:
         parsed.houseRange?.startDate && parsed.houseRange?.endDate
@@ -63,8 +56,7 @@ export function loadHouseViewPreferences(): HouseViewPreferences | null {
 }
 
 export function saveHouseViewPreferences(preferences: {
-  selectedHouseTypeId: number | null;
-  selectedProjectId: number | null;
+  houseViewMode: HouseViewMode;
   leadTimeMode: LeadTimeMode;
   houseRange: HouseRange;
 }) {

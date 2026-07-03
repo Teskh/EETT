@@ -32,18 +32,12 @@ export function historyCacheKey(sku: string, cecos: string[], range?: DateRangeL
   return `history::${sku}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-export function houseComparisonCacheKey(
-  sku: string,
-  houseTypeId: number,
-  cecos: string[],
-  range: HouseRangeLike,
-  projectId?: number | null,
-) {
-  return `houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
+export function houseComparisonCacheKey(sku: string, cecos: string[], range: HouseRangeLike, linksVersion = 0) {
+  return `houses::v2::${sku}::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-export function economicMetricsCacheKey(houseTypeId: number, cecos: string[], range: HouseRangeLike, projectId?: number | null) {
-  return `economics::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
+export function economicMetricsCacheKey(cecos: string[], range: HouseRangeLike, linksVersion = 0) {
+  return `economics::v2::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 export function groupDashboardCacheKey(cecos: string[], range?: DateRangeLike | null, movementDays = 60) {
@@ -63,12 +57,6 @@ export function groupHistoryCacheKey(groupId: number, cecos: string[], range?: D
   return `group-history::${groupId}::${startDate}::${endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
-export function groupHouseComparisonCacheKey(
-  groupId: number,
-  houseTypeId: number,
-  cecos: string[],
-  range: HouseRangeLike,
-  projectId?: number | null,
-) {
-  return `group-houses::${groupId}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}::${normalizeCecos(cecos).join("|") || "all"}`;
+export function groupHouseComparisonCacheKey(groupId: number, cecos: string[], range: HouseRangeLike, linksVersion = 0) {
+  return `group-houses::v2::${groupId}::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
 }

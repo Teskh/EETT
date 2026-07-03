@@ -5,7 +5,7 @@ import type {
   MaterialDashboardGroupHouseComparisonData,
   MaterialDashboardGroupMovementData,
   MaterialDashboardGroupMovementDetail,
-  MaterialDashboardHouseComparisonData,
+  MaterialDashboardMappedHouseComparisonData,
   MaterialDashboardListRow,
   MaterialDashboardMovementData,
   MaterialDashboardMovementDetail,
@@ -18,7 +18,7 @@ export type DashboardSelectionRow = MaterialDashboardListRow | MaterialStudyGrou
 export type DashboardDetailLike = MaterialDashboardDetailData | MaterialDashboardGroupDetailData;
 export type DashboardHistoryLike = MaterialDashboardMovementData | MaterialDashboardGroupMovementData;
 export type DashboardHistoryDetailLike = MaterialDashboardMovementDetail | MaterialDashboardGroupMovementDetail;
-export type DashboardHouseComparisonLike = MaterialDashboardHouseComparisonData | MaterialDashboardGroupHouseComparisonData;
+export type DashboardHouseComparisonLike = MaterialDashboardMappedHouseComparisonData | MaterialDashboardGroupHouseComparisonData;
 
 export function isGroupRow(value: DashboardSelectionRow | null): value is MaterialStudyGroupRow {
   return Boolean(value && "group_id" in value);

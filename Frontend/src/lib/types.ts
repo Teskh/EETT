@@ -122,14 +122,83 @@ export type MaterialDashboardMovementData = {
   generated_at: string;
 };
 
+export type MaterialDashboardHouseSubType = {
+  id: number;
+  name: string;
+};
+
 export type MaterialDashboardHouseType = {
   id: number;
   name: string;
   number_of_modules: number;
+  sub_types?: MaterialDashboardHouseSubType[];
 };
 
 export type MaterialDashboardHouseTypesResponse = {
   house_types: MaterialDashboardHouseType[];
+};
+
+export type HouseTypeLink = {
+  id: number;
+  production_house_type_id: number;
+  production_sub_type_id: number | null;
+  production_house_type_name: string;
+  production_sub_type_name: string | null;
+  project_id: number;
+  project_name: string | null;
+  project_subtype_id: number | null;
+  project_subtype_name: string | null;
+  updated_at: string | null;
+};
+
+export type HouseTypeLinkPayload = {
+  production_house_type_id: number;
+  production_sub_type_id: number | null;
+  production_house_type_name: string;
+  production_sub_type_name: string | null;
+  project_id: number;
+  project_subtype_id: number | null;
+};
+
+export type LinkTargetProject = {
+  id: number;
+  name: string;
+  status: string;
+  subtypes: MaterialDashboardHouseSubType[];
+};
+
+export type HouseTypeLinksBundle = {
+  links: HouseTypeLink[];
+  house_types: MaterialDashboardHouseType[];
+  projects: LinkTargetProject[];
+  production_error: string | null;
+};
+
+export type ProductionHouseStart = {
+  work_order_id: number;
+  production_project_name: string;
+  house_identifier: string | null;
+  house_type_id: number;
+  house_type_name: string;
+  sub_type_id: number | null;
+  sub_type_name: string | null;
+  start_date: string;
+  mapped: boolean;
+  mapped_project_id: number | null;
+  mapped_project_name: string | null;
+  mapped_project_subtype_id: number | null;
+  mapped_project_subtype_name: string | null;
+  mapped_via_sub_type: boolean;
+};
+
+export type ProductionHouseStartsData = {
+  range_start: string;
+  range_end: string;
+  total_house_starts: number;
+  mapped_house_starts: number;
+  unmapped_house_starts: number;
+  houses: ProductionHouseStart[];
+  generated_at: string;
 };
 
 export type MaterialDashboardHouseComparisonPoint = {
@@ -165,16 +234,18 @@ export type MaterialDashboardEconomicMetric = {
 };
 
 export type MaterialDashboardEconomicMetricsResponse = {
-  house_type_id: number;
-  project_id: number | null;
   ceco_filters: string[];
   range_start: string | null;
   range_end: string | null;
   total_house_starts: number;
+  total_mapped_house_starts: number;
+  link_count: number;
   metrics: MaterialDashboardEconomicMetric[];
   generated_at: string;
 };
 
+// Legacy single-house-type comparison shape, still returned by the cost
+// model's /study endpoint. The material dashboard now uses the mapped shape.
 export type MaterialDashboardHouseComparisonData = {
   sku: string;
   house_type_id: number;
@@ -190,6 +261,53 @@ export type MaterialDashboardHouseComparisonData = {
   latest_house_start_date: string | null;
   project_comparison: MaterialDashboardProjectComparison | null;
   points: MaterialDashboardHouseComparisonPoint[];
+  generated_at: string;
+};
+
+export type MaterialDashboardMappedHouseComparisonPoint = {
+  date: string;
+  material_quantity: number;
+  house_starts: number;
+  mapped_house_starts: number;
+  expected_material_quantity: number;
+  cumulative_material_quantity: number;
+  cumulative_house_starts: number;
+  cumulative_mapped_house_starts: number;
+  cumulative_expected_material_quantity: number;
+  material_per_house: number | null;
+};
+
+export type MaterialDashboardMappedProject = {
+  project_id: number;
+  project_name: string;
+};
+
+export type MaterialDashboardUnmappedStarts = {
+  house_type_id: number;
+  house_type_name: string;
+  sub_type_id: number | null;
+  sub_type_name: string | null;
+  house_starts: number;
+};
+
+export type MaterialDashboardMappedHouseComparisonData = {
+  sku: string;
+  movement_days: number;
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  total_material_quantity: number;
+  total_house_starts: number;
+  total_mapped_house_starts: number;
+  total_unmapped_house_starts: number;
+  total_expected_material_quantity: number;
+  material_per_house: number | null;
+  expected_material_per_mapped_house: number | null;
+  latest_house_start_date: string | null;
+  link_count: number;
+  mapped_projects: MaterialDashboardMappedProject[];
+  unmapped_summary: MaterialDashboardUnmappedStarts[];
+  points: MaterialDashboardMappedHouseComparisonPoint[];
   generated_at: string;
 };
 
@@ -347,7 +465,7 @@ export type MaterialDashboardGroupMovementData = {
   generated_at: string;
 };
 
-export type MaterialDashboardGroupHouseComparisonData = MaterialDashboardHouseComparisonData & {
+export type MaterialDashboardGroupHouseComparisonData = MaterialDashboardMappedHouseComparisonData & {
   group_id: number;
   group_name: string;
   description: string | null;
