@@ -27,10 +27,22 @@ from app.services.erp import (
     get_purchase_order_price_stats_for_products,
     get_recent_movement_materials,
 )
-from app.services.production_dashboard import get_material_dashboard_house_start_summary
+from app.services.house_type_links import (
+    expected_quantities_for_link,
+    build_links_by_key,
+    build_mapped_house_comparison,
+    get_project_expected_quantity_maps,
+    house_type_links_fingerprint,
+    load_house_type_links,
+    resolve_house_type_link,
+)
+from app.services.production_dashboard import (
+    build_house_start_grid,
+    get_production_house_starts,
+)
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 7
+MATERIAL_DASHBOARD_CACHE_VERSION = 8
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -171,6 +183,106 @@ def get_material_dashboard_project_comparison(
             "predicted_quantity_per_house": round(predicted_quantity_per_house, 4),
             "projected_total_material_quantity": round(predicted_quantity_per_house * max(int(total_house_starts), 0), 4),
         },
+    }
+
+
+def get_material_dashboard_mapped_house_comparison(
+    settings: Settings,
+    *,
+    session: Session,
+    sku: str,
+    movements: list[dict],
+    sku_factors: dict[str, float] | None = None,
+    cost_centers: list[str] | None = None,
+    history_days: int = 90,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> dict:
+    """Compare actual movements against the consumption expected from every
+    house started in the window, resolved through the global house type →
+    project mapping. Houses without a mapping contribute to house-start counts
+    but not to expected consumption; they are surfaced in unmapped_summary."""
+
+    normalized_sku = sku.strip().upper()
+    production = get_production_house_starts(
+        settings,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        history_days=history_days,
+    )
+    start_grid = build_house_start_grid(production["houses"])
+    links = load_house_type_links(session)
+    links_by_key = build_links_by_key(links)
+    expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
+
+    comparison = build_mapped_house_comparison(
+        movements=movements,
+        start_grid=start_grid,
+        links_by_key=links_by_key,
+        expected_maps=expected_maps,
+        sku_factors=sku_factors if sku_factors is not None else {normalized_sku: 1.0},
+        start_day=date.fromisoformat(production["range_start"]),
+        end_day=date.fromisoformat(production["range_end"]),
+    )
+    comparison.update(
+        {
+            "sku": normalized_sku,
+            "ceco_filters": list(cost_centers or []),
+            "link_count": len(links),
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+    )
+    return comparison
+
+
+def get_production_house_starts_with_links(
+    settings: Settings,
+    *,
+    session: Session,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    history_days: int = 90,
+) -> dict:
+    """Produced houses in the window annotated with their mapping status, for
+    the production overview in the dashboard modal."""
+
+    production = get_production_house_starts(
+        settings,
+        start_date=start_date.isoformat() if start_date else None,
+        end_date=end_date.isoformat() if end_date else None,
+        history_days=history_days,
+    )
+    links_by_key = build_links_by_key(load_house_type_links(session))
+
+    houses = []
+    mapped_count = 0
+    for house in production["houses"]:
+        link = resolve_house_type_link(links_by_key, house["house_type_id"], house.get("sub_type_id"))
+        mapped = link is not None
+        if mapped:
+            mapped_count += 1
+        houses.append(
+            {
+                **house,
+                "mapped": mapped,
+                "mapped_project_id": link.project_id if link else None,
+                "mapped_project_name": link.project.name if link and link.project else None,
+                "mapped_project_subtype_id": link.project_subtype_id if link else None,
+                "mapped_project_subtype_name": link.project_subtype.name
+                if link and link.project_subtype
+                else None,
+                "mapped_via_sub_type": bool(link and link.production_sub_type_id is not None),
+            }
+        )
+
+    return {
+        "range_start": production["range_start"],
+        "range_end": production["range_end"],
+        "total_house_starts": len(houses),
+        "mapped_house_starts": mapped_count,
+        "unmapped_house_starts": len(houses) - mapped_count,
+        "houses": houses,
+        "generated_at": datetime.utcnow().isoformat(),
     }
 
 
@@ -393,10 +505,7 @@ def _build_recent_material_dashboard(
 def get_material_dashboard_economic_metrics(
     settings: Settings,
     *,
-    house_type_id: int,
-    project_id: int | None = None,
-    project_quantity_by_sku: dict[str, float] | None = None,
-    session: Session | None = None,
+    session: Session,
     movement_days: int = 90,
     start_date: date | None = None,
     end_date: date | None = None,
@@ -413,17 +522,12 @@ def get_material_dashboard_economic_metrics(
     movement_window_days = max((requested_end_day - requested_start_day).days + 1, 1)
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
     normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
-    normalized_project_quantities = {
-        str(sku).strip().upper(): round(float(quantity), 4)
-        for sku, quantity in (project_quantity_by_sku or {}).items()
-        if str(sku).strip()
-    }
+    links_fingerprint = house_type_links_fingerprint(session)
     cache_key = _dashboard_cache_key(
         {
             "cecos": normalized_cost_centers,
             "excluded_cecos": normalized_excluded_cost_centers,
-            "house_type_id": int(house_type_id),
-            "project_id": project_id,
+            "links": links_fingerprint,
             "movement_days": movement_window_days,
             "start_date": requested_start_day.isoformat(),
             "end_date": requested_end_day.isoformat(),
@@ -441,14 +545,37 @@ def get_material_dashboard_economic_metrics(
             excluded_cost_centers=normalized_excluded_cost_centers,
             force_refresh=force_refresh,
         )
-        house_start_summary = get_material_dashboard_house_start_summary(
+        production = get_production_house_starts(
             settings,
-            house_type_id=int(house_type_id),
-            cost_centers=normalized_cost_centers,
-            history_days=movement_window_days,
             start_date=requested_start_day.isoformat(),
             end_date=requested_end_day.isoformat(),
+            history_days=movement_window_days,
         )
+        start_grid = build_house_start_grid(production["houses"])
+        links_by_key = build_links_by_key(load_house_type_links(session))
+        expected_maps = get_project_expected_quantity_maps(
+            session, {link.project_id for link in links_by_key.values()}
+        )
+
+        # Expected consumption per SKU across every mapped house started in
+        # the window (general + sub-type quantities per house).
+        expected_total_by_sku: dict[str, float] = defaultdict(float)
+        per_link_quantities: dict[tuple[int, int | None], dict[str, float]] = {}
+        total_house_starts = 0
+        total_mapped_house_starts = 0
+        for grid_row in start_grid:
+            count = int(grid_row.get("house_starts") or 0)
+            total_house_starts += count
+            link = resolve_house_type_link(links_by_key, grid_row["house_type_id"], grid_row.get("sub_type_id"))
+            if link is None:
+                continue
+            total_mapped_house_starts += count
+            link_key = (link.production_house_type_id, link.production_sub_type_id)
+            if link_key not in per_link_quantities:
+                per_link_quantities[link_key] = expected_quantities_for_link(link, expected_maps)
+            for sku, quantity in per_link_quantities[link_key].items():
+                expected_total_by_sku[sku] += quantity * count
+
         sku_codes = [str(row.get("sku") or "").strip().upper() for row in dashboard.get("materials", [])]
         try:
             prices_by_sku = get_average_prices_for_products(settings, sku_codes)
@@ -458,14 +585,18 @@ def get_material_dashboard_economic_metrics(
             purchase_price_stats_by_sku = get_purchase_order_price_stats_for_products(settings, sku_codes)
         except RuntimeError:
             purchase_price_stats_by_sku = {sku: {} for sku in sku_codes}
-        total_house_starts = int(house_start_summary.get("total_house_starts") or 0)
         metrics: list[dict] = []
 
         for row in dashboard.get("materials", []):
             sku = str(row.get("sku") or "").strip().upper()
             movement_quantity = float(row.get("movement_quantity_60d") or 0.0)
             material_per_house = round(movement_quantity / total_house_starts, 4) if total_house_starts > 0 else None
-            predicted_quantity_per_house = normalized_project_quantities.get(sku)
+            expected_total = expected_total_by_sku.get(sku)
+            predicted_quantity_per_house = (
+                round(expected_total / total_mapped_house_starts, 4)
+                if expected_total is not None and total_mapped_house_starts > 0
+                else None
+            )
             average_price = prices_by_sku.get(sku)
             purchase_price_stats = purchase_price_stats_by_sku.get(sku) or {}
             last_purchase_price = _coerce_float(purchase_price_stats.get("last_purchase_price"))
@@ -491,14 +622,16 @@ def get_material_dashboard_economic_metrics(
                 if purchase_price_delta is not None and predicted_quantity_per_house is not None
                 else None
             )
+            # Deltas compare window totals (actual vs. expected from mapped
+            # houses); the cost delta is then normalized per started house.
             consumption_delta_percent = (
-                round(((material_per_house - predicted_quantity_per_house) / predicted_quantity_per_house) * 100, 4)
-                if material_per_house is not None and predicted_quantity_per_house not in (None, 0)
+                round(((movement_quantity - expected_total) / expected_total) * 100, 4)
+                if expected_total not in (None, 0)
                 else None
             )
             consumption_cost_delta_per_house = (
-                round((material_per_house - predicted_quantity_per_house) * average_price, 4)
-                if material_per_house is not None and predicted_quantity_per_house is not None and average_price is not None
+                round(((movement_quantity - expected_total) * average_price) / total_house_starts, 4)
+                if expected_total is not None and average_price is not None and total_house_starts > 0
                 else None
             )
             metrics.append(
@@ -520,12 +653,12 @@ def get_material_dashboard_economic_metrics(
             )
 
         return {
-            "house_type_id": int(house_type_id),
-            "project_id": int(project_id) if project_id is not None else None,
             "ceco_filters": list(normalized_cost_centers),
-            "range_start": house_start_summary.get("range_start"),
-            "range_end": house_start_summary.get("range_end"),
+            "range_start": production.get("range_start"),
+            "range_end": production.get("range_end"),
             "total_house_starts": total_house_starts,
+            "total_mapped_house_starts": total_mapped_house_starts,
+            "link_count": len(links_by_key),
             "metrics": metrics,
             "generated_at": datetime.utcnow().isoformat(),
         }

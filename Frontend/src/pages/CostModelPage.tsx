@@ -19,7 +19,6 @@ import {
   detailCacheKey,
   economicMetricsCacheKey,
   historyCacheKey,
-  houseComparisonCacheKey,
 } from "../lib/materialDashboardCacheKeys";
 import type {
   CostModelAdjustment,
@@ -391,6 +390,10 @@ function metricKeyForSku(sku: string) {
   return sku.trim().toUpperCase();
 }
 
+function studyComparisonCacheKey(sku: string, houseTypeId: number, range: HouseRange, projectId: number | null) {
+  return `study-houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}`;
+}
+
 function flattenProjects(board: ProjectsBoardData | null) {
   if (!board) {
     return [] as ProjectSummary[];
@@ -746,10 +749,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   }, [allProjects, projectId]);
 
   const economicMetricsKey = useMemo(
-    () =>
-      selectedHouseTypeId && selectedProjectId !== null
-        ? economicMetricsCacheKey(selectedHouseTypeId, [], houseRange, selectedProjectId)
-        : null,
+    () => (selectedHouseTypeId && selectedProjectId !== null ? economicMetricsCacheKey([], houseRange) : null),
     [houseRange, selectedHouseTypeId, selectedProjectId],
   );
 
@@ -849,10 +849,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       }
       try {
         const response = await api.getMaterialDashboardEconomicMetrics(
-          selectedHouseTypeId,
           {},
           {
-            projectId: selectedProjectId,
             startDate: houseRange.startDate,
             endDate: houseRange.endDate,
           },
@@ -1586,7 +1584,7 @@ function ConsumptionStudyWrapper({
   const detailKey = useMemo(() => (target ? detailCacheKey(target.row.sku, []) : null), [target?.row.sku]);
   const historyKey = useMemo(() => (target ? historyCacheKey(target.row.sku, [], houseRange) : null), [houseRange, target?.row.sku]);
   const comparisonKey = useMemo(
-    () => (target && selectedHouseTypeId ? houseComparisonCacheKey(target.row.sku, selectedHouseTypeId, [], houseRange, projectId) : null),
+    () => (target && selectedHouseTypeId ? studyComparisonCacheKey(target.row.sku, selectedHouseTypeId, houseRange, projectId) : null),
     [houseRange, projectId, selectedHouseTypeId, target?.row.sku],
   );
   const selectedHouseType = useMemo(
@@ -1748,7 +1746,7 @@ function ConsumptionStudyWrapper({
     }
     const prefetchDetailKey = detailCacheKey(prefetchTarget.row.sku, []);
     const prefetchHistoryKey = historyCacheKey(prefetchTarget.row.sku, [], houseRange);
-    const prefetchComparisonKey = houseComparisonCacheKey(prefetchTarget.row.sku, selectedHouseTypeId, [], houseRange, projectId);
+    const prefetchComparisonKey = studyComparisonCacheKey(prefetchTarget.row.sku, selectedHouseTypeId, houseRange, projectId);
     const prefetchKey = `${prefetchDetailKey}::${prefetchHistoryKey}::${prefetchComparisonKey}`;
     if (prefetchedStudyKeysRef.current.has(prefetchKey)) {
       return;

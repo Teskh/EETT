@@ -25,9 +25,11 @@ import type {
   LoginRequest,
   ManagedUser,
   MaterialCalculationSheet,
+  HouseTypeLinkPayload,
+  HouseTypeLinksBundle,
   MaterialDashboardCecoResponse,
   MaterialDashboardEconomicMetricsResponse,
-  MaterialDashboardHouseComparisonData,
+  MaterialDashboardMappedHouseComparisonData,
   MaterialDashboardGroupDetailData,
   MaterialDashboardGroupHouseComparisonData,
   MaterialDashboardGroupMovementData,
@@ -43,6 +45,7 @@ import type {
   MaterialStudyGroupPayload,
   MaterialStudyGroupRow,
   MutationResult,
+  ProductionHouseStartsData,
   InstanceSyncPreview,
   ProjectDetailData,
   ProjectComment,
@@ -418,7 +421,6 @@ export const api = {
   },
   getMaterialStudyGroupHouseComparison(
     groupId: number,
-    houseTypeId: number,
     filters: MaterialDashboardFilterSelection = {},
     options: MaterialDashboardRequestOptions = {},
   ) {
@@ -426,8 +428,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
-        house_type_id: houseTypeId,
-        project_id: options.projectId ?? null,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),
@@ -456,21 +456,34 @@ export const api = {
   },
   getMaterialDashboardHouseComparison(
     sku: string,
-    houseTypeId: number,
     filters: MaterialDashboardFilterSelection = {},
     options: MaterialDashboardRequestOptions = {},
   ) {
-    return request<MaterialDashboardHouseComparisonData>(`/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison`, {
-      method: "POST",
-      body: JSON.stringify({
-        ...buildMaterialDashboardFilterPayload(filters),
-        house_type_id: houseTypeId,
-        project_id: options.projectId ?? null,
-        start_date: options.startDate ?? null,
-        end_date: options.endDate ?? null,
-        refresh: Boolean(options.refresh),
-      }),
+    return request<MaterialDashboardMappedHouseComparisonData>(
+      `/api/v1/dashboard/materials/${encodeURIComponent(sku)}/house-comparison`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...buildMaterialDashboardFilterPayload(filters),
+          start_date: options.startDate ?? null,
+          end_date: options.endDate ?? null,
+          refresh: Boolean(options.refresh),
+        }),
+      },
+    );
+  },
+  getHouseTypeLinks() {
+    return request<HouseTypeLinksBundle>("/api/v1/dashboard/house-type-links");
+  },
+  updateHouseTypeLinks(links: HouseTypeLinkPayload[]) {
+    return request<HouseTypeLinksBundle>("/api/v1/dashboard/house-type-links", {
+      method: "PUT",
+      body: JSON.stringify({ links }),
     });
+  },
+  getProductionHouseStarts(range: { startDate: string; endDate: string }) {
+    const params = new URLSearchParams({ start_date: range.startDate, end_date: range.endDate });
+    return request<ProductionHouseStartsData>(`/api/v1/dashboard/house-starts?${params.toString()}`);
   },
   getMaterialDashboardMaterialStudy(
     sku: string,
@@ -491,7 +504,6 @@ export const api = {
     });
   },
   getMaterialDashboardEconomicMetrics(
-    houseTypeId: number,
     filters: MaterialDashboardFilterSelection = {},
     options: MaterialDashboardRequestOptions = {},
   ) {
@@ -499,8 +511,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
-        house_type_id: houseTypeId,
-        project_id: options.projectId ?? null,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),

@@ -1,11 +1,11 @@
 import { memo, useEffect, useMemo, useState } from "react";
 
-import type { MaterialDashboardEconomicMetric, MaterialDashboardHouseType, ProjectSummary } from "../../../lib/types";
+import type { MaterialDashboardEconomicMetric, MaterialDashboardExpectedBreakdown } from "../../../lib/types";
 import {
+  clampHouseRange,
   getDefaultHouseRange,
   isDateWithinRange,
   isWeekend,
-  moveToNextBusinessDay,
   moveToPreviousBusinessDay,
   toDateInputValue,
   toStartOfDay,
@@ -59,7 +59,9 @@ import {
   getSeriesSummary,
 } from "../stockSeries";
 import { useChartSelection } from "../useChartSelection";
+import type { HouseViewMode } from "../preferences";
 
+import type { HouseLinksModalTab } from "./HouseLinksModal";
 import { MetricRow, PurchaseOrderHoverValue } from "./Metrics";
 import { MovementBreakdownList } from "./MovementBreakdownList";
 import { TrendChartSkeleton } from "./Skeletons";
@@ -67,8 +69,6 @@ import { HouseTrendChart, StockTrendChart } from "./TrendCharts";
 
 type PriceDisplayMode = "average" | "last";
 
-const SELECT_CLASSES =
-  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors";
 const RANGE_DATE_INPUT_CLASSES =
   "w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]";
 
@@ -97,6 +97,48 @@ function HeaderStatLabel({ children }: { children: React.ReactNode }) {
 
 function HeaderStatDivider() {
   return <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />;
+}
+
+function getExpectedBreakdownLabel(row: MaterialDashboardExpectedBreakdown) {
+  return row.sub_type_name ? `${row.house_type_name} · ${row.sub_type_name}` : row.house_type_name;
+}
+
+function ExpectedBreakdownTooltip({
+  breakdown,
+  digits,
+}: {
+  breakdown: MaterialDashboardExpectedBreakdown[];
+  digits: number;
+}) {
+  if (!breakdown.length) {
+    return null;
+  }
+  const visibleRows = breakdown.slice(0, 8);
+  const hiddenCount = breakdown.length - visibleRows.length;
+
+  return (
+    <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-80 translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/estimate:translate-y-0 group-hover/estimate:opacity-100 group-focus-within/estimate:translate-y-0 group-focus-within/estimate:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
+      <div className="mb-2 flex items-center justify-between gap-3 border-b border-black/5 pb-2 dark:border-white/10">
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Promedio ponderado</span>
+        <span className="text-[10px] font-semibold text-zinc-400">viv. vinculadas</span>
+      </div>
+      <div className="space-y-1.5">
+        {visibleRows.map((row) => (
+          <div
+            key={`${row.house_type_id}-${row.sub_type_id ?? "general"}`}
+            className="grid grid-cols-[1fr_auto_auto] items-baseline gap-3 text-xs"
+          >
+            <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-100" title={getExpectedBreakdownLabel(row)}>
+              {getExpectedBreakdownLabel(row)}
+            </span>
+            <span className="font-mono text-zinc-500 dark:text-zinc-400">{formatNumber(row.house_starts, 0)} viv.</span>
+            <span className="font-mono text-zinc-900 dark:text-white">{formatNumber(row.expected_quantity_per_house, digits)}/viv.</span>
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} tipos mas</div> : null}
+    </div>
+  );
 }
 
 function ProcurementMetricsPanel({
@@ -280,13 +322,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   selected,
   detail,
   history,
-  houseTypes,
-  projects,
-  selectedHouseTypeId,
-  selectedProjectId,
+  houseViewMode,
+  onHouseViewModeChange,
+  onOpenLinksModal,
   leadTimeMode,
-  onSelectHouseType,
-  onSelectProject,
   onLeadTimeModeChange,
   houseRange,
   onHouseRangeChange,
@@ -304,13 +343,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   selected: DashboardSelectionRow | null;
   detail: DashboardDetailLike | null;
   history: DashboardHistoryLike | null;
-  houseTypes: MaterialDashboardHouseType[];
-  projects: ProjectSummary[];
-  selectedHouseTypeId: number | null;
-  selectedProjectId: number | null;
+  houseViewMode: HouseViewMode;
+  onHouseViewModeChange: (mode: HouseViewMode) => void;
+  onOpenLinksModal: (tab: HouseLinksModalTab) => void;
   leadTimeMode: LeadTimeMode;
-  onSelectHouseType: (houseTypeId: number | null) => void;
-  onSelectProject: (projectId: number | null) => void;
   onLeadTimeModeChange: (mode: LeadTimeMode) => void;
   houseRange: HouseRange;
   onHouseRangeChange: (range: HouseRange) => void;
@@ -329,18 +365,23 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const [isEditingBufferWeeks, setIsEditingBufferWeeks] = useState(false);
   const [isEditingLeadTimeMode, setIsEditingLeadTimeMode] = useState(false);
   const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("average");
+  const [draftRange, setDraftRange] = useState<HouseRange>(houseRange);
   const selectedGroup = isGroupRow(selected) ? selected : null;
   const groupSelection = Boolean(selectedGroup);
 
   const latestHouseRangeDate = moveToPreviousBusinessDay(new Date());
   const latestHouseRangeValue = toDateInputValue(latestHouseRangeDate);
-  const selectedHouseType = houseTypes.find((houseType) => houseType.id === selectedHouseTypeId) || null;
+  const housesMode = houseViewMode === "houses";
+
+  useEffect(() => {
+    setDraftRange(houseRange);
+  }, [houseRange.startDate, houseRange.endDate]);
 
   const houseComparisonInRange = useMemo(
     () => getHouseComparisonForRange(houseComparison, houseRange),
     [houseComparison, houseRange],
   );
-  const projectComparisonInRange = houseComparisonInRange?.project_comparison ?? null;
+  const hasExpectedComparison = Boolean(houseComparisonInRange && houseComparisonInRange.link_count > 0);
   const weekdayHouseComparison = useMemo(
     () =>
       houseComparisonInRange
@@ -389,14 +430,14 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     [weekdayHouseComparison, houseStockSeries, houseRangeEndStockValue, detail?.stock_on_hand, projectedStockByDay],
   );
 
-  const activeChart = selectedHouseType ? houseChart : stockRangeChart;
+  const activeChart = housesMode ? houseChart : stockRangeChart;
   const { activeSelection, hoveredPointIndex, clearSelection, reset, pointerHandlers } = useChartSelection(activeChart);
 
   useEffect(() => {
     reset();
     setIsEditingBufferWeeks(false);
     setIsEditingLeadTimeMode(false);
-  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, selectedHouseTypeId, selectedProjectId, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
+  }, [selected?.sku, history?.generated_at, detail?.stock_on_hand, houseViewMode, houseComparison?.generated_at, houseRange.startDate, houseRange.endDate]);
 
   if (!selected) {
     return <NoSelectionPlaceholder />;
@@ -414,14 +455,14 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const hoveredHousePoint = houseChart && hoveredPointIndex !== null ? houseChart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
   const isBlockingLoad = !historyError && (!detail || !history);
-  const isHouseBlockingLoad = !historyError && !houseComparisonError && Boolean(selectedHouseType) && (!detail || !history || !houseComparison);
+  const isHouseBlockingLoad = !historyError && !houseComparisonError && housesMode && (!detail || !history || !houseComparison);
   const isRefreshing = detailRefreshing || historyRefreshing;
 
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
   const leadTimeReference = getLeadTimeReference(detail, leadTimeMode);
   const purchaseOrderEstimate = getPurchaseOrderEstimate({
     detail,
-    summary: selectedHouseType ? houseStockSummary : stockSummary,
+    summary: housesMode ? houseStockSummary : stockSummary,
     leadTimeReference,
     isCustomSelection,
     bufferWeeks,
@@ -430,10 +471,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     detail,
     leadTimeReference,
     estimatedConsumptionPerWeek:
-      selectedHouseType && projectComparisonInRange
+      housesMode && hasExpectedComparison && houseComparisonInRange
         ? isCustomSelection
           ? houseSummary?.averageProjectedConsumptionPerWeek ?? null
-          : projectComparisonInRange.projected_total_material_quantity / Math.max((houseChart?.points.length ?? 0) / 5, 0.2)
+          : houseComparisonInRange.total_expected_material_quantity / Math.max((houseChart?.points.length ?? 0) / 5, 0.2)
         : null,
     isCustomSelection,
     bufferWeeks,
@@ -441,10 +482,21 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
 
   const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
   const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
-  const canInspectProjectUsage = Boolean(selectedProjectId && !groupSelection && onInspectProjectUsage);
+  const canInspectProjectUsage = Boolean(!groupSelection && onInspectProjectUsage);
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
   const actualConsumptionPerHouse = houseSummary?.averageConsumptionPerHouse ?? houseComparisonInRange?.material_per_house ?? null;
-  const projectedConsumptionPerHouse = projectComparisonInRange?.predicted_quantity_per_house ?? null;
+  const projectedConsumptionPerHouse = hasExpectedComparison
+    ? houseSummary?.expectedConsumptionPerMappedHouse ?? houseComparisonInRange?.expected_material_per_mapped_house ?? null
+    : null;
+  const projectedConsumptionBreakdown = hasExpectedComparison
+    ? houseSummary?.expectedBreakdown ?? houseComparisonInRange?.expected_breakdown ?? []
+    : [];
+  const actualConsumptionTotal = houseSummary?.materialConsumed ?? houseComparisonInRange?.total_material_quantity ?? null;
+  const expectedConsumptionTotal = hasExpectedComparison
+    ? houseSummary?.projectedMaterialConsumed ?? houseComparisonInRange?.total_expected_material_quantity ?? null
+    : null;
+  const housesProducedInRange = houseSummary?.housesProduced ?? houseComparisonInRange?.total_house_starts ?? null;
+  const unmappedStartsInRange = houseComparisonInRange?.total_unmapped_house_starts ?? 0;
   const purchaseOrders = detail && "purchase_orders" in detail ? detail.purchase_orders : [];
   const purchasePriceStats = groupSelection ? null : getPurchaseOrderPriceStats(purchaseOrders);
   const priceVolatility = !groupSelection
@@ -461,61 +513,57 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
       ? lastPurchasePrice ?? purchasePriceStats?.lastPrice ?? null
       : detail?.average_price ?? null;
   const houseMetricDigits = getAdaptiveDecimalPlaces(actualConsumptionPerHouse, projectedConsumptionPerHouse);
+  // Deltas compare range totals: real consumption covers every house started,
+  // expected consumption only the mapped ones, so per-house ratios would mix
+  // denominators.
   const consumptionDeltaPercent =
-    actualConsumptionPerHouse !== null && projectedConsumptionPerHouse && projectedConsumptionPerHouse !== 0
-      ? ((actualConsumptionPerHouse - projectedConsumptionPerHouse) / projectedConsumptionPerHouse) * 100
+    actualConsumptionTotal !== null && expectedConsumptionTotal !== null && expectedConsumptionTotal !== 0
+      ? ((actualConsumptionTotal - expectedConsumptionTotal) / expectedConsumptionTotal) * 100
       : null;
   const consumptionCostDeltaPerHouse =
-    actualConsumptionPerHouse !== null &&
-    projectedConsumptionPerHouse !== null &&
+    actualConsumptionTotal !== null &&
+    expectedConsumptionTotal !== null &&
+    housesProducedInRange !== null &&
+    housesProducedInRange > 0 &&
     detail?.average_price !== null &&
     detail?.average_price !== undefined
-      ? (actualConsumptionPerHouse - projectedConsumptionPerHouse) * detail.average_price
+      ? ((actualConsumptionTotal - expectedConsumptionTotal) * detail.average_price) / housesProducedInRange
       : null;
-  const activeMovementRangeStart = selectedHouseType
+  const activeMovementRangeStart = housesMode
     ? houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate
     : stockSummary?.start.date ?? houseRange.startDate;
-  const activeMovementRangeEnd = selectedHouseType
+  const activeMovementRangeEnd = housesMode
     ? houseSummary?.end.date ?? houseComparisonInRange?.range_end ?? houseRange.endDate
     : stockSummary?.end.date ?? houseRange.endDate;
   const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
     isDateWithinRange(movement.date, activeMovementRangeStart, activeMovementRangeEnd),
   );
 
-  function handleHouseRangeStartChange(value: string) {
-    if (!value) {
-      return;
+  // Range edits stay in draftRange until the range is complete: picking a
+  // start date alone must not reload the dashboard (the end date comes next).
+  const isDraftRangeDirty = draftRange.startDate !== houseRange.startDate || draftRange.endDate !== houseRange.endDate;
+
+  function applyDraftRange(range: HouseRange) {
+    const clamped = clampHouseRange(range);
+    setDraftRange(clamped);
+    if (clamped.startDate !== houseRange.startDate || clamped.endDate !== houseRange.endDate) {
+      onHouseRangeChange(clamped);
     }
-    let nextStart = moveToNextBusinessDay(toStartOfDay(value));
-    let nextEnd = toStartOfDay(houseRange.endDate);
-    if (nextStart.getTime() > latestHouseRangeDate.getTime()) {
-      nextStart = latestHouseRangeDate;
-    }
-    if (nextStart.getTime() > nextEnd.getTime()) {
-      nextEnd = new Date(nextStart);
-    }
-    onHouseRangeChange({
-      startDate: toDateInputValue(nextStart),
-      endDate: toDateInputValue(nextEnd),
-    });
   }
 
-  function handleHouseRangeEndChange(value: string) {
+  function handleDraftStartChange(value: string) {
     if (!value) {
       return;
     }
-    let nextStart = toStartOfDay(houseRange.startDate);
-    let nextEnd = moveToPreviousBusinessDay(toStartOfDay(value));
-    if (nextEnd.getTime() > latestHouseRangeDate.getTime()) {
-      nextEnd = latestHouseRangeDate;
+    setDraftRange((current) => ({ ...current, startDate: value }));
+  }
+
+  function handleDraftEndChange(value: string) {
+    if (!value) {
+      return;
     }
-    if (nextEnd.getTime() < nextStart.getTime()) {
-      nextStart = new Date(nextEnd);
-    }
-    onHouseRangeChange({
-      startDate: toDateInputValue(nextStart),
-      endDate: toDateInputValue(nextEnd),
-    });
+    // Choosing the end date completes the range, so apply immediately.
+    applyDraftRange({ startDate: draftRange.startDate, endDate: value });
   }
 
   return (
@@ -557,10 +605,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
         </div>
         <div className="flex gap-6 items-end">
           <div className="text-right">
-            <HeaderStatLabel>{selectedHouseType ? "Cons./Vivienda" : "Stock Disponible"}</HeaderStatLabel>
+            <HeaderStatLabel>{housesMode ? "Cons./Vivienda" : "Stock Disponible"}</HeaderStatLabel>
             <div className="flex items-center justify-end gap-2">
               <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-                {selectedHouseType
+                {housesMode
                   ? houseSummary
                     ? formatNumber(houseSummary.averageConsumptionPerHouse, houseMetricDigits)
                     : houseComparisonInRange
@@ -574,7 +622,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                       ? "..."
                       : "—"}
               </div>
-              {selectedHouseType && projectComparisonInRange && consumptionDeltaPercent !== null ? (
+              {housesMode && consumptionDeltaPercent !== null ? (
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
                     consumptionDeltaPercent > 0
@@ -583,6 +631,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                         ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
                         : "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
                   }`}
+                  title="Diferencia entre el consumo real total y el consumo estimado de las viviendas vinculadas en el rango"
                 >
                   <span>{consumptionDeltaPercent > 0 ? "↑" : consumptionDeltaPercent < 0 ? "↓" : "→"}</span>
                   <span>{percentFormatter.format(Math.abs(consumptionDeltaPercent))}%</span>
@@ -590,18 +639,24 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
               ) : null}
             </div>
           </div>
-          {selectedHouseType && projectComparisonInRange ? (
+          {housesMode && projectedConsumptionPerHouse !== null ? (
             <>
               <HeaderStatDivider />
-              <div className="text-right">
-                <HeaderStatLabel>Proy./Vivienda</HeaderStatLabel>
+              <div className="group/estimate relative text-right" tabIndex={0}>
+                <HeaderStatLabel>
+                  <span className="inline-flex items-center gap-1">
+                    Est./Vivienda
+                    {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
+                  </span>
+                </HeaderStatLabel>
                 <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
-                  {formatNumber(projectComparisonInRange.predicted_quantity_per_house, houseMetricDigits)}
+                  {formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}
                 </div>
+                <ExpectedBreakdownTooltip breakdown={projectedConsumptionBreakdown} digits={houseMetricDigits} />
               </div>
             </>
           ) : null}
-          {selectedHouseType && projectComparisonInRange && consumptionCostDeltaPerHouse !== null ? (
+          {housesMode && consumptionCostDeltaPerHouse !== null ? (
             <>
               <HeaderStatDivider />
               <div className="text-right">
@@ -684,98 +739,81 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           <div className="flex items-start justify-between mb-2 gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
-                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                  {selectedHouseType
-                    ? isCustomSelection
-                      ? "Período de Viviendas Seleccionado"
-                      : houseChart
-                        ? `Tendencia de Viviendas de ${houseChart.points.length} Días Hábiles`
-                        : "Tendencia de Viviendas"
-                    : isCustomSelection
-                      ? "Período de Stock Seleccionado"
-                      : stockRangeChart
-                        ? `Tendencia de Stock de ${stockRangeChart.points.length} Días Hábiles`
-                        : "Tendencia de Stock"}
-                </h3>
-                <select
-                  value={selectedHouseTypeId === null ? "none" : String(selectedHouseTypeId)}
-                  onChange={(event) => onSelectHouseType(event.target.value === "none" ? null : Number(event.target.value))}
-                  className={SELECT_CLASSES}
-                >
-                  <option value="none">Ninguno</option>
-                  {houseTypes.map((houseType) => (
-                    <option key={houseType.id} value={houseType.id}>
-                      {houseType.name}
-                    </option>
+                <div className="inline-flex rounded-full border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
+                  {([
+                    { mode: "houses" as HouseViewMode, label: "Viviendas" },
+                    { mode: "stock" as HouseViewMode, label: "Stock" },
+                  ]).map(({ mode, label }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => onHouseViewModeChange(mode)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                        houseViewMode === mode
+                          ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-white"
+                          : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                      }`}
+                    >
+                      {label}
+                    </button>
                   ))}
-                </select>
-                <select
-                  value={selectedProjectId ?? ""}
-                  onChange={(event) => onSelectProject(event.target.value ? Number(event.target.value) : null)}
-                  className={SELECT_CLASSES}
-                >
-                  <option value="">Sin proyecto</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
+                </div>
                 <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1.5 py-1 dark:border-white/10 dark:bg-white/[0.03]">
                   <input
                     type="date"
-                    value={houseRange.startDate}
-                    max={houseRange.endDate}
-                    onChange={(event) => handleHouseRangeStartChange(event.target.value)}
+                    value={draftRange.startDate}
+                    max={draftRange.endDate}
+                    onChange={(event) => handleDraftStartChange(event.target.value)}
                     aria-label="Fecha de inicio"
                     className={RANGE_DATE_INPUT_CLASSES}
                   />
                   <span className="text-[11px] text-zinc-400">-</span>
                   <input
                     type="date"
-                    value={houseRange.endDate}
-                    min={houseRange.startDate}
+                    value={draftRange.endDate}
+                    min={draftRange.startDate}
                     max={latestHouseRangeValue}
-                    onChange={(event) => handleHouseRangeEndChange(event.target.value)}
+                    onChange={(event) => handleDraftEndChange(event.target.value)}
                     aria-label="Fecha de término"
                     className={RANGE_DATE_INPUT_CLASSES}
                   />
+                  {isDraftRangeDirty ? (
+                    <button
+                      type="button"
+                      onClick={() => applyDraftRange(draftRange)}
+                      className="rounded-full bg-accent-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-500"
+                    >
+                      Aplicar
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    onClick={() => onHouseRangeChange(getDefaultHouseRange())}
+                    onClick={() => applyDraftRange(getDefaultHouseRange())}
                     className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
                   >
                     90d
                   </button>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenLinksModal("links")}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-white/80 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:text-accent-300"
+                  title="Ver y editar la vinculación de tipos de vivienda con proyectos, y revisar los inicios del rango"
+                >
+                  <i className="ph-bold ph-link" />
+                  Vinculación
+                </button>
               </div>
-              {selectedHouseType ? (
-                <div className="mt-1 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
-                  <div className="flex items-center gap-2">
-                    <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
-                    <span>Stock de material</span>
-                  </div>
-                  {projectComparisonInRange ? (
-                    <div className="flex items-center gap-2">
-                      <span className="block h-0.5 w-6 rounded-full bg-emerald-500" />
-                      <span>{projectComparisonInRange.project_name}</span>
-                    </div>
-                  ) : null}
-                  <div className="flex items-center gap-2">
-                    <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
-                    <span>Inicios de vivienda restantes</span>
-                  </div>
-                </div>
-              ) : (
+              {!housesMode ? (
                 <p className="mt-1.5 text-xs text-zinc-500 max-w-sm">
                   Haz clic y arrastra sobre la curva para revisar la variación de stock y el consumo promedio en días hábiles. Se omiten los fines de semana.
                 </p>
-              )}
+              ) : null}
               {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando datos ERP en caché...</p> : null}
-              {houseComparisonRefreshing && selectedHouseType ? (
+              {houseComparisonRefreshing && housesMode ? (
                 <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando comparación de inicios de vivienda...</p>
               ) : null}
-              {houseComparisonError && selectedHouseType ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
+              {houseComparisonError && housesMode ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
             </div>
             {isCustomSelection ? (
               <div className="shrink-0">
@@ -791,7 +829,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           </div>
 
           <div className="flex-1 w-full relative min-h-[180px]">
-            {!selectedHouseType ? (
+            {!housesMode ? (
               isBlockingLoad ? (
                 <TrendChartSkeleton />
               ) : stockRangeChart ? (
@@ -816,9 +854,52 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                 pointerHandlers={pointerHandlers}
               />
             ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No hay datos de inicios de vivienda para este rango y tipo de vivienda.</div>
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No hay datos de inicios de vivienda para este rango.</div>
             )}
           </div>
+
+          {housesMode ? (
+            <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
+              <div className="flex items-center gap-2">
+                <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
+                <span>Stock de material</span>
+              </div>
+              {hasExpectedComparison ? (
+                <div className="flex items-center gap-2">
+                  <span className="block h-0.5 w-6 rounded-full bg-emerald-500" />
+                  <span>
+                    Stock proyectado según vinculación
+                    {houseComparisonInRange?.mapped_projects.length
+                      ? ` (${houseComparisonInRange.mapped_projects.map((project) => project.project_name).join(", ")})`
+                      : ""}
+                  </span>
+                </div>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
+                <span>Inicios de vivienda restantes</span>
+              </div>
+              {!hasExpectedComparison && houseComparisonInRange ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenLinksModal("links")}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                >
+                  ⚠ Sin vinculación configurada
+                </button>
+              ) : null}
+              {unmappedStartsInRange > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenLinksModal("starts")}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                  title="Estas viviendas cuentan como inicios pero no aportan consumo estimado"
+                >
+                  ⚠ {unmappedStartsInRange} {unmappedStartsInRange === 1 ? "inicio sin vincular" : "inicios sin vincular"}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           <MovementBreakdownList
             movements={filteredHouseMovementDetails}

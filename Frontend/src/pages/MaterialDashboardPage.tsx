@@ -5,7 +5,6 @@ import { MaterialStudyGroupEditor } from "../components/MaterialStudyGroupEditor
 import { ApiError, api } from "../lib/api";
 import {
   CECO_CACHE_KEY,
-  HOUSE_TYPES_CACHE_KEY,
   dashboardCacheKey,
   detailCacheKey,
   economicMetricsCacheKey,
@@ -18,6 +17,7 @@ import {
   normalizeCecos,
 } from "../lib/materialDashboardCacheKeys";
 import type {
+  HouseTypeLink,
   MaterialDashboardCeco,
   MaterialDashboardData,
   MaterialDashboardDetailData,
@@ -25,14 +25,13 @@ import type {
   MaterialDashboardGroupDetailData,
   MaterialDashboardGroupHouseComparisonData,
   MaterialDashboardGroupMovementData,
-  MaterialDashboardHouseComparisonData,
-  MaterialDashboardHouseType,
   MaterialDashboardListRow,
+  MaterialDashboardMappedHouseComparisonData,
   MaterialDashboardMovementData,
   MaterialStudyGroupListResponse,
-  ProjectsBoardData,
 } from "../lib/types";
 
+import { HouseLinksModal, type HouseLinksModalTab } from "./materialDashboard/components/HouseLinksModal";
 import { MovementHistoryCard } from "./materialDashboard/components/MovementHistoryCard";
 import { CecoResultsList, GroupResultsList, MaterialResultsList } from "./materialDashboard/components/ResultsLists";
 import {
@@ -59,6 +58,7 @@ import {
   saveCecoFilterPreferences,
   saveHouseViewPreferences,
   type CecoFilterMode,
+  type HouseViewMode,
 } from "./materialDashboard/preferences";
 import type { LeadTimeMode } from "./materialDashboard/procurement";
 import {
@@ -109,16 +109,18 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [materialSearch, setMaterialSearch] = useState("");
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT_STATE);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [selectedHouseTypeId, setSelectedHouseTypeId] = useState<number | null>(
-    () => storedHousePreferences?.selectedHouseTypeId ?? null,
-  );
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
-    () => storedHousePreferences?.selectedProjectId ?? null,
-  );
+  const [houseViewMode, setHouseViewMode] = useState<HouseViewMode>(() => storedHousePreferences?.houseViewMode ?? "houses");
   const [leadTimeMode, setLeadTimeMode] = useState<LeadTimeMode>(() => storedHousePreferences?.leadTimeMode ?? "worst");
   const [houseRange, setHouseRange] = useState<HouseRange>(() =>
     clampHouseRange(storedHousePreferences?.houseRange || getDefaultHouseRange()),
   );
+
+  // House type → project mapping (global, DB-stored). linksVersion bumps when
+  // the mapping is edited so comparison/economics resources refetch.
+  const [links, setLinks] = useState<HouseTypeLink[]>([]);
+  const [linksLoaded, setLinksLoaded] = useState(false);
+  const [linksVersion, setLinksVersion] = useState(0);
+  const [linksModal, setLinksModal] = useState<{ open: boolean; tab: HouseLinksModalTab }>({ open: false, tab: "links" });
 
   // UI state.
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
@@ -137,7 +139,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [erpMaterialSearchError, setErpMaterialSearchError] = useState<string | null>(null);
   const [externalMaterialRows, setExternalMaterialRows] = useState<Record<string, MaterialDashboardListRow>>({});
 
-  const [projectsBoard, setProjectsBoard] = useState<ProjectsBoardData | null>(null);
   const deferredMaterialSearch = useDeferredValue(materialSearch);
 
   const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
@@ -155,13 +156,27 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const cecos = useMemo(() => cecosResource.data ?? [], [cecosResource.data]);
   const cecoNameByCode = useMemo(() => new Map(cecos.map((ceco) => [ceco.code, ceco.name])), [cecos]);
 
-  const houseTypesResource = useDashboardResource<MaterialDashboardHouseType[]>({
-    cacheKey: HOUSE_TYPES_CACHE_KEY,
-    fetcher: async () => (await api.getMaterialDashboardHouseTypes()).house_types,
-    errorMessage: "No se pudieron cargar los tipos de vivienda.",
-    onError: () => setSelectedHouseTypeId(null),
-  });
-  const houseTypes = useMemo(() => houseTypesResource.data ?? [], [houseTypesResource.data]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadLinks() {
+      try {
+        const response = await api.getHouseTypeLinks();
+        if (!cancelled) {
+          setLinks(response.links);
+          setLinksLoaded(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setLinks([]);
+          setLinksLoaded(true);
+        }
+      }
+    }
+    void loadLinks();
+    return () => {
+      cancelled = true;
+    };
+  }, [linksVersion]);
 
   // In "exclude" mode the API receives the complement of the selection.
   const normalizedSelectedCecos =
@@ -277,54 +292,49 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     errorMessage: "No se pudo cargar el historial del grupo de materiales.",
   });
 
-  const houseComparisonResource = useDashboardResource<MaterialDashboardHouseComparisonData>({
-    cacheKey:
-      selectedMaterialSku && selectedHouseTypeId
-        ? houseComparisonCacheKey(selectedMaterialSku, selectedHouseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
-        : null,
-    enabled: !allCecosExcluded,
+  const housesMode = houseViewMode === "houses";
+  const houseComparisonResource = useDashboardResource<MaterialDashboardMappedHouseComparisonData>({
+    cacheKey: selectedMaterialSku
+      ? houseComparisonCacheKey(selectedMaterialSku, normalizedSelectedCecos, houseRange, linksVersion)
+      : null,
+    enabled: !allCecosExcluded && housesMode,
     refreshNonce,
     fetcher: (forceRefresh) =>
-      api.getMaterialDashboardHouseComparison(selectedMaterialSku!, selectedHouseTypeId!, cecoApiFilters, {
+      api.getMaterialDashboardHouseComparison(selectedMaterialSku!, cecoApiFilters, {
         refresh: forceRefresh,
         startDate: houseRange.startDate,
         endDate: houseRange.endDate,
-        projectId: selectedProjectId,
       }),
     errorMessage: "No se pudo cargar la comparación de inicios de vivienda.",
   });
 
   const groupHouseComparisonResource = useDashboardResource<MaterialDashboardGroupHouseComparisonData>({
-    cacheKey:
-      selectedGroupId && selectedHouseTypeId
-        ? groupHouseComparisonCacheKey(selectedGroupId, selectedHouseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
-        : null,
-    enabled: !allCecosExcluded,
+    cacheKey: selectedGroupId
+      ? groupHouseComparisonCacheKey(selectedGroupId, normalizedSelectedCecos, houseRange, linksVersion)
+      : null,
+    enabled: !allCecosExcluded && housesMode,
     refreshNonce,
     fetcher: (forceRefresh) =>
-      api.getMaterialStudyGroupHouseComparison(selectedGroupId!, selectedHouseTypeId!, cecoApiFilters, {
+      api.getMaterialStudyGroupHouseComparison(selectedGroupId!, cecoApiFilters, {
         refresh: forceRefresh,
         startDate: houseRange.startDate,
         endDate: houseRange.endDate,
-        projectId: selectedProjectId,
       }),
     errorMessage: "No se pudo cargar la comparación de inicios de vivienda del grupo.",
   });
 
-  const materialEconomicSortAvailable = Boolean(selectedHouseTypeId && selectedProjectId);
+  const materialEconomicSortAvailable = links.length > 0;
   const economicMetricsResource = useDashboardResource<MaterialDashboardEconomicMetricsResponse>({
-    cacheKey:
-      selectedHouseTypeId && selectedProjectId
-        ? economicMetricsCacheKey(selectedHouseTypeId, normalizedSelectedCecos, houseRange, selectedProjectId)
-        : null,
+    cacheKey: materialEconomicSortAvailable
+      ? economicMetricsCacheKey(normalizedSelectedCecos, houseRange, linksVersion)
+      : null,
     enabled: !allCecosExcluded && activeTab === "materials" && materialEconomicSortAvailable,
     refreshNonce,
     fetcher: (forceRefresh) =>
-      api.getMaterialDashboardEconomicMetrics(selectedHouseTypeId!, cecoApiFilters, {
+      api.getMaterialDashboardEconomicMetrics(cecoApiFilters, {
         refresh: forceRefresh,
         startDate: houseRange.startDate,
         endDate: houseRange.endDate,
-        projectId: selectedProjectId!,
       }),
     errorMessage: "No se pudieron cargar las métricas económicas.",
   });
@@ -371,36 +381,19 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const houseComparisonError = houseComparisonResource.error || groupHouseComparisonResource.error;
   const houseComparisonLoading = houseComparisonResource.loading || groupHouseComparisonResource.loading;
 
-  const projectOptions = useMemo(
-    () =>
-      Object.values(projectsBoard?.grouped_projects || {})
-        .flat()
-        .filter((project) => project.status === "execution")
-        .slice()
-        .sort((left, right) => left.name.localeCompare(right.name)),
-    [projectsBoard],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    async function loadProjects() {
-      try {
-        const response = await api.getProjects();
-        if (!cancelled) {
-          setProjectsBoard(response);
-        }
-      } catch {
-        if (!cancelled) {
-          setProjectsBoard({ grouped_projects: {}, status_labels: {} });
-          setSelectedProjectId(null);
-        }
-      }
+  // With the global mapping there is no single selected project; the project
+  // usage inspector stays available when the mapping targets exactly one.
+  const singleMappedProject = useMemo(() => {
+    const distinct = new Map<number, string>();
+    for (const link of links) {
+      distinct.set(link.project_id, link.project_name || `Proyecto ${link.project_id}`);
     }
-    void loadProjects();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (distinct.size !== 1) {
+      return null;
+    }
+    const [id, name] = [...distinct.entries()][0];
+    return { id, name };
+  }, [links]);
 
   // Drop selected CECOs that no longer exist in the ERP catalog.
   useEffect(() => {
@@ -422,34 +415,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   }, [cecoFilterMode, selectedCecos]);
 
   useEffect(() => {
-    saveHouseViewPreferences({ selectedHouseTypeId, selectedProjectId, leadTimeMode, houseRange });
-  }, [houseRange, leadTimeMode, selectedHouseTypeId, selectedProjectId]);
-
-  // Default to the first house type, unless the user explicitly chose "none".
-  useEffect(() => {
-    if (!houseTypes.length) {
-      return;
-    }
-    setSelectedHouseTypeId((current) =>
-      current === null
-        ? storedHousePreferences?.hasSelectedHouseTypePreference
-          ? null
-          : houseTypes[0].id
-        : houseTypes.some((houseType) => houseType.id === current)
-          ? current
-          : houseTypes[0].id,
-    );
-  }, [houseTypes, storedHousePreferences?.hasSelectedHouseTypePreference]);
-
-  useEffect(() => {
-    if (!projectsBoard || !selectedProjectId) {
-      return;
-    }
-    if (projectOptions.some((project) => project.id === selectedProjectId)) {
-      return;
-    }
-    setSelectedProjectId(null);
-  }, [projectOptions, projectsBoard, selectedProjectId]);
+    saveHouseViewPreferences({ houseViewMode, leadTimeMode, houseRange });
+  }, [houseRange, houseViewMode, leadTimeMode]);
 
   useEffect(() => {
     if (!isEconomicSortKey(sort.key) || materialEconomicSortAvailable) {
@@ -613,13 +580,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   }
 
   function handleOpenProjectUsage(row: MaterialDashboardListRow) {
-    if (!selectedProjectId) {
+    if (!singleMappedProject) {
       return;
     }
-    const projectName = projectOptions.find((project) => project.id === selectedProjectId)?.name || "Proyecto seleccionado";
     setProjectUsageTarget({
-      projectId: selectedProjectId,
-      projectName,
+      projectId: singleMappedProject.id,
+      projectName: singleMappedProject.name,
       material: row,
     });
   }
@@ -724,9 +690,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     {sort.direction === -1 ? "Desc" : "Asc"}
                   </button>
                 </div>
-                {!materialEconomicSortAvailable ? (
+                {linksLoaded && !materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
-                    Selecciona un tipo de vivienda y proyecto para mostrar ahorro y sobrecosto por vivienda en la lista, y ordenar por ese dato.
+                    Configura la vinculación de tipos de vivienda con proyectos (botón &quot;Vinculación&quot; junto al gráfico) para
+                    mostrar ahorro y sobrecosto por vivienda en la lista, y ordenar por ese dato.
                   </div>
                 ) : null}
                 {materialEconomicSortAvailable && economicMetricsResource.loading && !currentEconomicMetrics ? (
@@ -849,13 +816,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           selected={selectedRow}
           detail={selectedDetailLike}
           history={selectedHistoryLike}
-          houseTypes={houseTypes}
-          projects={projectOptions}
-          selectedHouseTypeId={selectedHouseTypeId}
-          selectedProjectId={selectedProjectId}
+          houseViewMode={houseViewMode}
+          onHouseViewModeChange={setHouseViewMode}
+          onOpenLinksModal={(tab) => setLinksModal({ open: true, tab })}
           leadTimeMode={leadTimeMode}
-          onSelectHouseType={setSelectedHouseTypeId}
-          onSelectProject={setSelectedProjectId}
           onLeadTimeModeChange={setLeadTimeMode}
           houseRange={houseRange}
           onHouseRangeChange={setHouseRange}
@@ -868,9 +832,18 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           historyError={historyError}
           houseComparisonError={houseComparisonError}
           economicMetric={selectedMaterialSku ? economicMetricsBySku.get(selectedMaterialSku) ?? null : null}
-          onInspectProjectUsage={selectedMaterialRow && selectedProjectId ? () => handleOpenProjectUsage(selectedMaterialRow) : null}
+          onInspectProjectUsage={selectedMaterialRow && singleMappedProject ? () => handleOpenProjectUsage(selectedMaterialRow) : null}
         />
       </main>
+
+      <HouseLinksModal
+        open={linksModal.open}
+        canEdit={canEditGroups}
+        range={houseRange}
+        initialTab={linksModal.tab}
+        onClose={() => setLinksModal((current) => ({ ...current, open: false }))}
+        onSaved={() => setLinksVersion((current) => current + 1)}
+      />
 
       {canEditGroups ? (
         <MaterialStudyGroupEditor
