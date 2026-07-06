@@ -1,4 +1,8 @@
-import type { MaterialDashboardMappedHouseComparisonData, MaterialDashboardMappedHouseComparisonPoint } from "../../lib/types";
+import type {
+  MaterialDashboardExpectedBreakdown,
+  MaterialDashboardMappedHouseComparisonData,
+  MaterialDashboardMappedHouseComparisonPoint,
+} from "../../lib/types";
 
 import { inclusiveDaySpan, toStartOfDay } from "./dates";
 import { getClampedSelectionBounds, type ChartSelection, type StockSeriesPoint, type StockTrendSummary } from "./stockSeries";
@@ -22,6 +26,33 @@ export type HouseComparisonChart = NonNullable<ReturnType<typeof buildHouseCompa
 
 function roundTo4(value: number) {
   return Math.round(value * 10000) / 10000;
+}
+
+function getExpectedBreakdownKey(row: MaterialDashboardExpectedBreakdown) {
+  return `${row.house_type_id}:${row.sub_type_id ?? "general"}`;
+}
+
+function aggregateExpectedBreakdown(points: MaterialDashboardMappedHouseComparisonPoint[]) {
+  const byKey = new Map<string, MaterialDashboardExpectedBreakdown>();
+  points.forEach((point) => {
+    (point.expected_breakdown || []).forEach((row) => {
+      const key = getExpectedBreakdownKey(row);
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.house_starts += row.house_starts;
+        existing.total_expected_material_quantity = roundTo4(existing.total_expected_material_quantity + row.total_expected_material_quantity);
+        return;
+      }
+      byKey.set(key, { ...row });
+    });
+  });
+
+  return Array.from(byKey.values()).sort(
+    (a, b) =>
+      b.house_starts - a.house_starts ||
+      a.house_type_name.localeCompare(b.house_type_name) ||
+      (a.sub_type_name || "").localeCompare(b.sub_type_name || ""),
+  );
 }
 
 function buildLineSegments(points: Array<{ x: number; y: number | null }>) {
@@ -205,6 +236,7 @@ export function getHouseComparisonForRange(
     material_per_house: cumulativeHouseStarts > 0 ? roundTo4(cumulativeMaterialQuantity / cumulativeHouseStarts) : null,
     expected_material_per_mapped_house:
       cumulativeMappedHouseStarts > 0 ? roundTo4(cumulativeExpectedQuantity / cumulativeMappedHouseStarts) : null,
+    expected_breakdown: aggregateExpectedBreakdown(points),
     latest_house_start_date: latestHouseStartDate,
     points,
   };
@@ -227,6 +259,7 @@ export function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?
     end.cumulative_mapped_house_starts - (start.cumulative_mapped_house_starts - start.mapped_house_starts);
   const projectedMaterialConsumed =
     end.cumulative_expected_material_quantity - (start.cumulative_expected_material_quantity - start.expected_material_quantity);
+  const selectedPoints = points.slice(bounds.startIndex, bounds.endIndex + 1);
 
   return {
     start,
@@ -239,6 +272,7 @@ export function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?
     mappedHousesProduced,
     averageConsumptionPerHouse: housesProduced > 0 ? materialConsumed / housesProduced : null,
     expectedConsumptionPerMappedHouse: mappedHousesProduced > 0 ? projectedMaterialConsumed / mappedHousesProduced : null,
+    expectedBreakdown: aggregateExpectedBreakdown(selectedPoints),
     averageProjectedConsumptionPerBusinessDay: projectedMaterialConsumed / elapsedDays,
     averageProjectedConsumptionPerWeek: (projectedMaterialConsumed / elapsedDays) * 5,
   };

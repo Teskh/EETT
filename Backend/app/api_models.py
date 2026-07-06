@@ -1022,6 +1022,19 @@ class MaterialDashboardEconomicMetricsResponse(BaseModel):
     generated_at: str
 
 
+class MaterialDashboardExpectedBreakdownModel(BaseModel):
+    house_type_id: int
+    house_type_name: str
+    sub_type_id: int | None = None
+    sub_type_name: str | None = None
+    house_starts: int
+    expected_quantity_per_house: float
+    total_expected_material_quantity: float
+    mapped_project_id: int
+    mapped_project_name: str
+    mapped_project_subtype_id: int | None = None
+
+
 class MaterialDashboardMappedHouseComparisonPointModel(BaseModel):
     date: str
     material_quantity: float
@@ -1033,6 +1046,7 @@ class MaterialDashboardMappedHouseComparisonPointModel(BaseModel):
     cumulative_mapped_house_starts: int
     cumulative_expected_material_quantity: float
     material_per_house: float | None
+    expected_breakdown: list["MaterialDashboardExpectedBreakdownModel"] = Field(default_factory=list)
 
 
 class MaterialDashboardMappedProjectModel(BaseModel):
@@ -1061,6 +1075,7 @@ class MaterialDashboardMappedHouseComparisonResponse(BaseModel):
     total_expected_material_quantity: float
     material_per_house: float | None
     expected_material_per_mapped_house: float | None
+    expected_breakdown: list[MaterialDashboardExpectedBreakdownModel] = Field(default_factory=list)
     latest_house_start_date: str | None
     link_count: int = 0
     mapped_projects: list[MaterialDashboardMappedProjectModel] = Field(default_factory=list)

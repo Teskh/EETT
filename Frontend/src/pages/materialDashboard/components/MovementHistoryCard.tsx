@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 
-import type { MaterialDashboardEconomicMetric } from "../../../lib/types";
+import type { MaterialDashboardEconomicMetric, MaterialDashboardExpectedBreakdown } from "../../../lib/types";
 import {
   clampHouseRange,
   getDefaultHouseRange,
@@ -97,6 +97,48 @@ function HeaderStatLabel({ children }: { children: React.ReactNode }) {
 
 function HeaderStatDivider() {
   return <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />;
+}
+
+function getExpectedBreakdownLabel(row: MaterialDashboardExpectedBreakdown) {
+  return row.sub_type_name ? `${row.house_type_name} · ${row.sub_type_name}` : row.house_type_name;
+}
+
+function ExpectedBreakdownTooltip({
+  breakdown,
+  digits,
+}: {
+  breakdown: MaterialDashboardExpectedBreakdown[];
+  digits: number;
+}) {
+  if (!breakdown.length) {
+    return null;
+  }
+  const visibleRows = breakdown.slice(0, 8);
+  const hiddenCount = breakdown.length - visibleRows.length;
+
+  return (
+    <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-80 translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/estimate:translate-y-0 group-hover/estimate:opacity-100 group-focus-within/estimate:translate-y-0 group-focus-within/estimate:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
+      <div className="mb-2 flex items-center justify-between gap-3 border-b border-black/5 pb-2 dark:border-white/10">
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Promedio ponderado</span>
+        <span className="text-[10px] font-semibold text-zinc-400">viv. vinculadas</span>
+      </div>
+      <div className="space-y-1.5">
+        {visibleRows.map((row) => (
+          <div
+            key={`${row.house_type_id}-${row.sub_type_id ?? "general"}`}
+            className="grid grid-cols-[1fr_auto_auto] items-baseline gap-3 text-xs"
+          >
+            <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-100" title={getExpectedBreakdownLabel(row)}>
+              {getExpectedBreakdownLabel(row)}
+            </span>
+            <span className="font-mono text-zinc-500 dark:text-zinc-400">{formatNumber(row.house_starts, 0)} viv.</span>
+            <span className="font-mono text-zinc-900 dark:text-white">{formatNumber(row.expected_quantity_per_house, digits)}/viv.</span>
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} tipos mas</div> : null}
+    </div>
+  );
 }
 
 function ProcurementMetricsPanel({
@@ -446,6 +488,9 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const projectedConsumptionPerHouse = hasExpectedComparison
     ? houseSummary?.expectedConsumptionPerMappedHouse ?? houseComparisonInRange?.expected_material_per_mapped_house ?? null
     : null;
+  const projectedConsumptionBreakdown = hasExpectedComparison
+    ? houseSummary?.expectedBreakdown ?? houseComparisonInRange?.expected_breakdown ?? []
+    : [];
   const actualConsumptionTotal = houseSummary?.materialConsumed ?? houseComparisonInRange?.total_material_quantity ?? null;
   const expectedConsumptionTotal = hasExpectedComparison
     ? houseSummary?.projectedMaterialConsumed ?? houseComparisonInRange?.total_expected_material_quantity ?? null
@@ -597,11 +642,17 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           {housesMode && projectedConsumptionPerHouse !== null ? (
             <>
               <HeaderStatDivider />
-              <div className="text-right">
-                <HeaderStatLabel>Est./Vivienda</HeaderStatLabel>
+              <div className="group/estimate relative text-right" tabIndex={0}>
+                <HeaderStatLabel>
+                  <span className="inline-flex items-center gap-1">
+                    Est./Vivienda
+                    {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
+                  </span>
+                </HeaderStatLabel>
                 <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
                   {formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}
                 </div>
+                <ExpectedBreakdownTooltip breakdown={projectedConsumptionBreakdown} digits={houseMetricDigits} />
               </div>
             </>
           ) : null}

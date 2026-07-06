@@ -5,6 +5,7 @@ import unittest
 from datetime import date
 
 from app.services.house_type_links import (
+    _fingerprint_part_sort_key,
     build_mapped_house_comparison,
     expected_quantities_for_link,
     resolve_house_type_link,
@@ -75,6 +76,23 @@ class ExpectedQuantityTests(unittest.TestCase):
         self.assertEqual(study_quantity_for_link(SUBTYPE_LINK, EXPECTED_MAPS, {"OTHER": 1.0}), 0.0)
 
 
+class FingerprintTests(unittest.TestCase):
+    def test_sort_key_handles_general_and_subtype_links(self) -> None:
+        parts = [
+            (1, 5, 10, 77),
+            (1, None, 10, None),
+            (2, None, 11, None),
+        ]
+        self.assertEqual(
+            sorted(parts, key=_fingerprint_part_sort_key),
+            [
+                (1, None, 10, None),
+                (1, 5, 10, 77),
+                (2, None, 11, None),
+            ],
+        )
+
+
 class HouseStartGridTests(unittest.TestCase):
     def test_grid_collapses_houses_by_day_type_and_sub_type(self) -> None:
         houses = [
@@ -142,6 +160,22 @@ class MappedComparisonTests(unittest.TestCase):
         self.assertEqual(result["total_material_quantity"], 14.0)
         self.assertEqual(result["material_per_house"], round(14.0 / 6, 4))
         self.assertEqual(result["expected_material_per_mapped_house"], round(7.0 / 3, 4))
+        self.assertEqual(
+            [
+                (
+                    row["house_type_name"],
+                    row["sub_type_name"],
+                    row["house_starts"],
+                    row["expected_quantity_per_house"],
+                    row["total_expected_material_quantity"],
+                )
+                for row in result["expected_breakdown"]
+            ],
+            [
+                ("T54", "A", 2, 2.5, 5.0),
+                ("T54", None, 1, 2.0, 2.0),
+            ],
+        )
 
     def test_unmapped_summary_reports_house_types_without_link(self) -> None:
         result = self.build()
@@ -165,13 +199,18 @@ class MappedComparisonTests(unittest.TestCase):
         first, second, third = result["points"]
         self.assertEqual(first["expected_material_quantity"], 5.0)
         self.assertEqual(first["mapped_house_starts"], 2)
+        self.assertEqual(first["expected_breakdown"][0]["house_starts"], 2)
+        self.assertEqual(first["expected_breakdown"][0]["expected_quantity_per_house"], 2.5)
         self.assertEqual(second["expected_material_quantity"], 2.0)
         self.assertEqual(second["house_starts"], 4)
         self.assertEqual(second["mapped_house_starts"], 1)
+        self.assertEqual(second["expected_breakdown"][0]["house_starts"], 1)
+        self.assertEqual(second["expected_breakdown"][0]["expected_quantity_per_house"], 2.0)
         self.assertEqual(second["cumulative_expected_material_quantity"], 7.0)
         self.assertEqual(second["cumulative_house_starts"], 6)
         # Day without any activity still yields a point with carried totals.
         self.assertEqual(third["material_quantity"], 0.0)
+        self.assertEqual(third["expected_breakdown"], [])
         self.assertEqual(third["cumulative_material_quantity"], 14.0)
         self.assertEqual(result["latest_house_start_date"], "2026-06-02")
 
