@@ -59,6 +59,8 @@ from app.api_models import (
     MaterialDashboardHouseComparisonRequest,
     MaterialDashboardHouseComparisonResponse,
     MaterialDashboardProjectUsageResponse,
+    MaterialUnitAlertModel,
+    MaterialUnitAlertsResponse,
     MaterialDashboardHouseTypesResponse,
     MaterialDashboardMaterialStudyResponse,
     MaterialDashboardListRequest,
@@ -170,6 +172,10 @@ from app.services.dashboard import (
     get_recent_material_dashboard,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
+from app.services.material_units import (
+    get_material_unit_alerts,
+    resolve_material_unit_alert,
+)
 from app.services.material_groups import (
     create_material_study_group,
     delete_material_study_group,
@@ -3033,6 +3039,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/materials/unit-alerts", response_model=MaterialUnitAlertsResponse)
+    def material_unit_alerts_v1(
+        request: Request,
+        refresh: bool = False,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        return get_material_unit_alerts(
+            session,
+            request.app.state.settings,
+            force=refresh,
+        )
+
+    @app.post("/api/v1/materials/unit-alerts/{change_id}/resolve", response_model=MaterialUnitAlertModel)
+    def resolve_material_unit_alert_v1(
+        change_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "catalog")
+        resolved = resolve_material_unit_alert(session, change_id=change_id, user=current_user)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="Pending unit change not found")
+        return resolved
 
     @app.get("/api/v1/notifications", response_model=list[NotificationModel])
     async def notifications_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

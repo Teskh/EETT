@@ -5,6 +5,7 @@ import type { SessionUser } from "../lib/types";
 import type { CommentNotification } from "../lib/types";
 import type { ThemeMode } from "../lib/theme";
 import { APP_PAGES, canReadPage } from "../lib/pageAccess";
+import { UnitChangeAlertsButton } from "./UnitChangeAlerts";
 
 type NavKey = "home" | "catalog" | "dashboard" | "cost-model" | "history" | "projects" | "settings";
 
@@ -214,6 +215,7 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
               </h1>
             </div>
             <div className="flex items-center gap-3">
+              <UnitChangeAlertsButton currentUser={currentUser} />
               <NotificationButton onNavigate={onNavigate} />
               <div className="text-right">
                 <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{currentUser.display_name}</div>

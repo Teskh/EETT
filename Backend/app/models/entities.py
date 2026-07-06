@@ -114,6 +114,11 @@ class ExportStatus(str, Enum):
     FAILED = "failed"
 
 
+class MaterialUnitChangeStatus(str, Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -355,6 +360,35 @@ class Material(Base):
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="material")
     calculation_sheets: Mapped[list["ProjectMaterialCalculationSheet"]] = relationship(back_populates="material")
     erp_cache_entries: Mapped[list["ErpMaterialCache"]] = relationship(back_populates="material")
+
+
+class MaterialUnitChange(Base):
+    """A detected divergence between the ERP unit for a SKU and the unit our
+    specified quantities are expressed in (``materials.unit``). Pending rows
+    drive the in-app warning; resolved rows form the unit history over time."""
+
+    __tablename__ = "material_unit_changes"
+    __table_args__ = (Index("ix_material_unit_changes_status", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    material_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    old_unit: Mapped[str | None] = mapped_column(String(50), default=None)
+    new_unit: Mapped[str | None] = mapped_column(String(50), default=None)
+    status: Mapped[MaterialUnitChangeStatus] = mapped_column(
+        enum_column(MaterialUnitChangeStatus, "material_unit_change_status"),
+        default=MaterialUnitChangeStatus.PENDING,
+        nullable=False,
+    )
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    resolved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    resolution_note: Mapped[str | None] = mapped_column(String(200), default=None)
+
+    material: Mapped[Material] = relationship()
+    resolved_by: Mapped[User | None] = relationship()
 
 
 class MaterialStudyGroup(Base):

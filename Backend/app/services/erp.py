@@ -236,6 +236,50 @@ def get_average_prices_for_products(settings: Settings, product_codes: Sequence[
         raise RuntimeError("Could not load ERP material pricing data") from exc
 
 
+def get_units_for_products(settings: Settings, product_codes: Sequence[str]) -> dict[str, str | None]:
+    """Return the current ERP unit (CodUMed) for each known SKU.
+
+    SKUs that do not exist in the ERP are omitted from the result so callers
+    can distinguish "unknown product" from "product without unit".
+    """
+    normalized_codes = []
+    seen: set[str] = set()
+    for raw_code in product_codes:
+        code = str(raw_code or "").strip().upper()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        normalized_codes.append(code)
+    if not normalized_codes:
+        return {}
+
+    try:
+        with _open_connection(settings) as connection:
+            cursor = connection.cursor()
+            units: dict[str, str | None] = {}
+            chunk_size = 500
+            for start in range(0, len(normalized_codes), chunk_size):
+                chunk = normalized_codes[start : start + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                cursor.execute(
+                    f"""
+                    SELECT RTRIM(LTRIM(CodProd)) AS CodProd, RTRIM(LTRIM(CodUMed)) AS CodUMed
+                    FROM softland.iw_tprod
+                    WHERE RTRIM(LTRIM(CodProd)) IN ({placeholders})
+                    """,
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    code = (getattr(row, "CodProd", None) or "").strip().upper()
+                    if not code:
+                        continue
+                    units[code] = (getattr(row, "CodUMed", None) or "").strip() or None
+            return units
+    except Exception as exc:
+        logger.warning("ERP unit lookup failed: %s", exc)
+        raise RuntimeError("Could not load ERP material units") from exc
+
+
 def get_purchase_order_price_stats_for_products(settings: Settings, product_codes: Sequence[str]) -> dict[str, dict[str, float | None]]:
     normalized_codes = []
     seen: set[str] = set()

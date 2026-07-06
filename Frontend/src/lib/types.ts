@@ -1104,3 +1104,67 @@ export type MutationResult = {
   instance?: ProjectInstance | null;
   occurrence?: UsageOccurrence | null;
 };
+
+export type MaterialUnitUsageRule = {
+  rule_id: number;
+  component_id: number;
+  component_name: string;
+  unit: string | null;
+  unit_qty_per_unit: number | null;
+};
+
+export type MaterialUnitUsageBomEntry = {
+  project_id: number;
+  project_name: string;
+  instance_name: string | null;
+  subtype_name: string | null;
+  quantity: number | null;
+  unit: string | null;
+};
+
+export type MaterialUnitUsageSheet = {
+  project_id: number;
+  project_name: string;
+  instance_name: string | null;
+};
+
+export type MaterialUnitUsageGroup = {
+  group_id: number;
+  group_name: string;
+  factor_to_study_unit: number;
+  study_unit: string | null;
+};
+
+export type MaterialUnitUsage = {
+  catalog_rules: MaterialUnitUsageRule[];
+  bom_entries: MaterialUnitUsageBomEntry[];
+  calculation_sheets: MaterialUnitUsageSheet[];
+  study_groups: MaterialUnitUsageGroup[];
+  catalog_rules_count: number;
+  bom_entries_count: number;
+  calculation_sheets_count: number;
+  study_groups_count: number;
+};
+
+export type MaterialUnitAlert = {
+  id: number;
+  material_id: number;
+  sku: string;
+  material_name: string;
+  old_unit: string | null;
+  new_unit: string | null;
+  status: "pending" | "resolved";
+  detected_at: string;
+  last_seen_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  usage: MaterialUnitUsage | null;
+};
+
+export type MaterialUnitAlertsResponse = {
+  pending: MaterialUnitAlert[];
+  history: MaterialUnitAlert[];
+  last_sweep_at: string | null;
+  erp_available: boolean;
+};

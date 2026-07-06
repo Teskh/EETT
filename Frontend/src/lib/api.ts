@@ -33,6 +33,8 @@ import type {
   MaterialDashboardGroupMovementData,
   MaterialDashboardHouseTypesResponse,
   MaterialDashboardData,
+  MaterialUnitAlert,
+  MaterialUnitAlertsResponse,
   MaterialDashboardDetailData,
   MaterialDashboardMaterialStudyData,
   MaterialDashboardMovementData,
@@ -570,6 +572,12 @@ export const api = {
   getMentionableUsers(projectId?: number) {
     const query = projectId ? `?project_id=${projectId}` : "";
     return request<{ users: ManagedUser[] }>(`/api/v1/comments/mentionable-users${query}`);
+  },
+  getMaterialUnitAlerts(options: { refresh?: boolean } = {}) {
+    return request<MaterialUnitAlertsResponse>(`/api/v1/materials/unit-alerts${options.refresh ? "?refresh=true" : ""}`);
+  },
+  resolveMaterialUnitAlert(changeId: number) {
+    return request<MaterialUnitAlert>(`/api/v1/materials/unit-alerts/${changeId}/resolve`, { method: "POST" });
   },
   getNotifications() {
     return request<CommentNotification[]>("/api/v1/notifications");
