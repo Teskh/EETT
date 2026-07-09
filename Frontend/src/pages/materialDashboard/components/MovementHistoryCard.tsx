@@ -1,6 +1,10 @@
 import { memo, useEffect, useMemo, useState } from "react";
 
-import type { MaterialDashboardEconomicMetric, MaterialDashboardExpectedBreakdown } from "../../../lib/types";
+import type {
+  MaterialDashboardEconomicMetric,
+  MaterialDashboardExpectedBreakdown,
+  MaterialDashboardGroupCostBreakdown,
+} from "../../../lib/types";
 import {
   clampHouseRange,
   getDefaultHouseRange,
@@ -141,6 +145,70 @@ function ExpectedBreakdownTooltip({
   );
 }
 
+function getGroupCostBreakdown(metric: MaterialDashboardEconomicMetric | null): MaterialDashboardGroupCostBreakdown[] {
+  if (!metric || !("cost_breakdown" in metric) || !Array.isArray(metric.cost_breakdown)) {
+    return [];
+  }
+  return metric.cost_breakdown;
+}
+
+function GroupCostBreakdownTooltip({
+  breakdown,
+  studyUnit,
+}: {
+  breakdown: MaterialDashboardGroupCostBreakdown[];
+  studyUnit?: string | null;
+}) {
+  if (!breakdown.length) {
+    return null;
+  }
+  const visibleRows = breakdown.slice(0, 8);
+  const hiddenCount = breakdown.length - visibleRows.length;
+
+  return (
+    <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-[520px] max-w-[calc(100vw-2rem)] translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/cost:translate-y-0 group-hover/cost:opacity-100 group-focus-within/cost:translate-y-0 group-focus-within/cost:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
+      <div className="mb-2 flex items-center justify-between gap-3 border-b border-black/5 pb-2 dark:border-white/10">
+        <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Desglose por material</span>
+        <span className="text-[10px] font-semibold text-zinc-400">real - estimado</span>
+      </div>
+      <div className="space-y-1.5">
+        {visibleRows.map((row) => {
+          const delta = row.cost_delta_per_house;
+          const overcost = delta !== null && delta > 0;
+          const saving = delta !== null && delta < 0;
+          return (
+            <div key={row.sku} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-xs">
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-zinc-800 dark:text-zinc-100" title={row.material_name}>
+                  {row.material_name}
+                </span>
+                <span className="block truncate font-mono text-[10px] text-zinc-500">
+                  {row.sku} · {formatNumber(row.actual_study_quantity)} / {formatNumber(row.expected_study_quantity)} {studyUnit || ""}
+                </span>
+              </span>
+              <span className="font-mono text-zinc-500 dark:text-zinc-400" title={`Precio promedio: ${formatCurrency(row.average_price)}`}>
+                {formatCurrency(row.cost_delta)}
+              </span>
+              <span
+                className={`font-mono ${
+                  overcost
+                    ? "text-red-700 dark:text-red-300"
+                    : saving
+                      ? "text-emerald-700 dark:text-emerald-300"
+                      : "text-zinc-900 dark:text-white"
+                }`}
+              >
+                {delta === null ? "—" : `${delta > 0 ? "+" : delta < 0 ? "-" : ""}${formatCurrency(Math.abs(delta))}/viv.`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} materiales mas</div> : null}
+    </div>
+  );
+}
+
 function ProcurementMetricsPanel({
   movementQuantity,
   detail,
@@ -193,7 +261,11 @@ function ProcurementMetricsPanel({
             value={
               detail ? (
                 !groupSelection && !isGroupDetail(detail) ? (
-                  <PurchaseOrderHoverValue value={formatNumber(detail.pending_purchase_quantity)} purchaseOrders={detail.purchase_orders || []} />
+                  <PurchaseOrderHoverValue
+                    value={formatNumber(detail.pending_purchase_quantity)}
+                    purchaseOrders={detail.purchase_orders || []}
+                    currentUnit={detail.unit}
+                  />
                 ) : (
                   formatNumber(detail.pending_purchase_quantity)
                 )
@@ -520,7 +592,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     actualConsumptionTotal !== null && expectedConsumptionTotal !== null && expectedConsumptionTotal !== 0
       ? ((actualConsumptionTotal - expectedConsumptionTotal) / expectedConsumptionTotal) * 100
       : null;
-  const consumptionCostDeltaPerHouse =
+  const calculatedConsumptionCostDeltaPerHouse =
     actualConsumptionTotal !== null &&
     expectedConsumptionTotal !== null &&
     housesProducedInRange !== null &&
@@ -529,6 +601,11 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     detail?.average_price !== undefined
       ? ((actualConsumptionTotal - expectedConsumptionTotal) * detail.average_price) / housesProducedInRange
       : null;
+  const consumptionCostDeltaPerHouse =
+    !isCustomSelection && economicMetric?.consumption_cost_delta_per_house !== null && economicMetric?.consumption_cost_delta_per_house !== undefined
+      ? economicMetric.consumption_cost_delta_per_house
+      : calculatedConsumptionCostDeltaPerHouse;
+  const groupCostBreakdown = groupSelection && !isCustomSelection ? getGroupCostBreakdown(economicMetric) : [];
   const activeMovementRangeStart = housesMode
     ? houseSummary?.start.date ?? houseComparisonInRange?.range_start ?? houseRange.startDate
     : stockSummary?.start.date ?? houseRange.startDate;
@@ -659,9 +736,12 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           {housesMode && consumptionCostDeltaPerHouse !== null ? (
             <>
               <HeaderStatDivider />
-              <div className="text-right">
+              <div className={groupCostBreakdown.length ? "group/cost relative text-right" : "text-right"} tabIndex={groupCostBreakdown.length ? 0 : undefined}>
                 <HeaderStatLabel>
-                  {consumptionCostDeltaPerHouse > 0 ? "Sobrecosto/Vivienda" : consumptionCostDeltaPerHouse < 0 ? "Ahorro/Vivienda" : "Costo/Vivienda"}
+                  <span className="inline-flex items-center gap-1">
+                    {consumptionCostDeltaPerHouse > 0 ? "Sobrecosto/Vivienda" : consumptionCostDeltaPerHouse < 0 ? "Ahorro/Vivienda" : "Costo/Vivienda"}
+                    {groupCostBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
+                  </span>
                 </HeaderStatLabel>
                 <div
                   className={`text-3xl font-light tracking-tight ${
@@ -674,6 +754,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                 >
                   {formatCurrency(Math.abs(consumptionCostDeltaPerHouse))}
                 </div>
+                <GroupCostBreakdownTooltip breakdown={groupCostBreakdown} studyUnit={selectedUnitLabel} />
               </div>
             </>
           ) : null}
@@ -694,7 +775,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     <span>{priceDisplayMode === "last" ? "Último Precio" : "Precio Prom."}</span>
                     <i className="ph-bold ph-info text-[11px]" />
                     <div className="pointer-events-none absolute right-0 top-full z-30 mt-2 hidden w-80 rounded-lg border border-black/10 bg-white p-3 text-left text-[11px] font-medium normal-case leading-5 tracking-normal text-zinc-600 shadow-xl group-hover/price:block group-focus/price:block dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300">
-                      Precio Prom. es el costo promedio ERP calculado a la fecha actual para el SKU completo. No promedia solo el rango visible, ni solo movimientos consumidos, ni CECOs del historial. Último precio usa la OC más reciente con precio unitario. La volatilidad compara el mayor y menor precio unitario dentro de las últimas 10 líneas de OC mostradas para este SKU.
+                      Precio Prom. es el costo promedio ERP calculado a la fecha actual para el SKU completo. No promedia solo el rango visible, ni solo movimientos consumidos, ni CECOs del historial. Último precio usa la OC más reciente con precio unitario. La volatilidad compara el mayor y menor precio unitario dentro de las últimas 10 líneas de OC; revisa UM recep. en el detalle de OC para detectar cambios históricos de unidad.
                     </div>
                   </div>
                   <div className="inline-flex rounded-full border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">

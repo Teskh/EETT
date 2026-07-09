@@ -10,6 +10,7 @@ import {
   economicMetricsCacheKey,
   groupDashboardCacheKey,
   groupDetailCacheKey,
+  groupEconomicMetricsCacheKey,
   groupHistoryCacheKey,
   groupHouseComparisonCacheKey,
   historyCacheKey,
@@ -23,6 +24,7 @@ import type {
   MaterialDashboardDetailData,
   MaterialDashboardEconomicMetricsResponse,
   MaterialDashboardGroupDetailData,
+  MaterialDashboardGroupEconomicMetricsResponse,
   MaterialDashboardGroupHouseComparisonData,
   MaterialDashboardGroupMovementData,
   MaterialDashboardListRow,
@@ -343,6 +345,25 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     () => new Map((currentEconomicMetrics?.metrics || []).map((metric) => [metric.sku, metric])),
     [currentEconomicMetrics],
   );
+  const groupEconomicMetricsResource = useDashboardResource<MaterialDashboardGroupEconomicMetricsResponse>({
+    cacheKey: materialEconomicSortAvailable
+      ? groupEconomicMetricsCacheKey(normalizedSelectedCecos, houseRange, linksVersion)
+      : null,
+    enabled: !allCecosExcluded && Boolean(selectedGroupId || activeTab === "groups") && materialEconomicSortAvailable,
+    refreshNonce,
+    fetcher: (forceRefresh) =>
+      api.getMaterialDashboardGroupEconomicMetrics(cecoApiFilters, {
+        refresh: forceRefresh,
+        startDate: houseRange.startDate,
+        endDate: houseRange.endDate,
+      }),
+    errorMessage: "No se pudieron cargar las métricas económicas de grupos.",
+  });
+  const currentGroupEconomicMetrics = groupEconomicMetricsResource.data;
+  const groupEconomicMetricsById = useMemo(
+    () => new Map((currentGroupEconomicMetrics?.metrics || []).map((metric) => [metric.group_id, metric])),
+    [currentGroupEconomicMetrics],
+  );
 
   const data = useMemo<MaterialDashboardData | null>(
     () =>
@@ -523,8 +544,29 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.name.toLowerCase().includes(normalizedMaterialSearch);
       })
       .slice()
-      .sort((left, right) => compareRows(left, right, groupSort));
-  }, [groupData?.groups, normalizedMaterialSearch, sort]);
+      .sort((left, right) => {
+        if (!isEconomicSortKey(sort.key) || !currentGroupEconomicMetrics) {
+          return compareRows(left, right, groupSort);
+        }
+        const leftValue = groupEconomicMetricsById.get(left.group_id)?.[sort.key];
+        const rightValue = groupEconomicMetricsById.get(right.group_id)?.[sort.key];
+        const leftMissing = leftValue === null || leftValue === undefined || Number.isNaN(leftValue);
+        const rightMissing = rightValue === null || rightValue === undefined || Number.isNaN(rightValue);
+        if (leftMissing && rightMissing) {
+          return left.name.localeCompare(right.name);
+        }
+        if (leftMissing) {
+          return 1;
+        }
+        if (rightMissing) {
+          return -1;
+        }
+        if (leftValue === rightValue) {
+          return left.name.localeCompare(right.name);
+        }
+        return (leftValue - rightValue) * sort.direction;
+      });
+  }, [currentGroupEconomicMetrics, groupData?.groups, groupEconomicMetricsById, normalizedMaterialSearch, sort]);
 
   const filteredCecos = useMemo(() => {
     const term = cecoSearch.trim().toLowerCase();
@@ -744,13 +786,46 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     </button>
                   </div>
                 ) : null}
-                <ErrorBanners errors={[error, historyError, houseComparisonError]} />
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <select
+                    value={sort.key}
+                    onChange={(event) => {
+                      const key = event.target.value as SortKey;
+                      setSort((current) => (current.key === key ? current : { key, direction: -1 }));
+                    }}
+                    className={SORT_SELECT_CLASSES}
+                  >
+                    {materialSortOptions.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setSort((current) => ({ ...current, direction: current.direction === 1 ? -1 : 1 }))}
+                    className={SIDEBAR_BUTTON_CLASSES}
+                    title={sort.direction === -1 ? "Descendente" : "Ascendente"}
+                  >
+                    {sort.direction === -1 ? "Desc" : "Asc"}
+                  </button>
+                </div>
+                {linksLoaded && !materialEconomicSortAvailable ? (
+                  <div className="text-[11px] text-zinc-500">
+                    Configura la vinculación de tipos de vivienda con proyectos para mostrar sobreconsumo y costo por vivienda en grupos.
+                  </div>
+                ) : null}
+                {materialEconomicSortAvailable && groupEconomicMetricsResource.loading && !currentGroupEconomicMetrics ? (
+                  <div className="text-[11px] text-amber-600 dark:text-amber-500">Calculando ahorro y sobrecosto por vivienda para grupos...</div>
+                ) : null}
+                <ErrorBanners errors={[error, historyError, houseComparisonError, groupEconomicMetricsResource.error]} />
               </div>
 
               <div className="flex-1 overflow-y-auto">
                 <GroupResultsList
                   rows={groupRows}
                   movementWindowDays={groupData?.movement_window_days || currentDashboardMovementDays}
+                  economicMetricsByGroupId={groupEconomicMetricsById}
                   selectedGroupId={selectedGroupId}
                   onSelect={setSelectedKey}
                 />
@@ -831,7 +906,13 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           houseComparisonRefreshing={houseComparisonLoading && Boolean(selectedHouseComparisonLike)}
           historyError={historyError}
           houseComparisonError={houseComparisonError}
-          economicMetric={selectedMaterialSku ? economicMetricsBySku.get(selectedMaterialSku) ?? null : null}
+          economicMetric={
+            selectedMaterialSku
+              ? economicMetricsBySku.get(selectedMaterialSku) ?? null
+              : selectedGroupId
+                ? groupEconomicMetricsById.get(selectedGroupId) ?? null
+                : null
+          }
           onInspectProjectUsage={selectedMaterialRow && singleMappedProject ? () => handleOpenProjectUsage(selectedMaterialRow) : null}
         />
       </main>

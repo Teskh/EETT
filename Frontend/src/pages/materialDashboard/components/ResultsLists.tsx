@@ -193,11 +193,13 @@ export const MaterialResultsList = memo(function MaterialResultsList({
 export const GroupResultsList = memo(function GroupResultsList({
   rows,
   movementWindowDays,
+  economicMetricsByGroupId,
   selectedGroupId,
   onSelect,
 }: {
   rows: MaterialStudyGroupRow[];
   movementWindowDays: number;
+  economicMetricsByGroupId: ReadonlyMap<number, MaterialDashboardEconomicMetric>;
   selectedGroupId: number | null;
   onSelect: (key: string) => void;
 }) {
@@ -215,6 +217,7 @@ export const GroupResultsList = memo(function GroupResultsList({
             <div className="flex justify-between items-start gap-4 mb-2">
               <div>
                 <h4 className={rowTitleClasses(active)}>{row.name}</h4>
+                <MaterialEconomicDeltaBadge metric={economicMetricsByGroupId.get(row.group_id)} />
                 <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} members</div>
               </div>
               <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">

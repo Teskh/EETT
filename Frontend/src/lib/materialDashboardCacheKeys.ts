@@ -40,6 +40,10 @@ export function economicMetricsCacheKey(cecos: string[], range: HouseRangeLike, 
   return `economics::v2::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
+export function groupEconomicMetricsCacheKey(cecos: string[], range: HouseRangeLike, linksVersion = 0) {
+  return `group-economics::v2::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
 export function groupDashboardCacheKey(cecos: string[], range?: DateRangeLike | null, movementDays = 60) {
   const normalized = normalizeCecos(cecos);
   const startDate = range?.startDate || "default";

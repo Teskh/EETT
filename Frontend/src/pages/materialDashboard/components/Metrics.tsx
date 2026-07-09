@@ -12,14 +12,51 @@ export function MetricRow({ label, value }: { label: string; value: ReactNode })
   );
 }
 
-const PURCHASE_ORDER_GRID = "grid grid-cols-[0.8fr_0.9fr_0.5fr_0.7fr_0.6fr_0.7fr_0.7fr_0.7fr] gap-2";
+const PURCHASE_ORDER_GRID = "grid grid-cols-[0.75fr_0.8fr_0.45fr_0.55fr_0.7fr_0.55fr_0.65fr_0.65fr_0.65fr] gap-2";
+
+function normalizeUnit(value: string | null | undefined) {
+  return (value || "").trim().toLowerCase();
+}
+
+function receiptUnitLabel(order: MaterialDashboardPurchaseOrderLine) {
+  const units = order.receipt_units || [];
+  if (!units.length) {
+    return "—";
+  }
+  if (units.length === 1) {
+    return units[0].unit;
+  }
+  const visibleUnits = units.slice(0, 2).map((entry) => entry.unit);
+  return `${visibleUnits.join("/")}${units.length > visibleUnits.length ? ` +${units.length - visibleUnits.length}` : ""}`;
+}
+
+function receiptUnitTitle(order: MaterialDashboardPurchaseOrderLine, currentUnit?: string | null) {
+  const units = order.receipt_units || [];
+  const currentUnitText = currentUnit || "N/D";
+  if (!units.length) {
+    return `Sin recepción ERP con unidad trazable. Unidad actual del SKU: ${currentUnitText}.`;
+  }
+  const unitDetails = units.map((entry) => `${formatNumber(entry.received_quantity)} ${entry.unit}`).join(" · ");
+  return `Recepciones ERP: ${unitDetails}. Unidad actual del SKU: ${currentUnitText}.`;
+}
+
+function receiptUnitMismatch(order: MaterialDashboardPurchaseOrderLine, currentUnit?: string | null) {
+  const normalizedCurrentUnit = normalizeUnit(currentUnit);
+  const units = order.receipt_units || [];
+  if (!normalizedCurrentUnit || !units.length) {
+    return false;
+  }
+  return units.some((entry) => normalizeUnit(entry.unit) !== normalizedCurrentUnit);
+}
 
 export function PurchaseOrderHoverValue({
   value,
   purchaseOrders,
+  currentUnit,
 }: {
   value: ReactNode;
   purchaseOrders: MaterialDashboardPurchaseOrderLine[];
+  currentUnit?: string | null;
 }) {
   return (
     <div className="group/oc relative inline-flex justify-end">
@@ -29,10 +66,10 @@ export function PurchaseOrderHoverValue({
       >
         {value}
       </button>
-      <div className="pointer-events-auto absolute right-0 top-full z-40 mt-2 hidden w-[600px] max-w-[calc(100vw-2rem)] rounded-lg border border-black/10 bg-white p-3 text-left shadow-2xl group-hover/oc:block group-focus-within/oc:block dark:border-white/10 dark:bg-zinc-950">
+      <div className="pointer-events-auto absolute right-0 top-full z-40 mt-2 hidden w-[720px] max-w-[calc(100vw-2rem)] rounded-lg border border-black/10 bg-white p-3 text-left shadow-2xl group-hover/oc:block group-focus-within/oc:block dark:border-white/10 dark:bg-zinc-950">
         <div className="mb-2 flex items-center justify-between gap-3">
           <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-zinc-500">Últimas OC</div>
-          <div className="text-[10px] font-medium text-zinc-500">Cuenta: AP/PE últimos 4 meses</div>
+          <div className="text-[10px] font-medium text-zinc-500">UM recep. viene de movimientos ERP</div>
         </div>
         {purchaseOrders.length ? (
           <div className="max-h-80 overflow-y-auto">
@@ -40,6 +77,7 @@ export function PurchaseOrderHoverValue({
               <span>Fecha / Ent.</span>
               <span>OC</span>
               <span>Estado</span>
+              <span className="text-right">UM recep.</span>
               <span className="text-right">Precio</span>
               <span className="text-right">Ord.</span>
               <span className="text-right">Rec.</span>
@@ -50,6 +88,7 @@ export function PurchaseOrderHoverValue({
               {purchaseOrders.map((order, index) => {
                 const received = (order.received_quantity ?? 0) + (order.received_not_invoiced_quantity ?? 0);
                 const muted = !order.counted_in_pending;
+                const unitMismatch = receiptUnitMismatch(order, currentUnit);
                 return (
                   <div
                     key={`${order.number || "oc"}-${order.line_number || index}-${index}`}
@@ -65,6 +104,14 @@ export function PurchaseOrderHoverValue({
                       {order.number || "N/D"}
                     </span>
                     <span>{order.status_code || "N/D"}</span>
+                    <span
+                      className={`text-right tabular-nums ${
+                        unitMismatch ? "font-semibold text-amber-700 dark:text-amber-300" : ""
+                      }`}
+                      title={receiptUnitTitle(order, currentUnit)}
+                    >
+                      {receiptUnitLabel(order)}
+                    </span>
                     <span className="text-right tabular-nums">{formatCurrency(order.unit_price)}</span>
                     <span className="text-right tabular-nums">{formatNumber(order.ordered_quantity)}</span>
                     <span className="text-right tabular-nums" title={`Recibido total: ${formatNumber(received)}`}>

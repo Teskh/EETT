@@ -58,6 +58,7 @@ from app.services.erp import (
 from app.services.export_projection import build_detailed_material_export_sections
 from app.services.export_workbooks import build_materials_workbook
 from app.services.material_groups import (
+    _build_group_economic_metric,
     create_material_study_group,
     get_material_dashboard_group_detail,
     get_material_dashboard_group_history,
@@ -2651,7 +2652,6 @@ class MaterialStudyGroupTests(ServiceLayerTests):
         self.assertIsNone(history["movement_details"][0]["desc_sub"])
         self.assertEqual(history["movement_details"][1]["desc_sub"], "T2")
 
-
 class MaterialDashboardBusinessDayTests(unittest.TestCase):
     @patch("app.services.dashboard.get_material_procurement_details")
     def test_detail_builder_uses_business_days_for_recent_rate_and_reorder_date(self, procurement_mock) -> None:
@@ -2696,6 +2696,87 @@ class MaterialDashboardBusinessDayTests(unittest.TestCase):
         self.assertEqual(_count_business_days(date(2026, 3, 13), date(2026, 3, 16)), 2)
         self.assertEqual(_add_business_days(date(2026, 3, 13), 1), date(2026, 3, 16))
         self.assertEqual(_add_business_days(date(2026, 3, 14), 0), date(2026, 3, 16))
+
+
+class MaterialStudyGroupEconomicMetricTests(unittest.TestCase):
+    @patch("app.services.material_groups.get_material_movement_history")
+    def test_group_economic_metric_normalizes_quantities_and_costs(self, movement_history_mock) -> None:
+        group = SimpleNamespace(
+            id=1,
+            name="Insulation",
+            study_unit="m2",
+            members=[
+                SimpleNamespace(sku="SKU-A", factor_to_study_unit=2.0),
+                SimpleNamespace(sku="SKU-C", factor_to_study_unit=1.0),
+            ],
+        )
+        movement_history_mock.side_effect = lambda _settings, sku, **_kwargs: {
+            "SKU-A": [
+                {"date": "2026-06-01", "quantity": 3.0},
+                {"date": "2026-06-02", "quantity": 1.0},
+            ],
+            "SKU-C": [
+                {"date": "2026-06-01", "quantity": 2.0},
+                {"date": "2026-06-02", "quantity": 0.0},
+            ],
+        }[sku]
+
+        metric = _build_group_economic_metric(
+            Settings(),
+            group,
+            movement_window_days=2,
+            requested_start_day=date(2026, 6, 1),
+            requested_end_day=date(2026, 6, 2),
+            normalized_cost_centers=["CC-01"],
+            normalized_excluded_cost_centers=[],
+            start_grid=[
+                {
+                    "date": "2026-06-01",
+                    "house_type_id": 1,
+                    "house_type_name": "T54",
+                    "sub_type_id": 5,
+                    "sub_type_name": "A",
+                    "house_starts": 2,
+                }
+            ],
+            links_by_key={
+                (1, 5): {
+                    "production_house_type_id": 1,
+                    "production_sub_type_id": 5,
+                    "project_id": 10,
+                    "project_subtype_id": 77,
+                }
+            },
+            expected_maps={
+                10: {
+                    "project_id": 10,
+                    "project_name": "Casa 54",
+                    "general": {"SKU-A": 2.0},
+                    "by_subtype": {77: {"SKU-A": 0.5, "SKU-C": 3.0}},
+                }
+            },
+            prices_by_sku={"SKU-A": 100.0, "SKU-C": 20.0},
+            price_stats_by_sku={
+                "SKU-A": {"min_purchase_price": 80.0, "max_purchase_price": 100.0},
+                "SKU-C": {"min_purchase_price": 20.0, "max_purchase_price": 30.0},
+            },
+        )
+
+        self.assertEqual(metric["material_per_house"], 5.0)
+        self.assertEqual(metric["predicted_quantity_per_house"], 8.0)
+        self.assertEqual(metric["consumption_delta_percent"], -37.5)
+        self.assertEqual(metric["consumption_cost_delta_per_house"], -90.0)
+        self.assertEqual(metric["average_price"], 44.0)
+        self.assertEqual(metric["purchase_price_delta"], 30.0)
+        self.assertEqual(metric["historical_weighted_overprice"], 150.0)
+        self.assertEqual(metric["estimated_weighted_overprice"], 240.0)
+        self.assertEqual([row["sku"] for row in metric["cost_breakdown"]], ["SKU-A", "SKU-C"])
+        self.assertEqual(metric["cost_breakdown"][0]["actual_source_quantity"], 4.0)
+        self.assertEqual(metric["cost_breakdown"][0]["expected_source_quantity"], 5.0)
+        self.assertEqual(metric["cost_breakdown"][0]["cost_delta_per_house"], -50.0)
+        self.assertEqual(metric["cost_breakdown"][1]["actual_study_quantity"], 2.0)
+        self.assertEqual(metric["cost_breakdown"][1]["expected_study_quantity"], 6.0)
+        self.assertEqual(metric["cost_breakdown"][1]["cost_delta"], -80.0)
 
 
 class ErpLeadTimeSampleTests(unittest.TestCase):
@@ -2786,26 +2867,60 @@ class ErpLeadTimeSampleTests(unittest.TestCase):
                 countedInPending=0,
             ),
         ]
+        receipt_unit_rows = [
+            SimpleNamespace(
+                CodProd="ERP-001",
+                numoc="OC-123",
+                NumLinea=1,
+                receiptUnit="UN",
+                receiptQuantity=2.0,
+            ),
+            SimpleNamespace(
+                CodProd="ERP-001",
+                numoc="OC-123",
+                NumLinea=1,
+                receiptUnit="KG",
+                receiptQuantity=2.0,
+            ),
+        ]
 
         class FakeCursor:
             def execute(self, sql, params):
+                self.calls = getattr(self, "calls", [])
+                self.calls.append((sql, params))
                 self.sql = sql
                 self.params = params
 
             def fetchall(self):
+                if "INFORMATION_SCHEMA.COLUMNS" in self.sql:
+                    return [SimpleNamespace(COLUMN_NAME="PrecioUnit")]
+                if "receiptUnit" in self.sql:
+                    return receipt_unit_rows
                 return rows
 
         cursor = FakeCursor()
         result = _get_purchase_order_lines_for_products_batch(cursor, ["ERP-001"])
 
-        self.assertIn("pol.rn <= ?", cursor.sql)
-        self.assertEqual(cursor.params[:2], ["AP", "PE"])
-        self.assertEqual(cursor.params[-1], 10)
+        main_sql, main_params = cursor.calls[1]
+        receipt_sql, receipt_params = cursor.calls[2]
+        self.assertIn("pol.rn <= ?", main_sql)
+        self.assertIn("softland.iw_gmovi", receipt_sql)
+        self.assertEqual(main_params[:2], ["AP", "PE"])
+        self.assertEqual(main_params[-1], 10)
+        self.assertEqual(receipt_params[-1], 10)
         self.assertEqual(len(result["ERP-001"]), 2)
         self.assertEqual(result["ERP-001"][0]["pending_quantity"], 14.5)
         self.assertEqual(result["ERP-001"][0]["unit_price"], 1234.5)
         self.assertEqual(result["ERP-001"][0]["received_quantity"], 4.0)
         self.assertEqual(result["ERP-001"][0]["received_not_invoiced_quantity"], 1.5)
+        self.assertEqual(
+            result["ERP-001"][0]["receipt_units"],
+            [
+                {"unit": "UN", "received_quantity": 2.0},
+                {"unit": "KG", "received_quantity": 2.0},
+            ],
+        )
+        self.assertEqual(result["ERP-001"][1]["receipt_units"], [])
         self.assertTrue(result["ERP-001"][0]["counted_in_pending"])
         self.assertFalse(result["ERP-001"][1]["counted_in_pending"])
 

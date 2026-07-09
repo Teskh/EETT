@@ -33,6 +33,11 @@ export type MaterialDashboardPurchaseOrder = {
   estimated_delivery: string | null;
 };
 
+export type MaterialDashboardPurchaseOrderReceiptUnit = {
+  unit: string;
+  received_quantity: number;
+};
+
 export type MaterialDashboardPurchaseOrderLine = {
   date: string | null;
   number: string | null;
@@ -45,6 +50,7 @@ export type MaterialDashboardPurchaseOrderLine = {
   received_not_invoiced_quantity: number | null;
   pending_quantity: number | null;
   counted_in_pending: boolean;
+  receipt_units: MaterialDashboardPurchaseOrderReceiptUnit[];
 };
 
 export type MaterialDashboardListRow = {
@@ -241,6 +247,40 @@ export type MaterialDashboardEconomicMetricsResponse = {
   total_mapped_house_starts: number;
   link_count: number;
   metrics: MaterialDashboardEconomicMetric[];
+  generated_at: string;
+};
+
+export type MaterialDashboardGroupEconomicMetric = MaterialDashboardEconomicMetric & {
+  group_id: number;
+  name: string;
+  study_unit: string;
+  cost_breakdown: MaterialDashboardGroupCostBreakdown[];
+};
+
+export type MaterialDashboardGroupCostBreakdown = {
+  sku: string;
+  material_name: string;
+  unit: string | null;
+  factor_to_study_unit: number;
+  actual_source_quantity: number;
+  expected_source_quantity: number;
+  actual_study_quantity: number;
+  expected_study_quantity: number;
+  average_price: number | null;
+  actual_cost: number | null;
+  expected_cost: number | null;
+  cost_delta: number | null;
+  cost_delta_per_house: number | null;
+};
+
+export type MaterialDashboardGroupEconomicMetricsResponse = {
+  ceco_filters: string[];
+  range_start: string | null;
+  range_end: string | null;
+  total_house_starts: number;
+  total_mapped_house_starts: number;
+  link_count: number;
+  metrics: MaterialDashboardGroupEconomicMetric[];
   generated_at: string;
 };
 

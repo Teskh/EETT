@@ -56,6 +56,7 @@ from app.api_models import (
     MaterialDashboardEconomicMetricsResponse,
     MaterialDashboardFilterRequest,
     MaterialDashboardGroupDetailResponse,
+    MaterialDashboardGroupEconomicMetricsResponse,
     MaterialDashboardGroupHouseComparisonResponse,
     MaterialDashboardGroupMovementResponse,
     MaterialDashboardHouseComparisonRequest,
@@ -190,6 +191,7 @@ from app.services.material_groups import (
     create_material_study_group,
     delete_material_study_group,
     get_material_dashboard_group_detail,
+    get_material_dashboard_group_economic_metrics,
     get_material_dashboard_group_history,
     get_material_dashboard_group_house_comparison,
     get_material_dashboard_groups,
@@ -2471,6 +2473,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not delete_material_study_group(session, group_id):
             raise HTTPException(status_code=404, detail="Material group not found")
         return {"ok": True}
+
+    @app.post("/api/v1/dashboard/material-groups/economic-metrics", response_model=MaterialDashboardGroupEconomicMetricsResponse)
+    def material_dashboard_group_economic_metrics_v1_post(
+        payload: MaterialDashboardDateRangeRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        if payload.start_date and payload.end_date and payload.start_date > payload.end_date:
+            raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+        movement_days = (
+            max((payload.end_date - payload.start_date).days + 1, 1)
+            if payload.start_date and payload.end_date
+            else 90
+        )
+        try:
+            return get_material_dashboard_group_economic_metrics(
+                request.app.state.settings,
+                session=session,
+                movement_days=movement_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/material-groups/{group_id}/detail", response_model=MaterialDashboardGroupDetailResponse)
     def material_dashboard_group_detail_v1(

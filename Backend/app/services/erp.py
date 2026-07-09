@@ -295,7 +295,7 @@ def get_purchase_order_price_stats_for_products(settings: Settings, product_code
     try:
         with _open_connection(settings) as connection:
             cursor = connection.cursor()
-            lines_by_sku = _get_purchase_order_lines_for_products_batch(cursor, normalized_codes)
+            lines_by_sku = _get_purchase_order_lines_for_products_batch(cursor, normalized_codes, include_receipt_units=False)
             stats: dict[str, dict[str, float | None]] = {}
             for code in normalized_codes:
                 prices = [
@@ -731,6 +731,7 @@ def _get_purchase_order_lines_for_products_batch(
     product_codes: Sequence[str],
     *,
     limit: int = 10,
+    include_receipt_units: bool = True,
 ) -> dict[str, list[dict[str, Any]]]:
     if not product_codes:
         return {}
@@ -797,7 +798,70 @@ def _get_purchase_order_lines_for_products_batch(
         """,
         [APPROVED_PURCHASE_ORDER_STATUS, PENDING_PURCHASE_ORDER_STATUS, *product_codes, limit],
     )
-    for row in cursor.fetchall():
+    purchase_order_rows = cursor.fetchall()
+
+    receipt_units_by_line: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    if include_receipt_units and purchase_order_rows:
+        cursor.execute(
+            f"""
+            WITH PurchaseOrderLines AS (
+                SELECT
+                    c.fechaOC,
+                    c.numoc,
+                    d.NumLinea,
+                    RTRIM(LTRIM(d.CodProd)) AS CodProd,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY RTRIM(LTRIM(d.CodProd))
+                        ORDER BY c.fechaOC DESC, c.numoc DESC, d.NumLinea ASC
+                    ) AS rn
+                FROM softland.owordencom c
+                INNER JOIN softland.owordendet d ON d.numinteroc = c.numinteroc
+                WHERE RTRIM(LTRIM(d.codprod)) IN ({placeholders})
+            )
+            SELECT
+                pol.CodProd,
+                pol.numoc,
+                pol.NumLinea,
+                RTRIM(LTRIM(m.CodUMed)) AS receiptUnit,
+                SUM(COALESCE(m.CantIngresada, 0)) AS receiptQuantity
+            FROM PurchaseOrderLines pol
+            INNER JOIN softland.iw_gsaen h
+                ON h.orden = pol.numoc
+               AND h.concepto IN ('01','02')
+               AND h.tipo = 'E'
+               AND h.estado = 'V'
+            INNER JOIN softland.iw_gmovi m
+                ON m.tipo = h.tipo
+               AND m.nroint = h.nroint
+               AND m.ocCorrela = pol.NumLinea
+               AND RTRIM(LTRIM(m.codprod)) = pol.CodProd
+            WHERE pol.rn <= ?
+              AND m.CodUMed IS NOT NULL
+              AND RTRIM(LTRIM(m.CodUMed)) <> ''
+            GROUP BY
+                pol.CodProd,
+                pol.numoc,
+                pol.NumLinea,
+                RTRIM(LTRIM(m.CodUMed))
+            ORDER BY pol.CodProd, pol.numoc DESC, pol.NumLinea ASC, receiptUnit ASC
+            """,
+            [*product_codes, limit],
+        )
+        for row in cursor.fetchall():
+            code = (getattr(row, "CodProd", None) or "").strip().upper()
+            receipt_unit = (getattr(row, "receiptUnit", None) or "").strip()
+            if not code or not receipt_unit:
+                continue
+            key = _purchase_order_line_key(getattr(row, "numoc", None), getattr(row, "NumLinea", None), code)
+            receipt_quantity = float(getattr(row, "receiptQuantity", 0.0) or 0.0)
+            receipt_units_by_line.setdefault(key, []).append(
+                {
+                    "unit": receipt_unit,
+                    "received_quantity": round(receipt_quantity, 2),
+                }
+            )
+
+    for row in purchase_order_rows:
         code = (getattr(row, "CodProd", None) or "").strip().upper()
         if not code:
             continue
@@ -819,9 +883,17 @@ def _get_purchase_order_lines_for_products_batch(
                 "received_not_invoiced_quantity": round(received_not_invoiced, 2),
                 "pending_quantity": pending_quantity,
                 "counted_in_pending": bool(getattr(row, "countedInPending", 0)),
+                "receipt_units": receipt_units_by_line.get(
+                    _purchase_order_line_key(getattr(row, "numoc", None), getattr(row, "NumLinea", None), code),
+                    [],
+                ),
             }
         )
     return results
+
+
+def _purchase_order_line_key(numoc: Any, line_number: Any, code: str) -> tuple[str, str, str]:
+    return (str(numoc or "").strip(), str(line_number or "").strip(), code.strip().upper())
 
 
 def _get_purchase_order_detail_unit_price_column(cursor) -> str | None:

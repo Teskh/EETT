@@ -787,6 +787,11 @@ class MaterialDashboardPurchaseOrderModel(BaseModel):
     estimated_delivery: str | None
 
 
+class MaterialDashboardPurchaseOrderReceiptUnitModel(BaseModel):
+    unit: str
+    received_quantity: float
+
+
 class MaterialDashboardPurchaseOrderLineModel(BaseModel):
     date: str | None
     number: str | None
@@ -799,6 +804,7 @@ class MaterialDashboardPurchaseOrderLineModel(BaseModel):
     received_not_invoiced_quantity: float | None
     pending_quantity: float | None
     counted_in_pending: bool
+    receipt_units: list[MaterialDashboardPurchaseOrderReceiptUnitModel] = Field(default_factory=list)
 
 
 class MaterialDashboardListRowModel(BaseModel):
@@ -1019,6 +1025,40 @@ class MaterialDashboardEconomicMetricsResponse(BaseModel):
     total_mapped_house_starts: int = 0
     link_count: int = 0
     metrics: list[MaterialDashboardEconomicMetricModel] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardGroupCostBreakdownModel(BaseModel):
+    sku: str
+    material_name: str
+    unit: str | None = None
+    factor_to_study_unit: float
+    actual_source_quantity: float
+    expected_source_quantity: float
+    actual_study_quantity: float
+    expected_study_quantity: float
+    average_price: float | None
+    actual_cost: float | None
+    expected_cost: float | None
+    cost_delta: float | None
+    cost_delta_per_house: float | None
+
+
+class MaterialDashboardGroupEconomicMetricModel(MaterialDashboardEconomicMetricModel):
+    group_id: int
+    name: str
+    study_unit: str
+    cost_breakdown: list[MaterialDashboardGroupCostBreakdownModel] = Field(default_factory=list)
+
+
+class MaterialDashboardGroupEconomicMetricsResponse(BaseModel):
+    ceco_filters: list[str] = Field(default_factory=list)
+    range_start: str | None
+    range_end: str | None
+    total_house_starts: int
+    total_mapped_house_starts: int = 0
+    link_count: int = 0
+    metrics: list[MaterialDashboardGroupEconomicMetricModel] = Field(default_factory=list)
     generated_at: str
 
 

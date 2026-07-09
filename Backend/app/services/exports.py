@@ -627,6 +627,7 @@ def _load_cost_model_price_map(
                 purchase_order_lines = _get_purchase_order_lines_for_products_batch(
                     connection.cursor(),
                     missing_price_skus,
+                    include_receipt_units=False,
                 )
                 for sku, lines in purchase_order_lines.items():
                     purchase_order_price = _select_purchase_order_price(lines)

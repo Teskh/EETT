@@ -29,6 +29,7 @@ import type {
   HouseTypeLinksBundle,
   MaterialDashboardCecoResponse,
   MaterialDashboardEconomicMetricsResponse,
+  MaterialDashboardGroupEconomicMetricsResponse,
   MaterialDashboardMappedHouseComparisonData,
   MaterialDashboardGroupDetailData,
   MaterialDashboardGroupHouseComparisonData,
@@ -508,6 +509,20 @@ export const api = {
     options: MaterialDashboardRequestOptions = {},
   ) {
     return request<MaterialDashboardEconomicMetricsResponse>("/api/v1/dashboard/materials/economic-metrics", {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
+  getMaterialDashboardGroupEconomicMetrics(
+    filters: MaterialDashboardFilterSelection = {},
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    return request<MaterialDashboardGroupEconomicMetricsResponse>("/api/v1/dashboard/material-groups/economic-metrics", {
       method: "POST",
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
