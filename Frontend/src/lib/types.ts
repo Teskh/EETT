@@ -569,7 +569,7 @@ export type CreateUserRequest = {
   username: string;
   display_name: string;
   email: string;
-  password: string;
+  password?: string;
   role_codes: string[];
   is_active: boolean;
 };

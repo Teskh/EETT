@@ -107,7 +107,7 @@ def create_user(
     username: str,
     display_name: str,
     email: str,
-    password: str,
+    password: str | None = None,
     role_codes_to_assign: list[str],
     is_active: bool = True,
 ) -> User:
@@ -132,11 +132,16 @@ def create_user(
     if missing:
         raise ValueError(f"Roles are missing in the database: {', '.join(missing)}")
 
+    # Password is optional: users who sign in with Microsoft never need a local
+    # password, so an empty value simply leaves password_hash unset (login by
+    # password is then impossible for that account, which is the desired behavior).
+    password_hash = hash_password(password) if password and password.strip() else None
+
     user = User(
         username=normalized_username,
         display_name=normalized_display_name,
         email=normalized_email,
-        password_hash=hash_password(password),
+        password_hash=password_hash,
         is_active=is_active,
     )
     session.add(user)

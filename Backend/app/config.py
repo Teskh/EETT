@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     session_secret: str = "spec-sheets-internal-session-secret"
     session_cookie_name: str = "spec_sheets_session"
     allow_trusted_user_header: bool = False
+    # --- Microsoft Entra ID (Azure AD) login ---
+    # Values come from the App Registration in the Microsoft Entra admin center.
+    microsoft_tenant_id: str = ""
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    # Optional explicit redirect URI. If blank, it is derived from the incoming
+    # request as "{scheme}://{host}/api/v1/auth/microsoft/callback". Whatever value
+    # is used here must be registered verbatim in the App Registration.
+    microsoft_redirect_uri: str = ""
+    microsoft_login_enabled: bool = True
+    # Login-method toggles. We currently force Microsoft as the only door, so the
+    # local username/password and guest flows are disabled by default. The code for
+    # them is kept intact; set these to true (env: SPEC_SHEETS_PASSWORD_LOGIN_ENABLED,
+    # SPEC_SHEETS_GUEST_LOGIN_ENABLED) to bring them back.
+    password_login_enabled: bool = False
+    guest_login_enabled: bool = False
     softland_driver: str = "ODBC Driver 18 for SQL Server"
     softland_server: str | None = "216.155.78.65"
     softland_database: str | None = "PATAGUALHOME2024"

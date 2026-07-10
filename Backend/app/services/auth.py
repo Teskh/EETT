@@ -7,7 +7,7 @@ import secrets
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Project, ProjectMembership, ProjectStatus, Role, User, UserRole
@@ -85,6 +85,25 @@ def get_user_by_username(session: Session, username: str) -> User | None:
             selectinload(User.project_memberships),
         )
     )
+
+
+def get_enabled_user_by_email(session: Session, email: str) -> User | None:
+    """Look up an active user by email (case-insensitive). Used by Microsoft login."""
+    normalized = email.strip().lower()
+    if not normalized:
+        return None
+    user = session.scalar(
+        select(User)
+        .where(func.lower(User.email) == normalized)
+        .options(
+            selectinload(User.roles).selectinload(UserRole.role),
+            selectinload(User.roles).selectinload(UserRole.role).selectinload(Role.page_access),
+            selectinload(User.project_memberships),
+        )
+    )
+    if user is None or not user.is_active:
+        return None
+    return user
 
 
 def hash_password(password: str) -> str:

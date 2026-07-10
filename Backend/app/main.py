@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote, urlunsplit
 
 from sqlalchemy import select
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
@@ -116,8 +118,10 @@ from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
     authenticate_user,
+    get_enabled_user_by_email,
     get_user_by_username,
     get_current_user,
+    is_sysadmin,
     resolve_current_user,
     require_project_create,
     require_catalog_edit,
@@ -136,6 +140,7 @@ from app.services.auth import (
     serialize_page_catalog,
     serialize_session_user,
 )
+from app.services import microsoft_auth
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
 from app.services.catalog import (
     create_attribute_definition,
@@ -865,15 +870,87 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
 
+    def _login_redirect_error(message: str) -> RedirectResponse:
+        # Microsoft sends the browser to our callback via a top-level GET, so on
+        # failure we bounce back to the SPA login page with a readable message.
+        return RedirectResponse(url=f"/login?auth_error={quote(message)}", status_code=303)
+
+    def _microsoft_redirect_uri(request: Request) -> str:
+        # Reconstruct the public-facing origin, honoring a reverse proxy's
+        # X-Forwarded-Proto/Host so the redirect URI matches what Azure expects.
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        forwarded_host = request.headers.get("x-forwarded-host")
+        scheme = (forwarded_proto or request.url.scheme).split(",")[0].strip()
+        host = (forwarded_host or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
+        base = urlunsplit((scheme, host, "", "", ""))
+        return f"{base}/api/v1/auth/microsoft/callback"
+
+    @app.get("/api/v1/auth/microsoft/login")
+    async def microsoft_login_api(request: Request):
+        settings = request.app.state.settings
+        if not settings.microsoft_login_enabled:
+            return _login_redirect_error("El ingreso con Microsoft está deshabilitado.")
+        config = microsoft_auth.build_config(settings, redirect_uri=_microsoft_redirect_uri(request))
+        if not config.is_configured:
+            return _login_redirect_error("Microsoft no está configurado. Contacta al administrador.")
+        state = secrets.token_urlsafe(24)
+        request.session["ms_oauth_state"] = state
+        return RedirectResponse(url=microsoft_auth.authorize_url(config, state=state), status_code=303)
+
+    @app.get("/api/v1/auth/microsoft/callback")
+    async def microsoft_callback_api(request: Request, session: Session = Depends(get_session)):
+        settings = request.app.state.settings
+        expected_state = request.session.pop("ms_oauth_state", None)
+        received_state = request.query_params.get("state")
+        if not expected_state or not received_state or not secrets.compare_digest(expected_state, received_state):
+            return _login_redirect_error("No se pudo validar la respuesta de Microsoft. Intenta nuevamente.")
+
+        if request.query_params.get("error"):
+            detail = request.query_params.get("error_description") or request.query_params.get("error")
+            return _login_redirect_error(f"Microsoft devolvió un error: {detail}")
+
+        code = (request.query_params.get("code") or "").strip()
+        if not code:
+            return _login_redirect_error("Microsoft no devolvió un código de autorización.")
+
+        config = microsoft_auth.build_config(settings, redirect_uri=_microsoft_redirect_uri(request))
+        if not config.is_configured:
+            return _login_redirect_error("Microsoft no está configurado. Contacta al administrador.")
+
+        try:
+            access_token = await microsoft_auth.exchange_code_for_token(config, code=code)
+            email = await microsoft_auth.fetch_user_email(access_token)
+        except microsoft_auth.MicrosoftAuthError as exc:
+            return _login_redirect_error(str(exc))
+
+        user = get_enabled_user_by_email(session, email)
+        if user is None:
+            return _login_redirect_error(f"El correo {email} no está habilitado en EETT.")
+
+        request.session.clear()
+        request.session["username"] = user.username
+        request.session["guest"] = False
+        return RedirectResponse(url="/", status_code=303)
+
     @app.post("/api/v1/login", response_model=SessionUserResponse)
     async def login_api(
         payload: LoginRequest,
         request: Request,
         session: Session = Depends(get_session),
     ):
+        # Microsoft is the only login method, with one deliberate exception: the
+        # reserved "sysadmin" account may always sign in with its password so we
+        # keep an escape hatch if Microsoft is misconfigured or unavailable.
+        settings = request.app.state.settings
+        requested_is_sysadmin = payload.username.strip().lower() == "sysadmin"
+        if not settings.password_login_enabled and not requested_is_sysadmin:
+            raise HTTPException(status_code=403, detail="Password login is disabled")
         user = authenticate_user(session, payload.username, payload.password)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid username or password")
+        if not settings.password_login_enabled and not is_sysadmin(user):
+            # Guard against a non-sysadmin account somehow using this path.
+            raise HTTPException(status_code=403, detail="Password login is disabled")
         request.session.clear()
         request.session["username"] = user.username
         request.session["guest"] = False
@@ -884,6 +961,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         session: Session = Depends(get_session),
     ):
+        if not request.app.state.settings.guest_login_enabled:
+            raise HTTPException(status_code=403, detail="Guest login is disabled")
         user = get_user_by_username(session, "viewer")
         if user is None or not user.is_active:
             raise HTTPException(status_code=503, detail="Guest access is not configured")

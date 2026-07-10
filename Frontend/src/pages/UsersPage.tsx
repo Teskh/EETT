@@ -174,7 +174,8 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
     setCreateSaving(true);
     setError(null);
     try {
-      await api.createUser(createForm);
+      // Password is optional: Microsoft-only accounts are created without one.
+      await api.createUser({ ...createForm, password: createForm.password || undefined });
       setCreateForm(initialCreateForm);
       await loadUsers();
     } catch (err) {
@@ -277,7 +278,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
               type="password"
               value={createForm.password}
               onChange={(event) => setCreateForm((current) => ({ ...current, password: event.target.value }))}
-              placeholder="Contraseña"
+              placeholder="Contraseña (opcional, no se usa con Microsoft)"
               className="w-full bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-3 text-sm focus:outline-none focus:border-accent-500/50"
             />
           </div>

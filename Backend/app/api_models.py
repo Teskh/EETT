@@ -71,7 +71,7 @@ class UserCreateRequest(BaseModel):
     username: str
     display_name: str
     email: str
-    password: str
+    password: str | None = None
     role_codes: list[str] = Field(default_factory=list)
     is_active: bool = True
 
