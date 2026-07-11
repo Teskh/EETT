@@ -23,6 +23,7 @@ export function SortControls({
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
       <select
+        aria-label="Ordenar resultados por"
         value={sort.key}
         onChange={(event) => {
           const key = event.target.value as SortKey;
@@ -43,6 +44,7 @@ export function SortControls({
         onClick={() => onChange({ ...sort, direction: sort.direction === 1 ? -1 : 1 })}
         className={SIDEBAR_BUTTON_CLASSES}
         title={sort.direction === -1 ? "Descendente" : "Ascendente"}
+        aria-label={`Orden ${sort.direction === -1 ? "descendente" : "ascendente"}`}
       >
         {sort.direction === -1 ? "Desc" : "Asc"}
       </button>
@@ -64,6 +66,7 @@ export const SidebarSearchInput = memo(function SidebarSearchInput({
   return (
     <div className="relative">
       <input
+        aria-label={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-10 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
@@ -99,7 +102,7 @@ export function ErrorBanners({ errors }: { errors: Array<string | null> }) {
       {errors
         .filter((error): error is string => Boolean(error))
         .map((error, index) => (
-          <div key={`${error}-${index}`} className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div role="alert" key={`${error}-${index}`} className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {error}
           </div>
         ))}
@@ -123,7 +126,7 @@ export function SidebarTabBar({
   selectedCecoCount: number;
 }) {
   return (
-    <div className="flex gap-4 border-b border-black/10 dark:border-white/10 px-2">
+    <div role="tablist" aria-label="Secciones del panel" className="flex gap-4 border-b border-black/10 dark:border-white/10 px-2">
       {TABS.map((tab) => {
         const active = activeTab === tab.id;
         return (
@@ -131,6 +134,8 @@ export function SidebarTabBar({
             key={tab.id}
             type="button"
             onClick={() => onTabChange(tab.id)}
+            role="tab"
+            aria-selected={active}
             className={`pb-3 text-sm font-semibold transition-colors relative flex items-center gap-2 ${
               active ? "text-accent-600 dark:text-accent-400" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
             }`}

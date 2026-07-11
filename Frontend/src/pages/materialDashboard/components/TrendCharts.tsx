@@ -107,10 +107,12 @@ export function StockTrendChart({
     <svg
       viewBox={`0 0 ${chart.width} ${chart.height}`}
       className={CHART_SVG_CLASSES}
-      focusable="false"
+      role="img"
+      aria-label={`Evolución del stock entre ${formatDate(chart.points[0]?.date)} y ${formatDate(chart.points[chart.points.length - 1]?.date)}`}
       style={NO_USER_SELECT}
       {...pointerHandlers}
     >
+      <title>Evolución del stock de material</title>
       <SelectionClipPath id="stock-selection-clip" frame={chart} edges={selectionEdges} />
       {GRID_STOPS.map((stop) => {
         const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
@@ -285,10 +287,12 @@ export function HouseTrendChart({
     <svg
       viewBox={`0 0 ${chart.width} ${chart.height}`}
       className={CHART_SVG_CLASSES}
-      focusable="false"
+      role="img"
+      aria-label={`Comparación de stock e inicios de vivienda entre ${formatDate(chart.points[0]?.date)} y ${formatDate(chart.points[chart.points.length - 1]?.date)}`}
       style={NO_USER_SELECT}
       {...pointerHandlers}
     >
+      <title>Comparación de stock e inicios de vivienda</title>
       <SelectionClipPath id="house-selection-clip" frame={chart} edges={selectionEdges} />
       {GRID_STOPS.map((stop) => {
         const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;

@@ -330,9 +330,9 @@ export const api = {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     return request<CatalogMaterialSearchResponse>(`/api/v1/catalog/materials/search?${params.toString()}`);
   },
-  searchMaterialDashboardMaterials(query: string, limit = 10) {
+  searchMaterialDashboardMaterials(query: string, limit = 10, signal?: AbortSignal) {
     const params = new URLSearchParams({ q: query, limit: String(limit) });
-    return request<CatalogMaterialSearchResponse>(`/api/v1/dashboard/materials/search?${params.toString()}`);
+    return request<CatalogMaterialSearchResponse>(`/api/v1/dashboard/materials/search?${params.toString()}`, { signal });
   },
   getProjects() {
     return request<ProjectsBoardData>("/api/v1/projects");

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { ApiError, api } from "./lib/api";
@@ -10,10 +10,13 @@ import { ChangeHistoryPage } from "./pages/ChangeHistoryPage";
 import { CostModelPage } from "./pages/CostModelPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/LoginPage";
-import { MaterialDashboardPage } from "./pages/MaterialDashboardPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+
+const MaterialDashboardPage = lazy(() =>
+  import("./pages/MaterialDashboardPage").then((module) => ({ default: module.MaterialDashboardPage })),
+);
 
 type Route =
   | { name: "home" }
@@ -289,7 +292,9 @@ export function App() {
           onLogout={handleLogout}
         >
         {canReadPage(session, "material_dashboard") ? (
-          <MaterialDashboardPage canEditGroups={canEditPage(session, "material_dashboard")} />
+          <Suspense fallback={<div className="p-8 text-sm text-zinc-500">Cargando panel de materiales...</div>}>
+            <MaterialDashboardPage canEditGroups={canEditPage(session, "material_dashboard")} />
+          </Suspense>
         ) : (
           <AccessDenied message="Este rol no puede abrir el panel de materiales." />
         )}

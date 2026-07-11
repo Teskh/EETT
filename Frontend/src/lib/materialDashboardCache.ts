@@ -1,6 +1,10 @@
 const MATERIAL_DASHBOARD_CACHE_DB = "spec-sheets-material-dashboard";
 const MATERIAL_DASHBOARD_CACHE_STORE = "entries";
 const MATERIAL_DASHBOARD_CACHE_VERSION = 1;
+const MATERIAL_DASHBOARD_CACHE_TTL_MS = 15 * 60 * 1000;
+const MATERIAL_DASHBOARD_CACHE_MAX_ENTRIES = 100;
+const MATERIAL_DASHBOARD_CACHE_PRUNE_INTERVAL_MS = 60 * 1000;
+let lastPrunedAt = 0;
 
 type MaterialDashboardCacheRecord<T> = {
   key: string;
@@ -57,7 +61,56 @@ async function withStore<T>(
 
 export async function getMaterialDashboardCacheValue<T>(key: string): Promise<T | null> {
   const record = await withStore<MaterialDashboardCacheRecord<T>>("readonly", (store) => store.get(key));
+  if (!record) {
+    return null;
+  }
+  const cachedAt = Date.parse(record.cachedAt);
+  if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > MATERIAL_DASHBOARD_CACHE_TTL_MS) {
+    void withStore("readwrite", (store) => store.delete(key));
+    return null;
+  }
   return record?.value ?? null;
+}
+
+async function pruneMaterialDashboardCache(): Promise<void> {
+  if (Date.now() - lastPrunedAt < MATERIAL_DASHBOARD_CACHE_PRUNE_INTERVAL_MS) {
+    return;
+  }
+  lastPrunedAt = Date.now();
+  const database = await openMaterialDashboardCache();
+  if (!database) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const transaction = database.transaction(MATERIAL_DASHBOARD_CACHE_STORE, "readwrite");
+    const store = transaction.objectStore(MATERIAL_DASHBOARD_CACHE_STORE);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const records = (request.result as MaterialDashboardCacheRecord<unknown>[]).sort(
+        (left, right) => Date.parse(right.cachedAt) - Date.parse(left.cachedAt),
+      );
+      const now = Date.now();
+      records.forEach((record, index) => {
+        const cachedAt = Date.parse(record.cachedAt);
+        if (index >= MATERIAL_DASHBOARD_CACHE_MAX_ENTRIES || !Number.isFinite(cachedAt) || now - cachedAt > MATERIAL_DASHBOARD_CACHE_TTL_MS) {
+          store.delete(record.key);
+        }
+      });
+    };
+    request.onerror = () => resolve();
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onabort = () => {
+      database.close();
+      resolve();
+    };
+  });
 }
 
 export async function setMaterialDashboardCacheValue<T>(key: string, value: T): Promise<void> {
@@ -67,4 +120,5 @@ export async function setMaterialDashboardCacheValue<T>(key: string, value: T): 
     cachedAt: new Date().toISOString(),
   };
   await withStore("readwrite", (store) => store.put(record));
+  await pruneMaterialDashboardCache();
 }

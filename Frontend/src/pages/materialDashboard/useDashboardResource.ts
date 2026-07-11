@@ -3,6 +3,47 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../../lib/materialDashboardCache";
 
+const MEMORY_CACHE_TTL_MS = 5 * 60 * 1000;
+const MEMORY_CACHE_MAX_ENTRIES = 40;
+
+type MemoryCacheEntry = { value: unknown; cachedAt: number };
+const memoryCache = new Map<string, MemoryCacheEntry>();
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
+function getMemoryCacheValue<T>(key: string): T | null {
+  const entry = memoryCache.get(key);
+  if (!entry || Date.now() - entry.cachedAt > MEMORY_CACHE_TTL_MS) {
+    memoryCache.delete(key);
+    return null;
+  }
+  // Refresh insertion order so the map also acts as a small LRU cache.
+  memoryCache.delete(key);
+  memoryCache.set(key, entry);
+  return entry.value as T;
+}
+
+function setMemoryCacheValue<T>(key: string, value: T) {
+  memoryCache.delete(key);
+  memoryCache.set(key, { value, cachedAt: Date.now() });
+  while (memoryCache.size > MEMORY_CACHE_MAX_ENTRIES) {
+    const oldestKey = memoryCache.keys().next().value as string | undefined;
+    if (!oldestKey) {
+      break;
+    }
+    memoryCache.delete(oldestKey);
+  }
+}
+
+function getSharedRequest<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const existing = inFlightRequests.get(key) as Promise<T> | undefined;
+  if (existing) {
+    return existing;
+  }
+  const request = fetcher().finally(() => inFlightRequests.delete(key));
+  inFlightRequests.set(key, request);
+  return request;
+}
+
 type DashboardResourceOptions<T> = {
   /** Cache key for both the in-memory and persistent caches. `null` disables the resource. */
   cacheKey: string | null;
@@ -41,12 +82,10 @@ export function useDashboardResource<T>({
   onData,
   onError,
 }: DashboardResourceOptions<T>): DashboardResource<T> {
-  const [cache, setCache] = useState<Record<string, T>>({});
+  const [current, setCurrent] = useState<{ key: string; value: T } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const handledRefreshNonceRef = useRef(0);
-  const cacheRef = useRef(cache);
-  cacheRef.current = cache;
   // Callbacks are kept in refs so a new closure each render doesn't retrigger the effect.
   const callbacksRef = useRef({ fetcher, errorMessage, onData, onError });
   callbacksRef.current = { fetcher, errorMessage, onData, onError };
@@ -67,27 +106,28 @@ export function useDashboardResource<T>({
       }
       let hasCached = false;
       setError(null);
+      setLoading(true);
       if (!forceRefresh) {
-        const cached = cacheRef.current[key] ?? (await getMaterialDashboardCacheValue<T>(key));
+        const cached = getMemoryCacheValue<T>(key) ?? (await getMaterialDashboardCacheValue<T>(key));
         if (cancelled) {
           return;
         }
         if (cached !== null && cached !== undefined) {
           hasCached = true;
-          setCache((current) => (current[key] ? current : { ...current, [key]: cached }));
+          setMemoryCacheValue(key, cached);
+          setCurrent({ key, value: cached });
           callbacksRef.current.onData?.(cached);
-          setLoading(false);
         }
       }
-      if (!hasCached) {
-        setLoading(true);
-      }
       try {
-        const response = await callbacksRef.current.fetcher(forceRefresh);
+        const response = forceRefresh
+          ? await callbacksRef.current.fetcher(true)
+          : await getSharedRequest(key, () => callbacksRef.current.fetcher(false));
         if (cancelled) {
           return;
         }
-        setCache((current) => ({ ...current, [key]: response }));
+        setMemoryCacheValue(key, response);
+        setCurrent({ key, value: response });
         callbacksRef.current.onData?.(response);
         void setMaterialDashboardCacheValue(key, response);
       } catch (err) {
@@ -108,6 +148,10 @@ export function useDashboardResource<T>({
     };
   }, [cacheKey, enabled, refreshNonce]);
 
-  const data = enabled && cacheKey ? cache[cacheKey] ?? null : null;
+  const data = enabled && cacheKey
+    ? current?.key === cacheKey
+      ? current.value
+      : getMemoryCacheValue<T>(cacheKey)
+    : null;
   return { data, loading, refreshing: loading && data !== null, error };
 }

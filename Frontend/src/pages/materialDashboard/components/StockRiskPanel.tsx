@@ -20,9 +20,9 @@ const LEVEL_META: Record<
   },
   ok: {
     label: "Cubierto",
-    pillClasses: "bg-emerald-600 text-white dark:bg-emerald-500",
-    accentClasses: "text-emerald-700 dark:text-emerald-300",
-    barClasses: "bg-emerald-500",
+    pillClasses: "bg-zinc-200 text-zinc-700 dark:bg-white/10 dark:text-zinc-300",
+    accentClasses: "text-zinc-700 dark:text-zinc-200",
+    barClasses: "bg-zinc-400",
   },
   no_consumption: {
     label: "Sin consumo",

@@ -16,7 +16,6 @@ import {
   type HouseRange,
 } from "../dates";
 import {
-  formatCondensedDate,
   formatCurrency,
   formatDate,
   formatNumber,
@@ -35,16 +34,10 @@ import {
 } from "../houseComparison";
 import {
   getEstimatedConsumptionPurchaseOrderEstimate,
-  getLeadTimeDigits,
-  getLeadTimeModeLabel,
   getLeadTimeReference,
   getPurchaseOrderEstimate,
   getPurchaseOrderPriceStats,
-  getPurchaseOrderUrgencyClasses,
-  type EstimatedConsumptionPurchaseOrderEstimate,
   type LeadTimeMode,
-  type LeadTimeReference,
-  type PurchaseOrderEstimate,
 } from "../procurement";
 import {
   isGroupDetail,
@@ -67,8 +60,8 @@ import { useChartSelection } from "../useChartSelection";
 import type { HouseViewMode } from "../preferences";
 
 import type { HouseLinksModalTab } from "./HouseLinksModal";
-import { MetricRow, PurchaseOrderHoverValue } from "./Metrics";
 import { MovementBreakdownList } from "./MovementBreakdownList";
+import { ProcurementMetricsPanel } from "./ProcurementMetricsPanel";
 import { TrendChartSkeleton } from "./Skeletons";
 import { StockRiskPanel } from "./StockRiskPanel";
 import { HouseTrendChart, StockTrendChart } from "./TrendCharts";
@@ -177,7 +170,6 @@ function GroupCostBreakdownTooltip({
         {visibleRows.map((row) => {
           const delta = row.cost_delta_per_house;
           const overcost = delta !== null && delta > 0;
-          const saving = delta !== null && delta < 0;
           return (
             <div key={row.sku} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 text-xs">
               <span className="min-w-0">
@@ -195,9 +187,7 @@ function GroupCostBreakdownTooltip({
                 className={`font-mono ${
                   overcost
                     ? "text-red-700 dark:text-red-300"
-                    : saving
-                      ? "text-emerald-700 dark:text-emerald-300"
-                      : "text-zinc-900 dark:text-white"
+                    : "text-zinc-900 dark:text-white"
                 }`}
               >
                 {delta === null ? "—" : `${delta > 0 ? "+" : delta < 0 ? "-" : ""}${formatCurrency(Math.abs(delta))}/viv.`}
@@ -207,218 +197,6 @@ function GroupCostBreakdownTooltip({
         })}
       </div>
       {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} materiales mas</div> : null}
-    </div>
-  );
-}
-
-function MetricSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-5 last:mb-0">
-      <h4 className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 dark:text-zinc-500">{title}</h4>
-      <div className="space-y-1.5">{children}</div>
-    </div>
-  );
-}
-
-function ProcurementMetricsPanel({
-  movementQuantity,
-  detail,
-  detailLoading,
-  groupSelection,
-  leadTimeMode,
-  onLeadTimeModeChange,
-  leadTimeReference,
-  bufferWeeks,
-  bufferWeeksInput,
-  onBufferWeeksInputChange,
-  isEditingBufferWeeks,
-  onEditingBufferWeeksChange,
-  isEditingLeadTimeMode,
-  onEditingLeadTimeModeChange,
-  purchaseOrderEstimate,
-  estimatedConsumptionPurchaseOrderEstimate,
-}: {
-  movementQuantity: number;
-  detail: DashboardDetailLike | null;
-  detailLoading: boolean;
-  groupSelection: boolean;
-  leadTimeMode: LeadTimeMode;
-  onLeadTimeModeChange: (mode: LeadTimeMode) => void;
-  leadTimeReference: LeadTimeReference | null;
-  bufferWeeks: number;
-  bufferWeeksInput: string;
-  onBufferWeeksInputChange: (value: string) => void;
-  isEditingBufferWeeks: boolean;
-  onEditingBufferWeeksChange: (editing: boolean) => void;
-  isEditingLeadTimeMode: boolean;
-  onEditingLeadTimeModeChange: (editing: boolean) => void;
-  purchaseOrderEstimate: PurchaseOrderEstimate | null;
-  estimatedConsumptionPurchaseOrderEstimate: EstimatedConsumptionPurchaseOrderEstimate | null;
-}) {
-  const closeOnEnterOrEscape = (close: () => void) => (event: React.KeyboardEvent) => {
-    if (event.key === "Enter" || event.key === "Escape") {
-      close();
-    }
-  };
-
-  return (
-    <div className="p-5 flex flex-col gap-5">
-      <div>
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-3">Métricas de Compras</h3>
-        <MetricSection title="Consumo y stock">
-          <MetricRow
-            label="Período mov."
-            hint="Cantidad total movida en la ventana de movimientos del panel."
-            value={formatNumber(movementQuantity)}
-          />
-          <MetricRow
-            label="Cons. usada"
-            hint="Consumo diario usado en la proyección histórica: promedio de los últimos 30 días, o la selección del gráfico si arrastraste un rango."
-            value={
-              purchaseOrderEstimate
-                ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
-                : "—"
-            }
-          />
-          <MetricRow
-            label="Cons. est./sem"
-            hint="Consumo semanal estimado según las viviendas vinculadas iniciadas en el rango."
-            value={
-              estimatedConsumptionPurchaseOrderEstimate
-                ? `${formatNumber(estimatedConsumptionPurchaseOrderEstimate.estimatedConsumptionPerWeek)}${estimatedConsumptionPurchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
-                : "—"
-            }
-          />
-          <MetricRow
-            label="Días stock"
-            hint="Días de stock restantes al consumo promedio de los últimos 30 días."
-            value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"}
-          />
-        </MetricSection>
-        <MetricSection title="Reposición">
-          <MetricRow
-            label="Plazo"
-            value={
-              !detail ? (detailLoading ? "..." : "—") : isEditingLeadTimeMode ? (
-                <select
-                  autoFocus
-                  value={leadTimeMode}
-                  onChange={(event) => onLeadTimeModeChange(event.target.value as LeadTimeMode)}
-                  onBlur={() => onEditingLeadTimeModeChange(false)}
-                  onKeyDown={closeOnEnterOrEscape(() => onEditingLeadTimeModeChange(false))}
-                  className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
-                >
-                  <option value="worst">Peor</option>
-                  <option value="median">Mediana</option>
-                  <option value="average">Promedio</option>
-                </select>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onEditingLeadTimeModeChange(true)}
-                  className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  title="Haz clic para elegir la métrica de plazo usada en esta página"
-                >
-                  {leadTimeReference ? `${formatNumber(leadTimeReference.days, getLeadTimeDigits(leadTimeReference.source))} d` : "—"}
-                  <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">
-                    {getLeadTimeModeLabel(leadTimeMode)}
-                  </span>
-                </button>
-              )
-            }
-          />
-          <MetricRow
-            label="Buffer sem."
-            value={
-              isEditingBufferWeeks ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
-                    autoFocus
-                    value={bufferWeeksInput}
-                    onChange={(event) => onBufferWeeksInputChange(event.target.value)}
-                    onBlur={() => onEditingBufferWeeksChange(false)}
-                    onKeyDown={closeOnEnterOrEscape(() => onEditingBufferWeeksChange(false))}
-                    className="w-24 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1 text-right text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400/50"
-                  />
-                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">semanas</span>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onEditingBufferWeeksChange(true)}
-                  className="rounded-lg px-2 py-1 -mx-2 text-sm font-semibold text-zinc-900 dark:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  title="Haz clic para editar el colchón de stock en semanas"
-                >
-                  {formatNumber(bufferWeeks)}
-                  <span className="ml-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">semanas</span>
-                </button>
-              )
-            }
-          />
-          <MetricRow
-            label="Min. stock calc."
-            hint="Stock mínimo objetivo según el consumo histórico × buffer."
-            value={purchaseOrderEstimate ? formatNumber(purchaseOrderEstimate.minimumExpectedStock) : "—"}
-          />
-          <MetricRow
-            label="Min. est. calc."
-            hint="Stock mínimo objetivo según el consumo estimado por proyecto × buffer."
-            value={estimatedConsumptionPurchaseOrderEstimate ? formatNumber(estimatedConsumptionPurchaseOrderEstimate.minimumExpectedStock) : "—"}
-          />
-          <div className="group border-b border-black/5 py-1.5 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
-            <div className="flex items-start justify-between">
-              <div
-                className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300"
-                title="Fecha sugerida para emitir la próxima OC: se retrocede el plazo de entrega desde el día en que el stock tocaría el mínimo."
-              >
-                Nueva OC
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-zinc-500">
-                  <span className="font-medium">histórico:</span>{" "}
-                  <span className={getPurchaseOrderUrgencyClasses(purchaseOrderEstimate?.purchaseOrderDate)}>
-                    {formatCondensedDate(purchaseOrderEstimate?.purchaseOrderDate)}
-                  </span>
-                </div>
-                <div className="text-xs text-zinc-500 mt-0.5">
-                  <span className="font-medium">estimado:</span>{" "}
-                  <span className={getPurchaseOrderUrgencyClasses(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}>
-                    {formatCondensedDate(estimatedConsumptionPurchaseOrderEstimate?.purchaseOrderDate)}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </MetricSection>
-        <MetricSection title="Órdenes de compra">
-          <MetricRow
-            label="Pend. OC"
-            hint="Cantidad pendiente de recepción en órdenes de compra abiertas."
-            value={
-              detail ? (
-                !groupSelection && !isGroupDetail(detail) ? (
-                  <PurchaseOrderHoverValue
-                    value={formatNumber(detail.pending_purchase_quantity)}
-                    purchaseOrders={detail.purchase_orders || []}
-                    currentUnit={detail.unit}
-                  />
-                ) : (
-                  formatNumber(detail.pending_purchase_quantity)
-                )
-              ) : detailLoading ? (
-                "..."
-              ) : (
-                "—"
-              )
-            }
-          />
-          <MetricRow label="Últ. OC" hint="Fecha de la última orden de compra." value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
-          <MetricRow label="No. OC" hint="Número de la última orden de compra." value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
-        </MetricSection>
-      </div>
     </div>
   );
 }
@@ -757,9 +535,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold ${
                     consumptionDeltaPercent > 0
                       ? "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
-                      : consumptionDeltaPercent < 0
-                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
-                        : "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
+                      : "bg-zinc-100 text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
                   }`}
                   title="Diferencia entre el consumo real total y el consumo estimado de las viviendas vinculadas en el rango"
                 >
@@ -800,9 +576,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   className={`text-2xl font-light tracking-tight ${
                     consumptionCostDeltaPerHouse > 0
                       ? "text-red-700 dark:text-red-300"
-                      : consumptionCostDeltaPerHouse < 0
-                        ? "text-emerald-700 dark:text-emerald-300"
-                        : "text-zinc-900 dark:text-white"
+                      : "text-zinc-900 dark:text-white"
                   }`}
                 >
                   {formatCurrency(Math.abs(consumptionCostDeltaPerHouse))}
@@ -854,7 +628,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </div>
                   {priceVolatility && isFiniteNumber(priceVolatility.deltaPercent) ? (
                     <span
-                      className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300"
+                      className="inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-1 text-[11px] font-semibold text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
                       title={`Mayor ${formatCurrency(priceVolatility.maxPrice)} - menor ${formatCurrency(priceVolatility.minPrice)} = ${formatCurrency(priceVolatility.delta)}`}
                     >
                       <span>↕</span>
@@ -943,9 +717,9 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   Haz clic y arrastra sobre la curva para revisar la variación de stock y el consumo promedio en días hábiles. Se omiten los fines de semana.
                 </p>
               ) : null}
-              {isRefreshing ? <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando datos ERP en caché...</p> : null}
+              {isRefreshing ? <p className="mt-1 text-xs text-zinc-500">Actualizando datos ERP en caché...</p> : null}
               {houseComparisonRefreshing && housesMode ? (
-                <p className="mt-1 text-xs text-amber-600 dark:text-amber-500">Actualizando comparación de inicios de vivienda...</p>
+                <p className="mt-1 text-xs text-zinc-500">Actualizando comparación de inicios de vivienda...</p>
               ) : null}
               {houseComparisonError && housesMode ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{houseComparisonError}</p> : null}
             </div>
@@ -991,6 +765,40 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
               <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-500">No hay datos de inicios de vivienda para este rango.</div>
             )}
           </div>
+
+          {activeChart?.points.length ? (
+            <details className="mt-2 text-xs text-zinc-500">
+              <summary className="w-fit cursor-pointer rounded-md px-1 py-0.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                Ver datos del gráfico
+              </summary>
+              <div className="mt-2 max-h-56 overflow-auto rounded-lg border border-black/10 dark:border-white/10">
+                <table className="w-full border-collapse text-left tabular-nums">
+                  <thead className="sticky top-0 bg-zinc-50 text-[10px] uppercase tracking-wider dark:bg-zinc-900">
+                    <tr>
+                      <th className="px-3 py-2">Fecha</th>
+                      <th className="px-3 py-2 text-right">Stock</th>
+                      {housesMode ? <th className="px-3 py-2 text-right">Inicios restantes</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-black/5 dark:divide-white/5">
+                    {activeChart.points.map((point) => (
+                      <tr key={point.date}>
+                        <td className="px-3 py-1.5">{formatDate(point.date)}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          {formatNumber("stockValue" in point ? point.stockValue : point.value)}
+                        </td>
+                        {housesMode ? (
+                          <td className="px-3 py-1.5 text-right">
+                            {formatNumber("remainingHouseStarts" in point ? point.remainingHouseStarts : null, 0)}
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          ) : null}
 
           {housesMode ? (
             <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
@@ -1047,7 +855,6 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
         <div className="flex flex-col bg-zinc-50/50 dark:bg-white/[0.02] lg:min-h-0 lg:overflow-y-auto">
           <StockRiskPanel assessment={stockRisk} unitLabel={selectedUnitLabel} loading={detailLoading} />
           <ProcurementMetricsPanel
-            movementQuantity={selected.movement_quantity_60d}
             detail={detail}
             detailLoading={detailLoading}
             groupSelection={groupSelection}

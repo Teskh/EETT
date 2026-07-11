@@ -18,11 +18,11 @@ import {
 import type { CecoFilterMode } from "../preferences";
 
 function ActiveRowMarker() {
-  return <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />;
+  return <span aria-hidden="true" className="absolute bottom-0 left-0 top-0 w-1 bg-amber-500" />;
 }
 
 function rowClasses(active: boolean) {
-  return `cursor-pointer px-4 py-3 transition-colors ${
+  return `relative block w-full cursor-pointer px-4 py-3 text-left transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500 ${
     active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
   }`;
 }
@@ -54,8 +54,6 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
   const isSavings = hasCostDelta && costDelta < 0;
   const colorClasses = isOvercost
     ? "text-red-600 dark:text-red-400"
-    : isSavings
-    ? "text-emerald-600 dark:text-emerald-400"
     : "text-zinc-500 dark:text-zinc-400";
 
   return (
@@ -76,7 +74,7 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
       ) : null}
       {hasPriceDelta ? (
         <span
-          className="text-amber-600 dark:text-amber-400"
+          className="text-zinc-500 dark:text-zinc-400"
           title={`Volatilidad OC: ${formatCurrency(metric?.purchase_price_delta)} entre precio mínimo y máximo`}
         >
           ↕ {formatUnsignedPercent(priceDeltaPercent)}
@@ -120,7 +118,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
   onSelectErpMaterial: (row: MaterialDashboardListRow) => void;
 }) {
   if (loading) {
-    return <div className="p-10 text-center text-sm text-zinc-500">Cargando materiales...</div>;
+    return <div role="status" className="p-10 text-center text-sm text-zinc-500">Cargando materiales...</div>;
   }
 
   if (!rows.length && !erpRows.length && !erpLoading && !erpError) {
@@ -132,14 +130,20 @@ export const MaterialResultsList = memo(function MaterialResultsList({
       {rows.map((row) => {
         const active = row.sku === selectedMaterialSku;
         return (
-          <div key={row.sku} onClick={() => onSelect(`material:${row.sku}`)} className={rowClasses(active)}>
+          <button
+            key={row.sku}
+            type="button"
+            onClick={() => onSelect(`material:${row.sku}`)}
+            className={rowClasses(active)}
+            aria-current={active ? "true" : undefined}
+          >
             {active ? <ActiveRowMarker /> : null}
             <div className="flex justify-between items-start gap-3 mb-1.5">
               <div className="min-w-0 flex-1">
                 <h4 className={rowTitleClasses(active)} title={row.material_name}>
                   {row.material_name}
                 </h4>
-                <MaterialEconomicDeltaBadge metric={economicMetricsBySku.get(row.sku)} />
+                <MaterialEconomicDeltaBadge metric={active ? null : economicMetricsBySku.get(row.sku)} />
               </div>
               <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
                 {row.sku}
@@ -149,7 +153,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
               <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "unidades"} ({movementWindowDays}d)</div>
               <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
-          </div>
+          </button>
         );
       })}
       {hasMore ? <div className="px-4 py-3 text-[11px] font-medium text-zinc-400">Desplázate para cargar más materiales...</div> : null}
@@ -162,7 +166,13 @@ export const MaterialResultsList = memo(function MaterialResultsList({
             {erpRows.map((row) => {
               const active = row.sku === selectedMaterialSku;
               return (
-                <div key={`erp-${row.sku}`} onClick={() => onSelectErpMaterial(row)} className={rowClasses(active)}>
+                <button
+                  key={`erp-${row.sku}`}
+                  type="button"
+                  onClick={() => onSelectErpMaterial(row)}
+                  className={rowClasses(active)}
+                  aria-current={active ? "true" : undefined}
+                >
                   {active ? <ActiveRowMarker /> : null}
                   <div className="flex justify-between items-start gap-4 mb-2">
                     <div className="min-w-0 flex-1">
@@ -176,7 +186,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
                     <div>{row.unit || "Sin unidad"}</div>
                     <div>Sin movimiento en este rango</div>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -187,18 +197,26 @@ export const MaterialResultsList = memo(function MaterialResultsList({
 });
 
 export const GroupResultsList = memo(function GroupResultsList({
+  loading,
   rows,
+  hasMore,
   movementWindowDays,
   economicMetricsByGroupId,
   selectedGroupId,
   onSelect,
 }: {
+  loading: boolean;
   rows: MaterialStudyGroupRow[];
+  hasMore: boolean;
   movementWindowDays: number;
   economicMetricsByGroupId: ReadonlyMap<number, MaterialDashboardEconomicMetric>;
   selectedGroupId: number | null;
   onSelect: (key: string) => void;
 }) {
+  if (loading) {
+    return <div role="status" className="p-10 text-center text-sm text-zinc-500">Cargando grupos...</div>;
+  }
+
   if (!rows.length) {
     return <div className="p-10 text-center text-sm text-zinc-500">No hay grupos que coincidan con los filtros actuales.</div>;
   }
@@ -208,14 +226,20 @@ export const GroupResultsList = memo(function GroupResultsList({
       {rows.map((row) => {
         const active = row.group_id === selectedGroupId;
         return (
-          <div key={row.group_id} onClick={() => onSelect(`group:${row.group_id}`)} className={rowClasses(active)}>
+          <button
+            key={row.group_id}
+            type="button"
+            onClick={() => onSelect(`group:${row.group_id}`)}
+            className={rowClasses(active)}
+            aria-current={active ? "true" : undefined}
+          >
             {active ? <ActiveRowMarker /> : null}
             <div className="flex justify-between items-start gap-3 mb-1.5">
               <div className="min-w-0 flex-1">
                 <h4 className={rowTitleClasses(active)} title={row.name}>
                   {row.name}
                 </h4>
-                <MaterialEconomicDeltaBadge metric={economicMetricsByGroupId.get(row.group_id)} />
+                <MaterialEconomicDeltaBadge metric={active ? null : economicMetricsByGroupId.get(row.group_id)} />
                 <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} miembros</div>
               </div>
               <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
@@ -226,9 +250,10 @@ export const GroupResultsList = memo(function GroupResultsList({
               <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} ({movementWindowDays}d)</div>
               <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
-          </div>
+          </button>
         );
       })}
+      {hasMore ? <div className="px-4 py-3 text-[11px] font-medium text-zinc-400">Desplázate para cargar más grupos...</div> : null}
     </div>
   );
 });
