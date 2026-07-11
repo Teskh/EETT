@@ -399,14 +399,14 @@ export function HouseTrendChart({
             </text>
             {hoveredPoint.projectedStockValue !== null ? (
               <text x="12" y="45" fontSize="12" fill="white" fontWeight="700">
-                Projected: {formatNumber(hoveredPoint.projectedStockValue)}
+                Proyectado: {formatNumber(hoveredPoint.projectedStockValue)}
               </text>
             ) : null}
             <text x="12" y={hoveredPoint.projectedStockValue !== null ? "59" : "45"} fontSize="12" fill="white" fontWeight="700">
-              Remaining starts: {formatNumber(hoveredPoint.remainingHouseStarts, 0)}
+              Inicios restantes: {formatNumber(hoveredPoint.remainingHouseStarts, 0)}
             </text>
             <text x="12" y={hoveredPoint.projectedStockValue !== null ? "73" : "59"} fontSize="12" fill="white" fontWeight="700">
-              Starts today: {formatNumber(hoveredPoint.house_starts, 0)}
+              Inicios del día: {formatNumber(hoveredPoint.house_starts, 0)}
             </text>
           </g>
         </g>

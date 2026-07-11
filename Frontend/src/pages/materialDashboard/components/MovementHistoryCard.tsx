@@ -54,6 +54,7 @@ import {
   type DashboardHouseComparisonLike,
   type DashboardSelectionRow,
 } from "../selection";
+import { assessStockoutRisk } from "../stockRisk";
 import {
   CHART_HEIGHT,
   CHART_WIDTH,
@@ -69,6 +70,7 @@ import type { HouseLinksModalTab } from "./HouseLinksModal";
 import { MetricRow, PurchaseOrderHoverValue } from "./Metrics";
 import { MovementBreakdownList } from "./MovementBreakdownList";
 import { TrendChartSkeleton } from "./Skeletons";
+import { StockRiskPanel } from "./StockRiskPanel";
 import { HouseTrendChart, StockTrendChart } from "./TrendCharts";
 
 type PriceDisplayMode = "average" | "last";
@@ -100,7 +102,7 @@ function HeaderStatLabel({ children }: { children: React.ReactNode }) {
 }
 
 function HeaderStatDivider() {
-  return <div className="w-px h-10 bg-black/10 dark:bg-white/10 hidden md:block" />;
+  return <div className="w-px h-8 bg-black/10 dark:bg-white/10 hidden md:block" />;
 }
 
 function getExpectedBreakdownLabel(row: MaterialDashboardExpectedBreakdown) {
@@ -209,6 +211,15 @@ function GroupCostBreakdownTooltip({
   );
 }
 
+function MetricSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="mb-5 last:mb-0">
+      <h4 className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 dark:text-zinc-500">{title}</h4>
+      <div className="space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
 function ProcurementMetricsPanel({
   movementQuantity,
   detail,
@@ -251,31 +262,40 @@ function ProcurementMetricsPanel({
   };
 
   return (
-    <div className="p-6 md:p-8 bg-zinc-50/50 dark:bg-white/[0.02] flex flex-col gap-6">
+    <div className="p-5 flex flex-col gap-5">
       <div>
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-4">Métricas de Compras</h3>
-        <div className="space-y-3">
-          <MetricRow label="Período mov." value={formatNumber(movementQuantity)} />
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-3">Métricas de Compras</h3>
+        <MetricSection title="Consumo y stock">
           <MetricRow
-            label="Pend. OC"
+            label="Período mov."
+            hint="Cantidad total movida en la ventana de movimientos del panel."
+            value={formatNumber(movementQuantity)}
+          />
+          <MetricRow
+            label="Cons. usada"
+            hint="Consumo diario usado en la proyección histórica: promedio de los últimos 30 días, o la selección del gráfico si arrastraste un rango."
             value={
-              detail ? (
-                !groupSelection && !isGroupDetail(detail) ? (
-                  <PurchaseOrderHoverValue
-                    value={formatNumber(detail.pending_purchase_quantity)}
-                    purchaseOrders={detail.purchase_orders || []}
-                    currentUnit={detail.unit}
-                  />
-                ) : (
-                  formatNumber(detail.pending_purchase_quantity)
-                )
-              ) : detailLoading ? (
-                "..."
-              ) : (
-                "—"
-              )
+              purchaseOrderEstimate
+                ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
+                : "—"
             }
           />
+          <MetricRow
+            label="Cons. est./sem"
+            hint="Consumo semanal estimado según las viviendas vinculadas iniciadas en el rango."
+            value={
+              estimatedConsumptionPurchaseOrderEstimate
+                ? `${formatNumber(estimatedConsumptionPurchaseOrderEstimate.estimatedConsumptionPerWeek)}${estimatedConsumptionPurchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
+                : "—"
+            }
+          />
+          <MetricRow
+            label="Días stock"
+            hint="Días de stock restantes al consumo promedio de los últimos 30 días."
+            value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"}
+          />
+        </MetricSection>
+        <MetricSection title="Reposición">
           <MetricRow
             label="Plazo"
             value={
@@ -340,19 +360,22 @@ function ProcurementMetricsPanel({
           />
           <MetricRow
             label="Min. stock calc."
+            hint="Stock mínimo objetivo según el consumo histórico × buffer."
             value={purchaseOrderEstimate ? formatNumber(purchaseOrderEstimate.minimumExpectedStock) : "—"}
           />
           <MetricRow
-            label="Cons. usada"
-            value={
-              purchaseOrderEstimate
-                ? `${formatNumber(purchaseOrderEstimate.rateUsed)} / d${purchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
-                : "—"
-            }
+            label="Min. est. calc."
+            hint="Stock mínimo objetivo según el consumo estimado por proyecto × buffer."
+            value={estimatedConsumptionPurchaseOrderEstimate ? formatNumber(estimatedConsumptionPurchaseOrderEstimate.minimumExpectedStock) : "—"}
           />
           <div className="group border-b border-black/5 py-1.5 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
             <div className="flex items-start justify-between">
-              <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">Nueva OC</div>
+              <div
+                className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300"
+                title="Fecha sugerida para emitir la próxima OC: se retrocede el plazo de entrega desde el día en que el stock tocaría el mínimo."
+              >
+                Nueva OC
+              </div>
               <div className="text-right">
                 <div className="text-xs text-zinc-500">
                   <span className="font-medium">histórico:</span>{" "}
@@ -369,22 +392,32 @@ function ProcurementMetricsPanel({
               </div>
             </div>
           </div>
+        </MetricSection>
+        <MetricSection title="Órdenes de compra">
           <MetricRow
-            label="Cons. est./sem"
+            label="Pend. OC"
+            hint="Cantidad pendiente de recepción en órdenes de compra abiertas."
             value={
-              estimatedConsumptionPurchaseOrderEstimate
-                ? `${formatNumber(estimatedConsumptionPurchaseOrderEstimate.estimatedConsumptionPerWeek)}${estimatedConsumptionPurchaseOrderEstimate.rateSource === "selection" ? " sel." : ""}`
-                : "—"
+              detail ? (
+                !groupSelection && !isGroupDetail(detail) ? (
+                  <PurchaseOrderHoverValue
+                    value={formatNumber(detail.pending_purchase_quantity)}
+                    purchaseOrders={detail.purchase_orders || []}
+                    currentUnit={detail.unit}
+                  />
+                ) : (
+                  formatNumber(detail.pending_purchase_quantity)
+                )
+              ) : detailLoading ? (
+                "..."
+              ) : (
+                "—"
+              )
             }
           />
-          <MetricRow
-            label="Min. est. calc."
-            value={estimatedConsumptionPurchaseOrderEstimate ? formatNumber(estimatedConsumptionPurchaseOrderEstimate.minimumExpectedStock) : "—"}
-          />
-          <MetricRow label="Dias stock" value={detail ? formatNumber(detail.days_of_stock_30d) : detailLoading ? "..." : "—"} />
-          <MetricRow label="Ult. OC" value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
-          <MetricRow label="No. OC" value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
-        </div>
+          <MetricRow label="Últ. OC" hint="Fecha de la última orden de compra." value={!groupSelection && detail ? formatDate(detail.last_purchase_order.date) : "—"} />
+          <MetricRow label="No. OC" hint="Número de la última orden de compra." value={!groupSelection && detail ? detail.last_purchase_order.number || "—" : "—"} />
+        </MetricSection>
       </div>
     </div>
   );
@@ -532,27 +565,29 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
 
   const bufferWeeks = Math.max(Number(bufferWeeksInput) || 0, 0);
   const leadTimeReference = getLeadTimeReference(detail, leadTimeMode);
+  const activeStockSummary = housesMode ? houseStockSummary : stockSummary;
   const purchaseOrderEstimate = getPurchaseOrderEstimate({
     detail,
-    summary: housesMode ? houseStockSummary : stockSummary,
+    summary: activeStockSummary,
     leadTimeReference,
     isCustomSelection,
     bufferWeeks,
   });
+  const estimatedConsumptionPerWeek =
+    housesMode && hasExpectedComparison && houseComparisonInRange
+      ? isCustomSelection
+        ? houseSummary?.averageProjectedConsumptionPerWeek ?? null
+        : houseComparisonInRange.total_expected_material_quantity / Math.max((houseChart?.points.length ?? 0) / 5, 0.2)
+      : null;
   const estimatedConsumptionPurchaseOrderEstimate = getEstimatedConsumptionPurchaseOrderEstimate({
     detail,
     leadTimeReference,
-    estimatedConsumptionPerWeek:
-      housesMode && hasExpectedComparison && houseComparisonInRange
-        ? isCustomSelection
-          ? houseSummary?.averageProjectedConsumptionPerWeek ?? null
-          : houseComparisonInRange.total_expected_material_quantity / Math.max((houseChart?.points.length ?? 0) / 5, 0.2)
-        : null,
+    estimatedConsumptionPerWeek,
     isCustomSelection,
     bufferWeeks,
   });
 
-  const selectedBadge = groupSelection ? `Group #${selectedGroup?.group_id}` : selected.sku;
+  const selectedBadge = groupSelection ? `Grupo #${selectedGroup?.group_id}` : selected.sku;
   const selectedUnitLabel = groupSelection ? selectedGroup?.study_unit : selected.unit;
   const canInspectProjectUsage = Boolean(!groupSelection && onInspectProjectUsage);
   const detailMembers = isGroupDetail(detail) ? detail.members : [];
@@ -571,6 +606,24 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const unmappedStartsInRange = houseComparisonInRange?.total_unmapped_house_starts ?? 0;
   const purchaseOrders = detail && "purchase_orders" in detail ? detail.purchase_orders : [];
   const purchasePriceStats = groupSelection ? null : getPurchaseOrderPriceStats(purchaseOrders);
+  // Stock-out risk uses the same consumption rates as the purchase order
+  // estimates, but simulates day by day so scheduled PO arrivals count.
+  const historicalDailyRate = isCustomSelection
+    ? activeStockSummary?.averageConsumptionPerDay ?? null
+    : detail?.average_daily_outgoing_30d ?? null;
+  const stockRisk =
+    detail && isFiniteNumber(detail.stock_on_hand)
+      ? assessStockoutRisk({
+          stockOnHand: detail.stock_on_hand,
+          historicalDailyRate,
+          estimatedDailyRate:
+            isFiniteNumber(estimatedConsumptionPerWeek) && estimatedConsumptionPerWeek > 0 ? estimatedConsumptionPerWeek / 5 : null,
+          purchaseOrders,
+          fallbackPendingQuantity: detail.pending_purchase_quantity,
+          leadTimeReference,
+          bufferWeeks,
+        })
+      : null;
   const priceVolatility = !groupSelection
     ? {
         deltaPercent: economicMetric?.purchase_price_delta_percent ?? purchasePriceStats?.deltaPercent ?? null,
@@ -644,12 +697,12 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   }
 
   return (
-    <section className="flex-1 flex flex-col h-full bg-white dark:bg-zinc-950 overflow-hidden">
-      <div className="p-6 md:p-8 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-6">
+    <section className="flex-1 flex flex-col h-full bg-white dark:bg-zinc-950 overflow-y-auto lg:overflow-hidden">
+      <div className="px-5 py-4 md:px-6 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-4">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Gráfico Fijado</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-1">Gráfico Fijado</p>
           <div className="flex min-w-0 items-start gap-3">
-            <h2 className="min-w-0 flex-1 break-words text-3xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
+            <h2 className="min-w-0 flex-1 break-words text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
             {canInspectProjectUsage ? (
               <button
                 type="button"
@@ -680,11 +733,11 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             </div>
           ) : null}
         </div>
-        <div className="flex gap-6 items-end">
+        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
           <div className="text-right">
             <HeaderStatLabel>{housesMode ? "Cons./Vivienda" : "Stock Disponible"}</HeaderStatLabel>
             <div className="flex items-center justify-end gap-2">
-              <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+              <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
                 {housesMode
                   ? houseSummary
                     ? formatNumber(houseSummary.averageConsumptionPerHouse, houseMetricDigits)
@@ -726,7 +779,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
                   </span>
                 </HeaderStatLabel>
-                <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
                   {formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}
                 </div>
                 <ExpectedBreakdownTooltip breakdown={projectedConsumptionBreakdown} digits={houseMetricDigits} />
@@ -744,7 +797,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </span>
                 </HeaderStatLabel>
                 <div
-                  className={`text-3xl font-light tracking-tight ${
+                  className={`text-2xl font-light tracking-tight ${
                     consumptionCostDeltaPerHouse > 0
                       ? "text-red-700 dark:text-red-300"
                       : consumptionCostDeltaPerHouse < 0
@@ -763,7 +816,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             {groupSelection ? (
               <>
                 <HeaderStatLabel>Unidad de Estudio</HeaderStatLabel>
-                <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">{detail?.unit || selectedGroup?.study_unit}</div>
+                <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">{detail?.unit || selectedGroup?.study_unit}</div>
               </>
             ) : (
               <>
@@ -796,7 +849,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2">
-                  <div className="text-3xl font-light tracking-tight text-zinc-900 dark:text-white">
+                  <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
                     {detail ? formatCurrency(displayPrice) : detailLoading ? "..." : "—"}
                   </div>
                   {priceVolatility && isFiniteNumber(priceVolatility.deltaPercent) ? (
@@ -815,8 +868,8 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr,320px] flex-1">
-        <div className="p-6 md:p-8 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr),320px] flex-1 lg:min-h-0">
+        <div className="p-5 md:p-6 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10 lg:min-h-0 lg:overflow-y-auto">
           <div className="flex items-start justify-between mb-2 gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
@@ -903,13 +956,13 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   onClick={clearSelection}
                   className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.04] hover:text-zinc-900 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
                 >
-                  Reset Selection
+                  Limpiar selección
                 </button>
               </div>
             ) : null}
           </div>
 
-          <div className="flex-1 w-full relative min-h-[180px]">
+          <div className="flex-1 w-full relative min-h-[220px]">
             {!housesMode ? (
               isBlockingLoad ? (
                 <TrendChartSkeleton />
@@ -991,24 +1044,27 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           />
         </div>
 
-        <ProcurementMetricsPanel
-          movementQuantity={selected.movement_quantity_60d}
-          detail={detail}
-          detailLoading={detailLoading}
-          groupSelection={groupSelection}
-          leadTimeMode={leadTimeMode}
-          onLeadTimeModeChange={onLeadTimeModeChange}
-          leadTimeReference={leadTimeReference}
-          bufferWeeks={bufferWeeks}
-          bufferWeeksInput={bufferWeeksInput}
-          onBufferWeeksInputChange={setBufferWeeksInput}
-          isEditingBufferWeeks={isEditingBufferWeeks}
-          onEditingBufferWeeksChange={setIsEditingBufferWeeks}
-          isEditingLeadTimeMode={isEditingLeadTimeMode}
-          onEditingLeadTimeModeChange={setIsEditingLeadTimeMode}
-          purchaseOrderEstimate={purchaseOrderEstimate}
-          estimatedConsumptionPurchaseOrderEstimate={estimatedConsumptionPurchaseOrderEstimate}
-        />
+        <div className="flex flex-col bg-zinc-50/50 dark:bg-white/[0.02] lg:min-h-0 lg:overflow-y-auto">
+          <StockRiskPanel assessment={stockRisk} unitLabel={selectedUnitLabel} loading={detailLoading} />
+          <ProcurementMetricsPanel
+            movementQuantity={selected.movement_quantity_60d}
+            detail={detail}
+            detailLoading={detailLoading}
+            groupSelection={groupSelection}
+            leadTimeMode={leadTimeMode}
+            onLeadTimeModeChange={onLeadTimeModeChange}
+            leadTimeReference={leadTimeReference}
+            bufferWeeks={bufferWeeks}
+            bufferWeeksInput={bufferWeeksInput}
+            onBufferWeeksInputChange={setBufferWeeksInput}
+            isEditingBufferWeeks={isEditingBufferWeeks}
+            onEditingBufferWeeksChange={setIsEditingBufferWeeks}
+            isEditingLeadTimeMode={isEditingLeadTimeMode}
+            onEditingLeadTimeModeChange={setIsEditingLeadTimeMode}
+            purchaseOrderEstimate={purchaseOrderEstimate}
+            estimatedConsumptionPurchaseOrderEstimate={estimatedConsumptionPurchaseOrderEstimate}
+          />
+        </div>
       </div>
     </section>
   );

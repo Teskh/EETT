@@ -74,6 +74,33 @@ export function toBaseSort(sort: SortState): BaseSortState {
   return isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : { key: sort.key, direction: sort.direction };
 }
 
+/**
+ * Orders rows by an economic metric value, pushing rows without the metric to
+ * the end and breaking ties alphabetically. Shared by the material and group
+ * lists, which only differ in how they look up the metric.
+ */
+export function compareEconomicMetricValues(
+  left: { value: number | null | undefined; name: string },
+  right: { value: number | null | undefined; name: string },
+  direction: SortDirection,
+) {
+  const leftMissing = left.value === null || left.value === undefined || Number.isNaN(left.value);
+  const rightMissing = right.value === null || right.value === undefined || Number.isNaN(right.value);
+  if (leftMissing && rightMissing) {
+    return left.name.localeCompare(right.name);
+  }
+  if (leftMissing) {
+    return 1;
+  }
+  if (rightMissing) {
+    return -1;
+  }
+  if (left.value === right.value) {
+    return left.name.localeCompare(right.name);
+  }
+  return ((left.value as number) - (right.value as number)) * direction;
+}
+
 export function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardListRow, sort: BaseSortState) {
   const leftValue = left[sort.key];
   const rightValue = right[sort.key];

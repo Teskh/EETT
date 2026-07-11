@@ -40,7 +40,7 @@ export function MovementBreakdownList({
         </div>
       </div>
 
-      <div className="mt-3 flex h-[300px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 flex h-[260px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
           <>
             <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
@@ -115,7 +115,7 @@ export function MovementBreakdownList({
           </>
         ) : (
           <div className="flex h-full items-center justify-center px-4 py-8 text-sm text-zinc-500">
-            No outgoing movements fell within this plotted period.
+            No hay movimientos de salida en el período graficado.
           </div>
         )}
       </div>

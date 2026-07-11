@@ -6,7 +6,15 @@ import type {
   MaterialDashboardListRow,
   MaterialStudyGroupRow,
 } from "../../../lib/types";
-import { formatCurrency, formatDate, formatNumber, formatPercent, formatUnsignedPercent, isFiniteNumber } from "../formatters";
+import {
+  formatCompactCurrency,
+  formatCurrency,
+  formatDate,
+  formatNumber,
+  formatPercent,
+  formatUnsignedPercent,
+  isFiniteNumber,
+} from "../formatters";
 import type { CecoFilterMode } from "../preferences";
 
 function ActiveRowMarker() {
@@ -14,13 +22,13 @@ function ActiveRowMarker() {
 }
 
 function rowClasses(active: boolean) {
-  return `cursor-pointer p-4 transition-colors ${
+  return `cursor-pointer px-4 py-3 transition-colors ${
     active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
   }`;
 }
 
 function rowTitleClasses(active: boolean) {
-  return `text-sm font-semibold leading-tight ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`;
+  return `text-sm font-semibold leading-snug line-clamp-2 ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`;
 }
 
 const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
@@ -49,52 +57,38 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
     : isSavings
     ? "text-emerald-600 dark:text-emerald-400"
     : "text-zinc-500 dark:text-zinc-400";
-  const separator = <span className="text-zinc-300 dark:text-zinc-600">•</span>;
 
   return (
-    <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+    <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] leading-4 tabular-nums">
       {hasCostDelta ? (
-        <span className={`inline-flex items-center gap-1 font-medium ${colorClasses}`}>
-          {isOvercost && (
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-            </svg>
-          )}
-          {isSavings && (
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
-          )}
-          <span>{formatCurrency(Math.abs(costDelta))}/house</span>
+        <span
+          className={`inline-flex items-center gap-0.5 font-semibold ${colorClasses}`}
+          title={isOvercost ? "Sobrecosto por vivienda vs. lo estimado" : isSavings ? "Ahorro por vivienda vs. lo estimado" : "Costo por vivienda vs. lo estimado"}
+        >
+          {isOvercost ? "↑" : isSavings ? "↓" : ""}
+          {formatCompactCurrency(Math.abs(costDelta))}/viv.
         </span>
       ) : null}
-      {hasConsumptionDelta && (
-        <>
-          {hasCostDelta ? separator : null}
-          <span className="text-zinc-500 dark:text-zinc-400">{formatPercent(deltaPercent)}</span>
-        </>
-      )}
+      {hasConsumptionDelta ? (
+        <span className="text-zinc-500 dark:text-zinc-400" title="Delta de consumo real vs. estimado en el rango">
+          {formatPercent(deltaPercent)}
+        </span>
+      ) : null}
       {hasPriceDelta ? (
-        <>
-          {hasCostDelta || hasConsumptionDelta ? separator : null}
-          <span
-            className="text-amber-600 dark:text-amber-400"
-            title={`Volatilidad OC: ${formatCurrency(metric?.purchase_price_delta)} entre precio mínimo y máximo`}
-          >
-            ↕ {formatUnsignedPercent(priceDeltaPercent)}
-          </span>
-        </>
+        <span
+          className="text-amber-600 dark:text-amber-400"
+          title={`Volatilidad OC: ${formatCurrency(metric?.purchase_price_delta)} entre precio mínimo y máximo`}
+        >
+          ↕ {formatUnsignedPercent(priceDeltaPercent)}
+        </span>
       ) : null}
       {hasWeightedOverprice ? (
-        <>
-          {hasCostDelta || hasConsumptionDelta || hasPriceDelta ? separator : null}
-          <span
-            className="text-zinc-500 dark:text-zinc-400"
-            title="Sobreprecio ponderado por consumo histórico / cantidad estimada"
-          >
-            H {formatCurrency(historicalOverprice)} · E {formatCurrency(estimatedOverprice)}
-          </span>
-        </>
+        <span
+          className="text-zinc-400 dark:text-zinc-500"
+          title={`Sobreprecio ponderado histórico: ${formatCurrency(historicalOverprice)} · estimado: ${formatCurrency(estimatedOverprice)}`}
+        >
+          H {formatCompactCurrency(historicalOverprice)} · E {formatCompactCurrency(estimatedOverprice)}
+        </span>
       ) : null}
     </div>
   );
@@ -140,18 +134,20 @@ export const MaterialResultsList = memo(function MaterialResultsList({
         return (
           <div key={row.sku} onClick={() => onSelect(`material:${row.sku}`)} className={rowClasses(active)}>
             {active ? <ActiveRowMarker /> : null}
-            <div className="flex justify-between items-start gap-4 mb-2">
+            <div className="flex justify-between items-start gap-3 mb-1.5">
               <div className="min-w-0 flex-1">
-                <h4 className={rowTitleClasses(active)}>{row.material_name}</h4>
+                <h4 className={rowTitleClasses(active)} title={row.material_name}>
+                  {row.material_name}
+                </h4>
                 <MaterialEconomicDeltaBadge metric={economicMetricsBySku.get(row.sku)} />
               </div>
-              <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+              <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
                 {row.sku}
               </div>
             </div>
-            <div className="flex items-center justify-between text-xs text-zinc-500">
-              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "unidades"} ({movementWindowDays}d)</div>
-              <div>Últ. mov: {formatDate(row.last_movement_date)}</div>
+            <div className="flex items-center justify-between gap-3 text-xs text-zinc-500 tabular-nums">
+              <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "unidades"} ({movementWindowDays}d)</div>
+              <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
           </div>
         );
@@ -214,19 +210,21 @@ export const GroupResultsList = memo(function GroupResultsList({
         return (
           <div key={row.group_id} onClick={() => onSelect(`group:${row.group_id}`)} className={rowClasses(active)}>
             {active ? <ActiveRowMarker /> : null}
-            <div className="flex justify-between items-start gap-4 mb-2">
-              <div>
-                <h4 className={rowTitleClasses(active)}>{row.name}</h4>
+            <div className="flex justify-between items-start gap-3 mb-1.5">
+              <div className="min-w-0 flex-1">
+                <h4 className={rowTitleClasses(active)} title={row.name}>
+                  {row.name}
+                </h4>
                 <MaterialEconomicDeltaBadge metric={economicMetricsByGroupId.get(row.group_id)} />
-                <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} members</div>
+                <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} miembros</div>
               </div>
-              <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+              <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
                 {row.study_unit}
               </div>
             </div>
-            <div className="flex items-center justify-between text-xs text-zinc-500">
-              <div><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} ({movementWindowDays}d)</div>
-              <div>Last mov: {formatDate(row.last_movement_date)}</div>
+            <div className="flex items-center justify-between gap-3 text-xs text-zinc-500 tabular-nums">
+              <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} ({movementWindowDays}d)</div>
+              <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
           </div>
         );

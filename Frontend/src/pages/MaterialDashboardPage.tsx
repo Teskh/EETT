@@ -43,6 +43,8 @@ import {
   SelectedCecoChips,
   SidebarSearchInput,
   SidebarTabBar,
+  SortControls,
+  SIDEBAR_BUTTON_CLASSES,
   type SidebarTab,
 } from "./materialDashboard/components/SidebarControls";
 import {
@@ -65,6 +67,7 @@ import {
 import type { LeadTimeMode } from "./materialDashboard/procurement";
 import {
   DEFAULT_SORT_STATE,
+  compareEconomicMetricValues,
   compareRows,
   isEconomicSortKey,
   materialSearchResultToDashboardRow,
@@ -76,11 +79,6 @@ import { useDashboardResource } from "./materialDashboard/useDashboardResource";
 
 const LIST_PAGE_SIZE = 50;
 const MAX_COLLAPSED_SELECTED_CECOS = 8;
-
-const SORT_SELECT_CLASSES =
-  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-3 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors";
-const SIDEBAR_BUTTON_CLASSES =
-  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/10";
 
 function maybeLoadMoreRows(
   element: HTMLDivElement,
@@ -499,23 +497,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         if (!isEconomicSortKey(sort.key) || !currentEconomicMetrics) {
           return compareRows(left, right, fallbackSort);
         }
-        const leftValue = economicMetricsBySku.get(left.sku)?.[sort.key];
-        const rightValue = economicMetricsBySku.get(right.sku)?.[sort.key];
-        const leftMissing = leftValue === null || leftValue === undefined || Number.isNaN(leftValue);
-        const rightMissing = rightValue === null || rightValue === undefined || Number.isNaN(rightValue);
-        if (leftMissing && rightMissing) {
-          return left.material_name.localeCompare(right.material_name);
-        }
-        if (leftMissing) {
-          return 1;
-        }
-        if (rightMissing) {
-          return -1;
-        }
-        if (leftValue === rightValue) {
-          return left.material_name.localeCompare(right.material_name);
-        }
-        return (leftValue - rightValue) * sort.direction;
+        return compareEconomicMetricValues(
+          { value: economicMetricsBySku.get(left.sku)?.[sort.key], name: left.material_name },
+          { value: economicMetricsBySku.get(right.sku)?.[sort.key], name: right.material_name },
+          sort.direction,
+        );
       });
   }, [currentEconomicMetrics, data?.materials, economicMetricsBySku, normalizedMaterialSearch, sort]);
 
@@ -548,23 +534,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         if (!isEconomicSortKey(sort.key) || !currentGroupEconomicMetrics) {
           return compareRows(left, right, groupSort);
         }
-        const leftValue = groupEconomicMetricsById.get(left.group_id)?.[sort.key];
-        const rightValue = groupEconomicMetricsById.get(right.group_id)?.[sort.key];
-        const leftMissing = leftValue === null || leftValue === undefined || Number.isNaN(leftValue);
-        const rightMissing = rightValue === null || rightValue === undefined || Number.isNaN(rightValue);
-        if (leftMissing && rightMissing) {
-          return left.name.localeCompare(right.name);
-        }
-        if (leftMissing) {
-          return 1;
-        }
-        if (rightMissing) {
-          return -1;
-        }
-        if (leftValue === rightValue) {
-          return left.name.localeCompare(right.name);
-        }
-        return (leftValue - rightValue) * sort.direction;
+        return compareEconomicMetricValues(
+          { value: groupEconomicMetricsById.get(left.group_id)?.[sort.key], name: left.name },
+          { value: groupEconomicMetricsById.get(right.group_id)?.[sort.key], name: right.name },
+          sort.direction,
+        );
       });
   }, [currentGroupEconomicMetrics, groupData?.groups, groupEconomicMetricsById, normalizedMaterialSearch, sort]);
 
@@ -680,8 +654,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   return (
     <div className="absolute inset-0 top-16 flex flex-col xl:flex-row overflow-hidden bg-zinc-50 dark:bg-zinc-950/40 z-30">
       {/* Panel 1: sidebar with tabs */}
-      <section className="w-full xl:w-[420px] 2xl:w-[480px] flex-shrink-0 flex flex-col border-r border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.01]">
-        <div className="p-4 lg:p-6 pb-0 border-b border-black/5 dark:border-white/5 flex flex-col gap-4">
+      <section className="w-full xl:w-[380px] 2xl:w-[440px] flex-shrink-0 flex flex-col border-r border-black/10 dark:border-white/10 bg-white/60 dark:bg-white/[0.01]">
+        <div className="p-4 lg:p-5 pb-0 border-b border-black/5 dark:border-white/5 flex flex-col gap-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Filtros</p>
             <div className="flex items-end justify-between mb-4">
@@ -696,7 +670,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         <div className="flex-1 overflow-hidden flex flex-col">
           {activeTab === "materials" ? (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
+              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <SidebarSearchInput
@@ -708,30 +682,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   </div>
                   <ReloadIconButton onClick={handleReload} />
                 </div>
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  <select
-                    value={sort.key}
-                    onChange={(event) => {
-                      const key = event.target.value as SortKey;
-                      setSort((current) => (current.key === key ? current : { key, direction: -1 }));
-                    }}
-                    className={SORT_SELECT_CLASSES}
-                  >
-                    {materialSortOptions.map((option) => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => setSort((current) => ({ ...current, direction: current.direction === 1 ? -1 : 1 }))}
-                    className={SIDEBAR_BUTTON_CLASSES}
-                    title={sort.direction === -1 ? "Descendente" : "Ascendente"}
-                  >
-                    {sort.direction === -1 ? "Desc" : "Asc"}
-                  </button>
-                </div>
+                <SortControls options={materialSortOptions} sort={sort} onChange={setSort} />
                 {linksLoaded && !materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
                     Configura la vinculación de tipos de vivienda con proyectos (botón &quot;Vinculación&quot; junto al gráfico) para
@@ -767,7 +718,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           ) : activeTab === "groups" ? (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-3">
+              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <SidebarSearchInput
@@ -786,30 +737,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     </button>
                   </div>
                 ) : null}
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  <select
-                    value={sort.key}
-                    onChange={(event) => {
-                      const key = event.target.value as SortKey;
-                      setSort((current) => (current.key === key ? current : { key, direction: -1 }));
-                    }}
-                    className={SORT_SELECT_CLASSES}
-                  >
-                    {materialSortOptions.map((option) => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => setSort((current) => ({ ...current, direction: current.direction === 1 ? -1 : 1 }))}
-                    className={SIDEBAR_BUTTON_CLASSES}
-                    title={sort.direction === -1 ? "Descendente" : "Ascendente"}
-                  >
-                    {sort.direction === -1 ? "Desc" : "Asc"}
-                  </button>
-                </div>
+                <SortControls options={materialSortOptions} sort={sort} onChange={setSort} />
                 {linksLoaded && !materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
                     Configura la vinculación de tipos de vivienda con proyectos para mostrar sobreconsumo y costo por vivienda en grupos.
@@ -833,7 +761,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-6 border-b border-black/5 dark:border-white/5 space-y-4">
+              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-4">
                 <input
                   value={cecoSearch}
                   onChange={(event) => setCecoSearch(event.target.value)}

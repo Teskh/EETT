@@ -1,8 +1,54 @@
 import { memo } from "react";
 
 import type { CecoFilterMode } from "../preferences";
+import type { SortKey, SortState } from "../selection";
 
 export type SidebarTab = "materials" | "groups" | "cecos";
+
+export const SIDEBAR_BUTTON_CLASSES =
+  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/10";
+
+const SORT_SELECT_CLASSES =
+  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-3 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors";
+
+export function SortControls({
+  options,
+  sort,
+  onChange,
+}: {
+  options: Array<{ key: SortKey; label: string }>;
+  sort: SortState;
+  onChange: (sort: SortState) => void;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+      <select
+        value={sort.key}
+        onChange={(event) => {
+          const key = event.target.value as SortKey;
+          if (key !== sort.key) {
+            onChange({ key, direction: -1 });
+          }
+        }}
+        className={SORT_SELECT_CLASSES}
+      >
+        {options.map((option) => (
+          <option key={option.key} value={option.key}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => onChange({ ...sort, direction: sort.direction === 1 ? -1 : 1 })}
+        className={SIDEBAR_BUTTON_CLASSES}
+        title={sort.direction === -1 ? "Descendente" : "Ascendente"}
+      >
+        {sort.direction === -1 ? "Desc" : "Asc"}
+      </button>
+    </div>
+  );
+}
 
 export const SidebarSearchInput = memo(function SidebarSearchInput({
   value,
@@ -164,7 +210,7 @@ export function SelectedCecoChips({
             onClick={() => onToggleShowAll(!showAll)}
             className="text-[11px] font-semibold text-accent-600 hover:text-accent-500 dark:text-accent-400 dark:hover:text-accent-300 transition-colors"
           >
-            {showAll ? "Collapse" : `Show all ${allCodes.length}`}
+            {showAll ? "Colapsar" : `Ver los ${allCodes.length}`}
           </button>
         ) : null}
       </div>
@@ -192,7 +238,7 @@ export function SelectedCecoChips({
             onClick={() => onToggleShowAll(true)}
             className="rounded-lg border border-dashed border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-zinc-500 hover:text-zinc-700 hover:border-black/20 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:border-white/20 transition-colors"
           >
-            +{allCodes.length - visibleCodes.length} more
+            +{allCodes.length - visibleCodes.length} más
           </button>
         ) : null}
       </div>

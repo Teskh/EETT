@@ -42,6 +42,21 @@ export function formatCurrency(value: number | null | undefined) {
   return currencyFormatter.format(value);
 }
 
+const compactCurrencyFormatter = new Intl.NumberFormat("es-CL", {
+  style: "currency",
+  currency: "CLP",
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+/** Short currency for dense list rows: $16,6 M instead of $16.614.042. */
+export function formatCompactCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) {
+    return "—";
+  }
+  return compactCurrencyFormatter.format(value);
+}
+
 export function formatPercent(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "—";

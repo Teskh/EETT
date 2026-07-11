@@ -3,10 +3,15 @@ import type { ReactNode } from "react";
 import type { MaterialDashboardPurchaseOrderLine } from "../../../lib/types";
 import { formatCurrency, formatDate, formatNumber } from "../formatters";
 
-export function MetricRow({ label, value }: { label: string; value: ReactNode }) {
+export function MetricRow({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
     <div className="group flex items-center justify-between border-b border-black/5 py-1.5 transition-colors last:border-0 hover:bg-black/[0.02] dark:border-white/5 dark:hover:bg-white/[0.02]">
-      <div className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300">{label}</div>
+      <div
+        className="text-xs font-medium text-zinc-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-zinc-300"
+        title={hint}
+      >
+        {label}
+      </div>
       <div className="text-sm font-semibold text-zinc-900 dark:text-white">{value}</div>
     </div>
   );

@@ -49,9 +49,9 @@ export function getLeadTimeDigits(mode: LeadTimeMode) {
 
 export function getLeadTimeModeLabel(mode: LeadTimeMode) {
   if (mode === "worst") {
-    return "Worst";
+    return "Peor";
   }
-  return mode === "median" ? "Median" : "Average";
+  return mode === "median" ? "Mediana" : "Promedio";
 }
 
 export function getPurchaseOrderUrgencyClasses(value: string | null | undefined) {
