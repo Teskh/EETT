@@ -1,10 +1,10 @@
 function SkeletonBlock({ className }: { className: string }) {
-  return <div className={`animate-pulse rounded-full bg-zinc-200/85 dark:bg-white/10 ${className}`} />;
+  return <div className={`animate-pulse bg-zinc-200/85 dark:bg-white/10 ${className}`} />;
 }
 
 export function TrendChartSkeleton({ dualSeries = false }: { dualSeries?: boolean }) {
   return (
-    <div className="absolute inset-0 overflow-hidden rounded-3xl border border-black/5 bg-zinc-50/60 p-4 dark:border-white/5 dark:bg-white/[0.02]">
+    <div className="absolute inset-0 overflow-hidden border border-black/5 bg-zinc-50/60 p-4 dark:border-white/5 dark:bg-white/[0.02]">
       <div className="flex h-full flex-col">
         <div className="flex items-center justify-between gap-3">
           <SkeletonBlock className="h-4 w-32" />
@@ -13,7 +13,7 @@ export function TrendChartSkeleton({ dualSeries = false }: { dualSeries?: boolea
             {dualSeries ? <SkeletonBlock className="h-6 w-24" /> : null}
           </div>
         </div>
-        <div className="relative mt-4 flex-1 overflow-hidden rounded-2xl border border-black/5 bg-white/70 px-4 py-3 dark:border-white/5 dark:bg-black/20">
+        <div className="relative mt-4 flex-1 overflow-hidden border border-black/5 bg-white/70 px-4 py-3 dark:border-white/5 dark:bg-black/20">
           {[14, 34, 54, 74].map((top) => (
             <div
               key={top}
@@ -71,7 +71,7 @@ export function MovementBreakdownSkeleton() {
         </div>
       </div>
 
-      <div className="mt-3 flex h-[300px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 flex h-[300px] flex-col overflow-hidden border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
           <SkeletonBlock className="h-3 w-32" />
           <div className="flex md:justify-end">

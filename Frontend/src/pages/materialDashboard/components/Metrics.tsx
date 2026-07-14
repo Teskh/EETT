@@ -231,7 +231,7 @@ export function PurchaseOrderHoverValue({
         onBlur={scheduleClose}
         aria-expanded={open}
         aria-controls={popupId}
-        className="rounded px-1.5 py-0.5 -mr-1 text-sm font-semibold text-zinc-900 underline decoration-dotted underline-offset-4 outline-none transition-colors hover:bg-black/5 focus:bg-black/5 dark:text-white dark:hover:bg-white/10 dark:focus:bg-white/10"
+        className="-mr-1 px-1.5 py-0.5 text-sm font-semibold text-zinc-900 underline decoration-dotted underline-offset-4 outline-none transition-colors hover:bg-black/5 focus:bg-black/5 dark:text-white dark:hover:bg-white/10 dark:focus:bg-white/10"
       >
         {value}
       </button>

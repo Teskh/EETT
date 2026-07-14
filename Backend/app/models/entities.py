@@ -516,6 +516,10 @@ class Project(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    material_occurrence_modes: Mapped[list["ProjectMaterialOccurrenceMode"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     auxiliary_materials: Mapped[list["ProjectAuxiliaryMaterialSelection"]] = relationship(
         back_populates="project",
@@ -587,6 +591,54 @@ class ProjectMaterialMode(Base):
     changed_by: Mapped[User | None] = relationship(back_populates="changed_material_modes")
 
 
+class ProjectMaterialOccurrenceMode(Base):
+    """Active general/per-subtype mode for one material on one project instance.
+
+    BOM rows keep both general and subtype values so switching modes does not
+    destroy dormant quantities. This row records which set is currently active.
+    """
+
+    __tablename__ = "project_material_occurrence_modes"
+    __table_args__ = (
+        Index(
+            "uq_project_material_occurrence_modes_rule",
+            "project_id",
+            "instance_id",
+            "material_rule_id",
+            unique=True,
+            postgresql_where=text("material_rule_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_project_material_occurrence_modes_manual",
+            "project_id",
+            "instance_id",
+            "material_id",
+            unique=True,
+            postgresql_where=text("material_rule_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
+    material_rule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("component_material_rules.id", ondelete="CASCADE"),
+        default=None,
+    )
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False)
+    mode: Mapped[MaterialMode] = mapped_column(
+        enum_column(MaterialMode, "material_mode"),
+        default=MaterialMode.GENERAL,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project] = relationship(back_populates="material_occurrence_modes")
+    instance: Mapped["ProjectInstance"] = relationship(back_populates="material_occurrence_modes")
+    material_rule: Mapped[ComponentMaterialRule | None] = relationship()
+    material: Mapped[Material] = relationship()
+
+
 class ProjectInstance(Base):
     __tablename__ = "project_instances"
 
@@ -646,6 +698,10 @@ class ProjectInstance(Base):
         foreign_keys="ProjectInstanceOccurrenceTarget.target_instance_id",
     )
     bom_entries: Mapped[list["ProjectBomEntry"]] = relationship(back_populates="instance", cascade="all, delete-orphan")
+    material_occurrence_modes: Mapped[list[ProjectMaterialOccurrenceMode]] = relationship(
+        back_populates="instance",
+        cascade="all, delete-orphan",
+    )
     calculation_sheets: Mapped[list["ProjectMaterialCalculationSheet"]] = relationship(
         back_populates="instance",
         cascade="all, delete-orphan",

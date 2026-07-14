@@ -18,18 +18,23 @@ import {
 import type { CecoFilterMode } from "../preferences";
 
 function ActiveRowMarker() {
-  return <span aria-hidden="true" className="absolute bottom-0 left-0 top-0 w-1 bg-amber-500" />;
+  return <span aria-hidden="true" className="absolute bottom-2 left-0 top-2 w-1 bg-accent-500" />;
 }
 
 function rowClasses(active: boolean) {
-  return `relative block w-full cursor-pointer px-4 py-3 text-left transition-colors focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500 ${
-    active ? "bg-amber-50 dark:bg-amber-500/10 relative" : "hover:bg-zinc-100 dark:hover:bg-white/5"
+  return `relative block w-full cursor-pointer px-4 py-3 text-left transition-all duration-150 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500 ${
+    active
+      ? "bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.7),0_1px_8px_rgba(0,0,0,0.045)] dark:bg-white/[0.055] dark:shadow-none"
+      : "hover:bg-white/70 dark:hover:bg-white/[0.035]"
   }`;
 }
 
 function rowTitleClasses(active: boolean) {
-  return `text-sm font-semibold leading-snug line-clamp-2 ${active ? "text-amber-900 dark:text-amber-100" : "text-zinc-900 dark:text-white"}`;
+  return `line-clamp-2 text-sm font-semibold leading-snug ${active ? "text-zinc-950 dark:text-white" : "text-zinc-900 dark:text-white"}`;
 }
+
+const ROW_CODE_CLASSES =
+  "flex-shrink-0 border border-black/[0.06] bg-zinc-100/80 px-1.5 py-0.5 font-mono text-[11px] text-zinc-600 dark:border-white/[0.06] dark:bg-zinc-800 dark:text-zinc-300";
 
 const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
   metric,
@@ -138,18 +143,18 @@ export const MaterialResultsList = memo(function MaterialResultsList({
             aria-current={active ? "true" : undefined}
           >
             {active ? <ActiveRowMarker /> : null}
-            <div className="flex justify-between items-start gap-3 mb-1.5">
+            <div className="mb-1.5 flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <h4 className={rowTitleClasses(active)} title={row.material_name}>
                   {row.material_name}
                 </h4>
                 <MaterialEconomicDeltaBadge metric={active ? null : economicMetricsBySku.get(row.sku)} />
               </div>
-              <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+              <div className={ROW_CODE_CLASSES}>
                 {row.sku}
               </div>
             </div>
-            <div className="flex items-center justify-between gap-3 text-xs text-zinc-500 tabular-nums">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-xs tabular-nums text-zinc-500">
               <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.unit || "unidades"} ({movementWindowDays}d)</div>
               <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
@@ -178,7 +183,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
                     <div className="min-w-0 flex-1">
                       <h4 className={rowTitleClasses(active)}>{row.material_name}</h4>
                     </div>
-                    <div className="text-xs font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+                    <div className={ROW_CODE_CLASSES}>
                       {row.sku}
                     </div>
                   </div>
@@ -242,11 +247,11 @@ export const GroupResultsList = memo(function GroupResultsList({
                 <MaterialEconomicDeltaBadge metric={active ? null : economicMetricsByGroupId.get(row.group_id)} />
                 <div className="mt-1 text-[11px] text-zinc-500">{formatNumber(row.member_count, 0)} miembros</div>
               </div>
-              <div className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-shrink-0">
+              <div className={ROW_CODE_CLASSES}>
                 {row.study_unit}
               </div>
             </div>
-            <div className="flex items-center justify-between gap-3 text-xs text-zinc-500 tabular-nums">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 text-xs tabular-nums text-zinc-500">
               <div className="min-w-0 truncate"><span className="font-medium text-zinc-700 dark:text-zinc-300">{formatNumber(row.movement_quantity_60d)}</span> {row.study_unit} ({movementWindowDays}d)</div>
               <div className="flex-shrink-0">Últ. mov: {formatDate(row.last_movement_date)}</div>
             </div>
@@ -283,7 +288,7 @@ export const CecoResultsList = memo(function CecoResultsList({
         return (
           <label
             key={ceco.code}
-            className={`flex items-start gap-3 p-2.5 rounded-xl cursor-pointer transition-colors ${
+            className={`flex cursor-pointer items-start gap-3 p-2.5 transition-colors ${
               isSelected
                 ? excludeMode
                   ? "bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20"

@@ -1,12 +1,12 @@
 # Rebuild Contract
 
-This backend must treat [REFACTOR_GUIDE.md](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/REFACTOR_GUIDE.md) as the product source of truth and the legacy app as the behavior reference. For every new feature or gap closure:
+This backend must treat [REFACTOR_GUIDE.md](../../legacy_reference_docs/REFACTOR_GUIDE.md) as the product source of truth and the legacy app as the behavior reference. For every new feature or gap closure:
 
 1. Read the named guide section first.
-2. Use [LEGACY_REFERENCE_MAP.md](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/LEGACY_REFERENCE_MAP.md) to find the old implementation path.
+2. Use [LEGACY_REFERENCE_MAP.md](../../legacy_reference_docs/LEGACY_REFERENCE_MAP.md) to find the old implementation path.
    Legacy repo root for this machine: `/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI`
    Cost-model exporter: `/mnt/c/Mess/CODE REPO/Testgrounds/2025.03.04 SPGXI/projects/excel_cost_model.py`
-3. Inspect [main.sql](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/main.sql) and [projects.sql](/mnt/c/Code/Spec%20Sheets/legacy_reference_docs/projects.sql) when schema or behavior detail is unclear.
+3. Inspect [main.sql](../../legacy_reference_docs/main.sql) and [projects.sql](../../legacy_reference_docs/projects.sql) when schema or behavior detail is unclear.
 4. Preserve the business semantics and workflow completeness, not the old dual-database design or hidden relationship encoding.
 
 ## Domain expectations
@@ -25,3 +25,4 @@ This backend must treat [REFACTOR_GUIDE.md](/mnt/c/Code/Spec%20Sheets/legacy_ref
 - ERP access stays behind dedicated service methods and cache tables.
 - Heavy exports and ERP refreshes should be modeled as jobs/services, not direct request-path work.
 - No feature is complete until it satisfies the guide section and matches or exceeds the legacy workflow depth.
+- The one-off SQLite replacement migration must follow [legacy_migration.md](legacy_migration.md), including its dry-run and reconciliation report.

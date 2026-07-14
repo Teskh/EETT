@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS Items (
     category_id INTEGER, -- can reference either a top-level or nested category
     hidden TEXT DEFAULT '[]',
     associated_tasks TEXT DEFAULT '[]', -- JSON array of task_definition_ids
+    unit_type TEXT,
     FOREIGN KEY (category_id) REFERENCES Categories(category_id) ON DELETE CASCADE
 );
 
@@ -48,6 +49,7 @@ CREATE TABLE Accesory_Item (
     hidden TEXT DEFAULT '[]',
     category_id INTEGER NOT NULL,
     associated_tasks TEXT DEFAULT '[]', -- JSON array of task_definition_ids
+    unit_type TEXT,
     FOREIGN KEY (category_id) REFERENCES Categories(category_id) ON DELETE CASCADE
 );
 
@@ -68,6 +70,7 @@ CREATE TABLE Materials (
     material_name TEXT NOT NULL,
     SKU TEXT NOT NULL,
     Units VARCHAR(50),
+    unit_qty_per_unit REAL DEFAULT 0.0,
     display_order INTEGER DEFAULT 0,
     FOREIGN KEY (item_id) REFERENCES Items(item_id) ON DELETE CASCADE,
     FOREIGN KEY (accesory_id) REFERENCES Accesory_Item(accesory_id) ON DELETE CASCADE

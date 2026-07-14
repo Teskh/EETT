@@ -48,6 +48,8 @@ CREATE TABLE Item_Instances (
     hidden TEXT DEFAULT '[]',
     created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    image_path TEXT,
+    unit_amount REAL,
     FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE
 );
 
@@ -89,6 +91,7 @@ CREATE TABLE Accessory_Instance (
     hidden TEXT DEFAULT '[]',
     created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
     modified_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    unit_amount REAL,
     FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE
 );
 
@@ -120,6 +123,7 @@ CREATE TABLE Accessory_Instance_Attributes (
      quantity REAL,
      assembly_kit REAL,
      unit VARCHAR(50),
+     auto_calculated INTEGER DEFAULT 0,
      item_instance_id INTEGER,
      accessory_instance_id INTEGER,
      FOREIGN KEY (project_id) REFERENCES Projects(project_id) ON DELETE CASCADE,
@@ -233,6 +237,7 @@ CREATE TABLE IF NOT EXISTS Instance_Comments (
     body TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    is_deleted INTEGER DEFAULT 0,
     CHECK (
         (
             (item_instance_id IS NOT NULL AND accessory_instance_id IS NULL) OR

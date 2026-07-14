@@ -1167,8 +1167,10 @@ class ServiceLayerTests(unittest.TestCase):
                 .where(ProjectBomEntry.instance_id == window_instance.id, ProjectBomEntry.material_rule_id == material_rule.id)
                 .order_by(ProjectBomEntry.subtype_id)
             ).all()
-        self.assertEqual(len(subtype_rows), 2)
-        self.assertTrue(all(row.subtype_id is not None for row in subtype_rows))
+        self.assertEqual(len(subtype_rows), 3)
+        dormant_general = next(row for row in subtype_rows if row.subtype_id is None)
+        self.assertEqual(dormant_general.quantity, 15)
+        self.assertEqual(len([row for row in subtype_rows if row.subtype_id is not None]), 2)
 
         detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
         self.assertEqual(detail.status_code, 200)
@@ -1177,6 +1179,22 @@ class ServiceLayerTests(unittest.TestCase):
         glass_material = next(item for item in living_window["materials"] if item["rule_id"] == material_rule.id)
         self.assertEqual(glass_material["mode"], "per_subtype")
         self.assertEqual([row["subtype"] for row in glass_material["bom_entries"]], ["Standard", "Premium"])
+
+        restore_general = self.client.put(
+            f"/api/v1/projects/2/instances/{window_instance.id}/materials/{material_rule.id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "mode": "general",
+                "entries": [{"subtype_id": None, "quantity": 15, "assembly_quantity": 5}],
+            },
+        )
+        self.assertEqual(restore_general.status_code, 200)
+        restored_detail = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        windows = next(section for section in restored_detail.json()["categories"] if section["name"] == "Windows")
+        living_window = next(item for item in windows["instances"] if item["id"] == window_instance.id)
+        glass_material = next(item for item in living_window["materials"] if item["rule_id"] == material_rule.id)
+        self.assertEqual(glass_material["mode"], "general")
+        self.assertEqual(glass_material["bom_entries"][0]["quantity"], 15)
 
     def test_comments_notifications_exports_and_approvals(self) -> None:
         comments_response = self.client.get("/api/v1/projects/2/comments", headers={"X-Spec-Sheets-User": "viewer"})

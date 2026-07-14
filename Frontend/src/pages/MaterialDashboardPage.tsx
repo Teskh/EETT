@@ -678,12 +678,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   ];
 
   return (
-    <div className="absolute inset-0 top-16 flex min-h-0 flex-col overflow-hidden bg-zinc-50 dark:bg-zinc-950/40 xl:flex-row z-30">
+    <div className="absolute inset-0 top-16 z-30 flex min-h-0 flex-col overflow-hidden bg-zinc-100/70 dark:bg-zinc-950 xl:flex-row">
       {/* Panel 1: sidebar with tabs */}
-      <section className={`${mobileSidebarOpen ? "flex" : "hidden"} max-h-[48vh] w-full flex-shrink-0 flex-col border-b border-black/10 bg-white/60 dark:border-white/10 dark:bg-white/[0.01] xl:flex xl:max-h-none xl:w-[380px] xl:border-b-0 xl:border-r 2xl:w-[440px]`}>
-        <div className="p-4 lg:p-5 pb-0 border-b border-black/5 dark:border-white/5 flex flex-col gap-4">
+      <section className={`${mobileSidebarOpen ? "flex" : "hidden"} max-h-[48vh] w-full flex-shrink-0 flex-col border-b border-black/10 bg-zinc-50/95 shadow-[4px_0_18px_rgba(0,0,0,0.025)] dark:border-white/10 dark:bg-zinc-950 xl:flex xl:max-h-none xl:w-[380px] xl:border-b-0 xl:border-r 2xl:w-[440px]`}>
+        <div className="flex flex-col gap-4 border-b border-black/5 p-4 pb-0 dark:border-white/5 lg:p-5 lg:pb-0">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-2">Filtros</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Filtros</p>
             <div className="flex items-end justify-between mb-4">
               <h2 className="text-lg font-bold text-zinc-900 dark:text-white">Actividad ERP</h2>
               <div className="text-xs text-zinc-500">Actualizado: {formatDate(activeTab === "groups" ? groupData?.generated_at : data?.generated_at)}</div>
@@ -696,7 +696,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         <div className="flex-1 overflow-hidden flex flex-col">
           {activeTab === "materials" ? (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-3">
+              <div className="space-y-3 border-b border-black/5 bg-white/55 p-4 dark:border-white/5 dark:bg-white/[0.015] lg:p-5">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <SidebarSearchInput
@@ -744,7 +744,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           ) : activeTab === "groups" ? (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-3">
+              <div className="space-y-3 border-b border-black/5 bg-white/55 p-4 dark:border-white/5 dark:bg-white/[0.015] lg:p-5">
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
                     <SidebarSearchInput
@@ -794,12 +794,12 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="p-4 lg:p-5 border-b border-black/5 dark:border-white/5 space-y-4">
+              <div className="space-y-4 border-b border-black/5 bg-white/55 p-4 dark:border-white/5 dark:bg-white/[0.015] lg:p-5">
                 <input
                   value={cecoSearch}
                   onChange={(event) => setCecoSearch(event.target.value)}
                   aria-label="Buscar centro de costo"
-                  className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-4 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
+                  className="h-10 w-full border border-black/10 bg-white px-4 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
                   placeholder="Buscar CECO..."
                 />
                 <div className="flex justify-end">
@@ -854,7 +854,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           <button
             type="button"
             onClick={() => setMobileSidebarOpen((current) => !current)}
-            className="rounded-lg border border-black/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:text-zinc-200"
+            className="border border-black/10 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:text-zinc-200"
             aria-expanded={mobileSidebarOpen}
           >
             {mobileSidebarOpen ? "Ocultar filtros" : "Mostrar filtros"}

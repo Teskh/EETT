@@ -40,7 +40,7 @@ export function MovementBreakdownList({
         </div>
       </div>
 
-      <div className="mt-3 flex h-[260px] flex-col overflow-hidden rounded-xl border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="mt-3 flex h-[260px] flex-col overflow-hidden border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
           <>
             <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
@@ -83,15 +83,15 @@ export function MovementBreakdownList({
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-zinc-900 dark:text-white">{formatDate(movement.date)}</span>
                         {"sku" in movement ? (
-                          <span className="rounded-full border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
+                          <span className="border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
                             {movement.sku}
                           </span>
                         ) : null}
-                        <span className="rounded-full bg-black/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
+                        <span className="bg-black/[0.05] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
                           {movement.ceco ?? "Sin CECO"}
                         </span>
                         {movement.movement_internal_number ? (
-                          <span className="rounded-full border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
+                          <span className="border border-black/10 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">
                             ERP {movement.movement_internal_number}
                           </span>
                         ) : null}

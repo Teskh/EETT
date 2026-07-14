@@ -1077,7 +1077,8 @@ These decisions are now assumed for the rebuild unless explicitly revisited:
    daily-use surface.
 5. Rebuild exports against the new domain services, not against template logic.
 6. Rebuild the material dashboard against explicit material snapshot endpoints.
-7. Migrate data from SQLite to PostgreSQL with validation around:
+7. Migrate data from SQLite to PostgreSQL using
+   `Backend/docs/legacy_migration.md`, with validation around:
    - category hierarchy
    - instance snapshots
    - BOM rows

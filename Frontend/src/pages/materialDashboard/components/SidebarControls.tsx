@@ -6,10 +6,10 @@ import type { SortKey, SortState } from "../selection";
 export type SidebarTab = "materials" | "groups" | "cecos";
 
 export const SIDEBAR_BUTTON_CLASSES =
-  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 shadow-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/10";
+  "inline-flex h-10 items-center justify-center border border-black/10 bg-white px-4 text-sm font-medium text-zinc-700 shadow-sm transition-colors hover:border-black/15 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:bg-white/10";
 
 const SORT_SELECT_CLASSES =
-  "rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-3 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors";
+  "h-10 border border-black/10 bg-white px-3 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white";
 
 export function SortControls({
   options,
@@ -69,10 +69,10 @@ export const SidebarSearchInput = memo(function SidebarSearchInput({
         aria-label={placeholder}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 pl-10 pr-10 py-2.5 text-sm text-zinc-900 dark:text-white outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-500 transition-colors"
+        className="h-10 w-full border border-black/10 bg-white pl-10 pr-10 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
         placeholder={placeholder}
       />
-      <svg className="absolute left-3 top-3 w-4 h-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <svg className="absolute left-3 top-3 h-4 w-4 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
       </svg>
       {pending ? <span className="pointer-events-none absolute right-4 top-1/2 h-2.5 w-2.5 -translate-y-1/2 animate-pulse rounded-full bg-accent-500/90" /> : null}
@@ -85,7 +85,7 @@ export function ReloadIconButton({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl bg-accent-500 text-zinc-950 shadow-sm transition-colors hover:bg-accent-400"
+      className="inline-flex h-10 w-10 shrink-0 items-center justify-center bg-accent-500 text-zinc-950 shadow-sm transition-colors hover:bg-accent-400"
       title="Recargar"
       aria-label="Recargar"
     >
@@ -102,7 +102,7 @@ export function ErrorBanners({ errors }: { errors: Array<string | null> }) {
       {errors
         .filter((error): error is string => Boolean(error))
         .map((error, index) => (
-          <div role="alert" key={`${error}-${index}`} className="mt-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div role="alert" key={`${error}-${index}`} className="mt-1 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
             {error}
           </div>
         ))}
@@ -146,7 +146,7 @@ export function SidebarTabBar({
                 {selectedCecoCount}
               </span>
             ) : null}
-            {active ? <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500 rounded-t-full" /> : null}
+            {active ? <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent-500" /> : null}
           </button>
         );
       })}
@@ -160,14 +160,14 @@ export function CecoFilterModeToggle({ mode, onChange }: { mode: CecoFilterMode;
     { id: "include", label: "Solo seleccionados" },
   ];
   return (
-    <div className="rounded-2xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-1">
+    <div className="border border-black/10 bg-zinc-50 p-1 dark:border-white/10 dark:bg-white/5">
       <div className="grid grid-cols-2 gap-1">
         {options.map((option) => (
           <button
             key={option.id}
             type="button"
             onClick={() => onChange(option.id)}
-            className={`rounded-xl px-3 py-2 text-xs font-semibold transition-colors ${
+            className={`px-3 py-2 text-xs font-semibold transition-colors ${
               mode === option.id
                 ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm"
                 : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -225,7 +225,7 @@ export function SelectedCecoChips({
             key={code}
             type="button"
             onClick={() => onToggleCeco(code)}
-            className={`rounded-lg px-2 py-1 text-xs font-semibold transition-colors flex items-center gap-1 ${
+            className={`flex items-center gap-1 px-2 py-1 text-xs font-semibold transition-colors ${
               mode === "exclude"
                 ? "border border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-500/20"
                 : "border border-accent-500/30 bg-accent-50 dark:bg-accent-500/10 text-accent-700 dark:text-accent-300 hover:bg-accent-100 dark:hover:bg-accent-500/20"
@@ -241,7 +241,7 @@ export function SelectedCecoChips({
           <button
             type="button"
             onClick={() => onToggleShowAll(true)}
-            className="rounded-lg border border-dashed border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-zinc-500 hover:text-zinc-700 hover:border-black/20 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:border-white/20 transition-colors"
+            className="border border-dashed border-black/10 bg-white/70 px-2.5 py-1 text-xs font-semibold text-zinc-500 transition-colors hover:border-black/20 hover:text-zinc-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400 dark:hover:border-white/20 dark:hover:text-zinc-200"
           >
             +{allCodes.length - visibleCodes.length} más
           </button>

@@ -57,7 +57,7 @@ function ScenarioChip({ scenario, isWorst, unitLabel }: { scenario: StockRiskSce
   const runway = scenario.withArrivals;
   return (
     <div
-      className={`rounded-lg border px-2.5 py-1.5 text-[11px] leading-4 ${
+      className={`border px-2.5 py-1.5 text-[11px] leading-4 ${
         isWorst
           ? "border-black/15 bg-white font-semibold text-zinc-800 dark:border-white/20 dark:bg-white/[0.06] dark:text-zinc-100"
           : "border-black/5 bg-white/60 text-zinc-500 dark:border-white/10 dark:bg-white/[0.02] dark:text-zinc-400"
@@ -84,8 +84,8 @@ export function StockRiskPanel({
 }) {
   if (!assessment) {
     return (
-      <div className="border-b border-black/10 p-5 dark:border-white/10">
-        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Riesgo de Quiebre</h3>
+      <div className="border-b border-black/10 bg-transparent p-5 dark:border-white/10">
+        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Riesgo de quiebre</h3>
         <p className="text-xs text-zinc-500">{loading ? "Calculando proyección de stock..." : "Sin datos de stock para proyectar el quiebre."}</p>
       </div>
     );
@@ -99,9 +99,9 @@ export function StockRiskPanel({
     worstRunway && runwayWithoutArrivals && worstRunway.stockoutDate !== runwayWithoutArrivals.stockoutDate;
 
   return (
-    <div className="border-b border-black/10 p-5 dark:border-white/10">
+    <div className="border-b border-black/10 bg-transparent p-5 dark:border-white/10">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Riesgo de Quiebre</h3>
+        <h3 className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Riesgo de quiebre</h3>
         <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] ${meta.pillClasses}`}>
           {meta.label}
         </span>
@@ -164,7 +164,7 @@ export function StockRiskPanel({
                 <ScenarioChip key={scenario.key} scenario={scenario} isWorst={scenario.key === worst.key} unitLabel={unitLabel} />
               ))}
               {assessment.scenarios.length === 1 ? (
-                <div className="rounded-lg border border-dashed border-black/10 px-2.5 py-1.5 text-[11px] leading-4 text-zinc-400 dark:border-white/10">
+                <div className="border border-dashed border-black/10 px-2.5 py-1.5 text-[11px] leading-4 text-zinc-400 dark:border-white/10">
                   {assessment.scenarios[0].key === "historical"
                     ? "Ritmo según proyecto disponible en la vista Viviendas con vinculación configurada."
                     : "Sin ritmo histórico en el rango."}
@@ -180,7 +180,7 @@ export function StockRiskPanel({
       )}
 
       {assessment.overduePendingQuantity > 0 || assessment.unscheduledPendingQuantity > 0 ? (
-        <p className="mt-3 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-4 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
+        <p className="mt-3 border-l-2 border-amber-500 bg-amber-50 px-2.5 py-1.5 text-[11px] leading-4 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
           {assessment.overduePendingQuantity > 0
             ? `${formatNumber(assessment.overduePendingQuantity)} pendiente con entrega vencida. `
             : ""}

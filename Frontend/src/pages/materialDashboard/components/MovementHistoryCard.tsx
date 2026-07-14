@@ -69,13 +69,13 @@ import { HouseTrendChart, StockTrendChart } from "./TrendCharts";
 type PriceDisplayMode = "average" | "last";
 
 const RANGE_DATE_INPUT_CLASSES =
-  "w-[106px] rounded-full bg-transparent px-2 py-0.5 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]";
+  "h-7 w-[106px] bg-transparent px-2 text-[11px] font-medium text-zinc-600 outline-none transition-colors hover:bg-black/[0.03] focus:bg-white/80 focus:ring-1 focus:ring-accent-500/50 dark:text-zinc-300 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06] [color-scheme:light] dark:[color-scheme:dark]";
 
 function NoSelectionPlaceholder() {
   return (
     <section className="flex-1 flex items-center justify-center bg-white dark:bg-zinc-950 h-full">
       <div className="text-center max-w-xl p-8">
-        <div className="w-16 h-16 rounded-2xl bg-zinc-100 dark:bg-white/5 mx-auto flex items-center justify-center mb-6">
+        <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center bg-zinc-100 dark:bg-white/5">
           <svg className="w-8 h-8 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z" />
           </svg>
@@ -91,7 +91,7 @@ function NoSelectionPlaceholder() {
 }
 
 function HeaderStatLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-1">{children}</div>;
+  return <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">{children}</div>;
 }
 
 function HeaderStatDivider() {
@@ -475,10 +475,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   }
 
   return (
-    <section className="flex-1 flex flex-col h-full bg-white dark:bg-zinc-950 overflow-y-auto lg:overflow-hidden">
-      <div className="px-5 py-4 md:px-6 border-b border-black/10 dark:border-white/10 bg-white/40 dark:bg-black/20 flex flex-col md:flex-row justify-between gap-4">
+    <section className="flex h-full flex-1 flex-col overflow-y-auto bg-zinc-100/60 dark:bg-zinc-950 lg:overflow-hidden">
+      <div className="z-10 flex shrink-0 flex-col justify-between gap-4 border-b border-black/[0.07] bg-white px-5 py-4 shadow-[0_4px_18px_rgba(0,0,0,0.025)] dark:border-white/10 dark:bg-zinc-950 md:flex-row md:px-6">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500 mb-1">Gráfico Fijado</p>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Gráfico fijado</p>
           <div className="flex min-w-0 items-start gap-3">
             <h2 className="min-w-0 flex-1 break-words text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
             {canInspectProjectUsage ? (
@@ -494,7 +494,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             ) : null}
           </div>
           <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
-            <span className="bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-700 dark:text-zinc-300 font-mono">{selectedBadge}</span>
+            <span className="bg-zinc-200 px-2 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">{selectedBadge}</span>
             {selectedUnitLabel ? <span>&bull; {selectedUnitLabel}</span> : null}
             {groupSelection ? <span>&bull; {formatNumber(selectedGroup?.member_count, 0)} miembros</span> : null}
           </p>
@@ -511,11 +511,12 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3 tabular-nums">
           <div className="text-right">
             <HeaderStatLabel>{housesMode ? "Cons./Vivienda" : "Stock Disponible"}</HeaderStatLabel>
             <div className="flex items-center justify-end gap-2">
-              <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
+              <div className="flex items-baseline justify-end gap-1.5 text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">
+                <span>
                 {housesMode
                   ? houseSummary
                     ? formatNumber(houseSummary.averageConsumptionPerHouse, houseMetricDigits)
@@ -529,6 +530,8 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     : detailLoading
                       ? "..."
                       : "—"}
+                </span>
+                {selectedUnitLabel ? <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{selectedUnitLabel}</span> : null}
               </div>
               {housesMode && consumptionDeltaPercent !== null ? (
                 <span
@@ -555,8 +558,9 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
                   </span>
                 </HeaderStatLabel>
-                <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
-                  {formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}
+                <div className="flex items-baseline justify-end gap-1.5 text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">
+                  <span>{formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}</span>
+                  {selectedUnitLabel ? <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{selectedUnitLabel}</span> : null}
                 </div>
                 <ExpectedBreakdownTooltip breakdown={projectedConsumptionBreakdown} digits={houseMetricDigits} />
               </div>
@@ -573,7 +577,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </span>
                 </HeaderStatLabel>
                 <div
-                  className={`text-2xl font-light tracking-tight ${
+                  className={`text-2xl font-medium tracking-tight ${
                     consumptionCostDeltaPerHouse > 0
                       ? "text-red-700 dark:text-red-300"
                       : "text-zinc-900 dark:text-white"
@@ -590,13 +594,13 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             {groupSelection ? (
               <>
                 <HeaderStatLabel>Unidad de Estudio</HeaderStatLabel>
-                <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">{detail?.unit || selectedGroup?.study_unit}</div>
+                <div className="text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">{detail?.unit || selectedGroup?.study_unit}</div>
               </>
             ) : (
               <>
                 <div className="mb-1 flex items-center justify-end gap-2">
                   <div
-                    className="group/price relative inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500"
+                    className="group/price relative inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500"
                     tabIndex={0}
                   >
                     <span>{priceDisplayMode === "last" ? "Último Precio" : "Precio Prom."}</span>
@@ -605,13 +609,13 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                       Precio Prom. es el costo promedio ERP calculado a la fecha actual para el SKU completo. No promedia solo el rango visible, ni solo movimientos consumidos, ni CECOs del historial. Último precio usa la OC más reciente con precio unitario. La volatilidad compara el mayor y menor precio unitario dentro de las últimas 10 líneas de OC; revisa UM recep. en el detalle de OC para detectar cambios históricos de unidad.
                     </div>
                   </div>
-                  <div className="inline-flex rounded-full border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
+                  <div className="inline-flex border border-black/10 bg-zinc-100/80 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
                     {(["average", "last"] as PriceDisplayMode[]).map((mode) => (
                       <button
                         key={mode}
                         type="button"
                         onClick={() => setPriceDisplayMode(mode)}
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                        className={`px-2 py-0.5 text-[10px] font-semibold transition-colors ${
                           priceDisplayMode === mode
                             ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-white"
                             : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -623,7 +627,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2">
-                  <div className="text-2xl font-light tracking-tight text-zinc-900 dark:text-white">
+                  <div className="text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">
                     {detail ? formatCurrency(displayPrice) : detailLoading ? "..." : "—"}
                   </div>
                   {priceVolatility && isFiniteNumber(priceVolatility.deltaPercent) ? (
@@ -642,12 +646,12 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr),320px] flex-1 lg:min-h-0">
-        <div className="p-5 md:p-6 flex flex-col border-b lg:border-b-0 lg:border-r border-black/10 dark:border-white/10 lg:min-h-0 lg:overflow-y-auto">
+      <div className="grid flex-1 grid-cols-1 lg:min-h-0 lg:grid-cols-[minmax(0,1fr),328px]">
+        <div className="flex flex-col border-b border-black/[0.07] bg-white p-5 dark:border-white/10 dark:bg-zinc-950 md:p-6 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="flex items-start justify-between mb-2 gap-3">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-3">
-                <div className="inline-flex rounded-full border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
+                <div className="inline-flex h-8 border border-black/10 bg-zinc-100/80 p-0.5 dark:border-white/10 dark:bg-white/[0.04]">
                   {([
                     { mode: "houses" as HouseViewMode, label: "Viviendas" },
                     { mode: "stock" as HouseViewMode, label: "Stock" },
@@ -656,7 +660,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                       key={mode}
                       type="button"
                       onClick={() => onHouseViewModeChange(mode)}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold transition-colors ${
+                      className={`px-3 text-xs font-semibold transition-colors ${
                         houseViewMode === mode
                           ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-white"
                           : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -666,7 +670,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     </button>
                   ))}
                 </div>
-                <div className="inline-flex items-center gap-1 rounded-full border border-black/10 bg-black/[0.02] px-1.5 py-1 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="inline-flex h-8 items-center gap-1 border border-black/10 bg-zinc-50 px-1 dark:border-white/10 dark:bg-white/[0.03]">
                   <input
                     type="date"
                     value={draftRange.startDate}
@@ -689,7 +693,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                     <button
                       type="button"
                       onClick={() => applyDraftRange(draftRange)}
-                      className="rounded-full bg-accent-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-500"
+                      className="h-7 bg-accent-600 px-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent-500"
                     >
                       Aplicar
                     </button>
@@ -697,7 +701,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   <button
                     type="button"
                     onClick={() => applyDraftRange(getDefaultHouseRange())}
-                    className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
+                    className="h-7 px-2.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
                   >
                     90d
                   </button>
@@ -705,7 +709,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                 <button
                   type="button"
                   onClick={() => onOpenLinksModal("links")}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-white/80 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:text-accent-300"
+                  className="inline-flex h-8 items-center gap-1.5 border border-black/10 bg-white px-3 text-xs font-medium text-zinc-600 shadow-sm transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:text-accent-300"
                   title="Ver y editar la vinculación de tipos de vivienda con proyectos, y revisar los inicios del rango"
                 >
                   <i className="ph-bold ph-link" />
@@ -728,7 +732,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                 <button
                   type="button"
                   onClick={clearSelection}
-                  className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.04] hover:text-zinc-900 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
+                  className="h-8 border border-black/10 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:bg-black/[0.04] hover:text-zinc-900 dark:border-white/10 dark:text-zinc-300 dark:hover:bg-white/[0.06] dark:hover:text-white"
                 >
                   Limpiar selección
                 </button>
@@ -768,10 +772,10 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
 
           {activeChart?.points.length ? (
             <details className="mt-2 text-xs text-zinc-500">
-              <summary className="w-fit cursor-pointer rounded-md px-1 py-0.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+              <summary className="w-fit cursor-pointer px-1 py-0.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                 Ver datos del gráfico
               </summary>
-              <div className="mt-2 max-h-56 overflow-auto rounded-lg border border-black/10 dark:border-white/10">
+              <div className="mt-2 max-h-56 overflow-auto border border-black/10 dark:border-white/10">
                 <table className="w-full border-collapse text-left tabular-nums">
                   <thead className="sticky top-0 bg-zinc-50 text-[10px] uppercase tracking-wider dark:bg-zinc-900">
                     <tr>
@@ -801,13 +805,13 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           ) : null}
 
           {housesMode ? (
-            <div className="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-zinc-500">
-              <div className="flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+              <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
                 <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
                 <span>Stock de material</span>
               </div>
               {hasExpectedComparison ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
                   <span className="block h-0.5 w-6 rounded-full bg-emerald-500" />
                   <span>
                     Stock proyectado según vinculación
@@ -817,7 +821,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   </span>
                 </div>
               ) : null}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
                 <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
                 <span>Inicios de vivienda restantes</span>
               </div>
@@ -852,7 +856,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           />
         </div>
 
-        <div className="flex flex-col bg-zinc-50/50 dark:bg-white/[0.02] lg:min-h-0 lg:overflow-y-auto">
+        <div className="flex flex-col bg-zinc-100/70 dark:bg-white/[0.025] lg:min-h-0 lg:overflow-y-auto">
           <StockRiskPanel assessment={stockRisk} unitLabel={selectedUnitLabel} loading={detailLoading} />
           <ProcurementMetricsPanel
             detail={detail}

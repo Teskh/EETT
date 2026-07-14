@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import mimetypes
 import re
 import sqlite3
 import sys
@@ -18,9 +18,8 @@ DEFAULT_LEGACY_PROJECTS_DB = Path(__file__).resolve().with_name("projects.db")
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import select, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import OperationalError
 
 from app.config import Settings
 from app.database import Base, create_engine_for_url, create_session_factory, schema_is_ready
@@ -30,7 +29,6 @@ from app.models import (
     CatalogCategory,
     CatalogCategoryLink,
     CatalogComponent,
-    MediaAsset,
     CommentMention,
     CommentNotification,
     ComponentMaterialRule,
@@ -54,12 +52,12 @@ from app.models import (
     ProjectInstanceOccurrenceAttributeValue,
     ProjectInstanceOccurrenceTarget,
     ProjectMaterialMode,
+    ProjectMaterialOccurrenceMode,
     ProjectStatus,
     ProjectSubtype,
     SyncStatus,
     User,
 )
-from app.services.media import create_media_asset_from_upload
 from app.models.entities import (
     ApprovalStatus,
     AttributeScope,
@@ -72,6 +70,7 @@ from app.models.entities import (
     MaterialMode,
 )
 from app.services.audit import build_activity_change, build_activity_details
+from app.services.projects import _current_component_source_snapshot
 
 
 LEGACY_MATERIAL_PATTERN = re.compile(r"Material '(.+?)' \(SKU: .+?\)")
@@ -167,12 +166,14 @@ def parse_args() -> argparse.Namespace:
         help="Domain used for generated email addresses when importing legacy usernames.",
     )
     parser.add_argument(
-        "--legacy-image-dir",
-        default=None,
-        help=(
-            "Directory containing legacy instance images. If omitted, the importer tries common locations next to "
-            "the legacy DBs and the configured media gallery."
-        ),
+        "--report-file",
+        default="legacy_import_report.txt",
+        help="Human-readable migration report path. Defaults to ./legacy_import_report.txt.",
+    )
+    parser.add_argument(
+        "--replace-target",
+        action="store_true",
+        help="Allow the importer to replace a non-empty target database. Replacement remains transactional.",
     )
     parser.add_argument(
         "--dry-run",
@@ -182,10 +183,128 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class MigrationReport:
+    def __init__(self, *, main_db: Path, projects_db: Path, target_url: str, dry_run: bool) -> None:
+        self.main_db = main_db
+        self.projects_db = projects_db
+        self.target_url = target_url
+        self.dry_run = dry_run
+        self.started_at = datetime.now(UTC)
+        self.status = "running"
+        self.notes: dict[str, list[str]] = defaultdict(list)
+        self.validations: list[tuple[str, bool, str]] = []
+
+    def add(self, section: str, message: str) -> None:
+        self.notes[section].append(message)
+
+    def validate(self, name: str, passed: bool, detail: str) -> None:
+        self.validations.append((name, passed, detail))
+
+    def render(self, *, stats: dict[str, int], warnings: list[str]) -> str:
+        lines = [
+            "Legacy SQLite migration report",
+            "=" * 31,
+            f"Started: {self.started_at.isoformat()}",
+            f"Finished: {datetime.now(UTC).isoformat()}",
+            f"Status: {self.status}",
+            f"Mode: {'dry run' if self.dry_run else 'commit'}",
+            f"Main database: {self.main_db}",
+            f"Main SHA-256: {file_sha256(self.main_db)}",
+            f"Projects database: {self.projects_db}",
+            f"Projects SHA-256: {file_sha256(self.projects_db)}",
+            f"Target: {redact_database_url(self.target_url)}",
+            "",
+            "Imported records",
+            "----------------",
+        ]
+        if stats:
+            lines.extend(f"- {key}: {stats[key]}" for key in sorted(stats))
+        else:
+            lines.append("- No records imported.")
+
+        lines.extend(["", "Validation", "----------"])
+        if self.validations:
+            for name, passed, detail in self.validations:
+                lines.append(f"- {'PASS' if passed else 'FAIL'}: {name} - {detail}")
+        else:
+            lines.append("- No validation completed.")
+
+        for section, messages in self.notes.items():
+            lines.extend(["", section, "-" * len(section)])
+            lines.extend(f"- {message}" for message in messages)
+
+        lines.extend(["", "Warnings", "--------"])
+        if warnings:
+            lines.extend(f"- {warning}" for warning in warnings)
+        else:
+            lines.append("- None.")
+        return "\n".join(lines) + "\n"
+
+
+def file_sha256(path: Path) -> str:
+    if not path.is_file():
+        return "missing"
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def redact_database_url(value: str) -> str:
+    return re.sub(r"(://[^:/@]+:)[^@]+(@)", r"\1***\2", value)
+
+
+def write_report(path: Path, report: MigrationReport, *, stats: dict[str, int], warnings: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.render(stats=stats, warnings=warnings), encoding="utf-8")
+
+
 def connect_sqlite(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Legacy SQLite database does not exist: {resolved}")
+    conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def normalize_legacy_image_uri(value: Any) -> str | None:
+    raw = normalize_text(value)
+    if raw is None:
+        return None
+    normalized = raw.replace("\\", "/").strip()
+    if normalized.startswith(("http://", "https://", "data:", "/")):
+        return normalized
+    if normalized.startswith("database_editor/static/images/"):
+        normalized = normalized[len("database_editor/") :]
+    if normalized.startswith("static/images/"):
+        return f"/{normalized}"
+    return f"/static/images/{normalized.lstrip('/')}"
+
+
+def bom_identity(row: sqlite3.Row) -> tuple[int, int | None, int, int | None, int | None]:
+    return (
+        int(row["project_id"]),
+        int(row["subtype_id"]) if row["subtype_id"] is not None else None,
+        int(row["material_id"]),
+        int(row["item_instance_id"]) if row["item_instance_id"] is not None else None,
+        int(row["accessory_instance_id"]) if row["accessory_instance_id"] is not None else None,
+    )
+
+
+def deduplicate_bom_rows(rows: list[sqlite3.Row]) -> tuple[list[sqlite3.Row], list[tuple[sqlite3.Row, sqlite3.Row]]]:
+    """Keep the lowest bom_id, matching the row used by the legacy editing UI."""
+    kept_by_key: dict[tuple[int, int | None, int, int | None, int | None], sqlite3.Row] = {}
+    duplicates: list[tuple[sqlite3.Row, sqlite3.Row]] = []
+    for row in sorted(rows, key=lambda item: int(item["bom_id"])):
+        key = bom_identity(row)
+        kept = kept_by_key.get(key)
+        if kept is None:
+            kept_by_key[key] = row
+        else:
+            duplicates.append((kept, row))
+    return list(kept_by_key.values()), duplicates
 
 
 def sqlite_has_table(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -198,6 +317,12 @@ def sqlite_has_table(conn: sqlite3.Connection, table_name: str) -> bool:
 
 def sqlite_has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
     return any(row["name"] == column_name for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall())
+
+
+def sqlite_integrity_check(conn: sqlite3.Connection) -> tuple[bool, str]:
+    messages = [str(row[0]) for row in conn.execute("PRAGMA integrity_check").fetchall()]
+    passed = len(messages) == 1 and messages[0].casefold() == "ok"
+    return passed, "ok" if passed else "; ".join(messages[:10])
 
 
 def fetch_all(conn: sqlite3.Connection, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
@@ -287,14 +412,14 @@ def normalize_status(value: Any) -> ProjectStatus:
 def guess_attribute_value_type(values: list[str]) -> AttributeValueType:
     if not values:
         return AttributeValueType.TEXT
+    if len(set(values)) > 1:
+        return AttributeValueType.SELECT
     try:
         for value in values:
             float(value)
         return AttributeValueType.NUMBER
     except ValueError:
         pass
-    if len(set(values)) > 1:
-        return AttributeValueType.SELECT
     return AttributeValueType.TEXT
 
 
@@ -324,6 +449,13 @@ def wipe_target_database(session: Session) -> None:
     session.flush()
 
 
+def target_database_has_data(session: Session) -> bool:
+    for table in Base.metadata.sorted_tables:
+        if session.execute(text(f"SELECT EXISTS (SELECT 1 FROM {quote_table_name(table)} LIMIT 1)")).scalar():
+            return True
+    return False
+
+
 class LegacyImporter:
     def __init__(
         self,
@@ -332,15 +464,13 @@ class LegacyImporter:
         main_conn: sqlite3.Connection,
         projects_conn: sqlite3.Connection,
         legacy_email_domain: str,
-        settings: Settings,
-        legacy_image_dir: Path | None,
+        report: MigrationReport,
     ) -> None:
         self.session = session
         self.main_conn = main_conn
         self.projects_conn = projects_conn
         self.legacy_email_domain = legacy_email_domain
-        self.settings = settings
-        self.legacy_image_roots = self.resolve_legacy_image_roots(legacy_image_dir)
+        self.report = report
         self.warnings: list[str] = []
         self.stats: dict[str, int] = defaultdict(int)
 
@@ -358,139 +488,135 @@ class LegacyImporter:
         self.fallback_material_rule_by_key: dict[tuple[int, int], ComponentMaterialRule] = {}
         self.bom_entry_by_key: dict[tuple[int, int, int, int | None], ProjectBomEntry] = {}
         self.activity_group_by_legacy_key: dict[tuple[int, int | None, str, str, str, str], ProjectActivityGroup] = {}
-        self.media_asset_by_legacy_path: dict[str, MediaAsset] = {}
+        self.expected_semantic_counts: dict[str, int] = {}
 
     def run(self) -> None:
         self.import_catalog()
         self.import_projects()
 
-    def resolve_legacy_image_roots(self, explicit_dir: Path | None) -> list[Path]:
-        candidates: list[Path] = []
-        if explicit_dir is not None:
-            candidates.append(explicit_dir)
+    def validate_import(self) -> None:
+        self.session.flush()
+        checks: list[tuple[str, int, int]] = [
+            (
+                "catalog categories",
+                len(self.category_by_legacy_id) + len(self.fallback_category_by_scope),
+                self.session.scalar(select(func.count()).select_from(CatalogCategory)) or 0,
+            ),
+            (
+                "catalog components",
+                len({component.id for component in self.component_by_legacy_key.values()}),
+                self.session.scalar(select(func.count()).select_from(CatalogComponent)) or 0,
+            ),
+            ("projects", len(self.project_by_legacy_id), self.session.scalar(select(func.count()).select_from(Project)) or 0),
+            (
+                "project subtypes",
+                len(self.subtype_by_legacy_id),
+                self.session.scalar(select(func.count()).select_from(ProjectSubtype)) or 0,
+            ),
+            (
+                "project instances",
+                len(self.instance_by_legacy_key),
+                self.session.scalar(select(func.count()).select_from(ProjectInstance)) or 0,
+            ),
+            (
+                "BOM rows after cleanup",
+                len(self.bom_entry_by_key),
+                self.session.scalar(select(func.count()).select_from(ProjectBomEntry)) or 0,
+            ),
+            (
+                "comments",
+                len(self.comment_by_legacy_id),
+                self.session.scalar(select(func.count()).select_from(ProjectComment)) or 0,
+            ),
+            (
+                "material occurrence modes",
+                self.stats.get("material_occurrence_modes", 0),
+                self.session.scalar(select(func.count()).select_from(ProjectMaterialOccurrenceMode)) or 0,
+            ),
+        ]
 
-        for conn in (self.main_conn, self.projects_conn):
-            db_file = normalize_text(conn.execute("PRAGMA database_list").fetchone()["file"])
-            if db_file:
-                db_path = Path(db_file)
-                candidates.append(db_path.parent / "database_editor" / "static" / "images")
-                candidates.append(db_path.parent / "static" / "images")
-
-        candidates.extend(
-            [
-                self.settings.media_gallery_dir,
-                REPO_ROOT / "media_gallery",
-                REPO_ROOT / "output" / "media_gallery",
-                BACKEND_DIR / "app" / "static" / "images",
-            ]
+        semantic_actual = {
+            "catalog unit types": self.session.scalar(
+                select(func.count()).select_from(CatalogComponent).where(CatalogComponent.unit_type.is_not(None))
+            )
+            or 0,
+            "material per-unit quantities": self.session.scalar(
+                select(func.count()).select_from(ComponentMaterialRule).where(ComponentMaterialRule.unit_qty_per_unit.is_not(None))
+            )
+            or 0,
+            "instance unit amounts": self.session.scalar(
+                select(func.count()).select_from(ProjectInstance).where(ProjectInstance.unit_amount.is_not(None))
+            )
+            or 0,
+            "auto-calculated BOM rows": self.session.scalar(
+                select(func.count()).select_from(ProjectBomEntry).where(ProjectBomEntry.calculation_mode == BomCalculationMode.AUTO)
+            )
+            or 0,
+            "deleted comments": self.session.scalar(
+                select(func.count()).select_from(ProjectComment).where(ProjectComment.deleted_at.is_not(None))
+            )
+            or 0,
+            "blank BOM quantities": self.session.scalar(
+                select(func.count()).select_from(ProjectBomEntry).where(ProjectBomEntry.quantity.is_(None))
+            )
+            or 0,
+            "zero BOM quantities": self.session.scalar(
+                select(func.count()).select_from(ProjectBomEntry).where(ProjectBomEntry.quantity == 0)
+            )
+            or 0,
+        }
+        checks.extend(
+            (name, expected, semantic_actual[name])
+            for name, expected in self.expected_semantic_counts.items()
         )
 
-        seen: set[Path] = set()
-        roots: list[Path] = []
-        for candidate in candidates:
-            resolved = candidate.expanduser().resolve()
-            if resolved in seen or not resolved.exists():
-                continue
-            seen.add(resolved)
-            roots.append(resolved)
-        return roots
-
-    def resolve_legacy_image_file(self, raw_image_path: Any) -> Path | None:
-        text = normalize_text(raw_image_path)
-        if text is None:
-            return None
-        normalized = text.replace("\\", "/").lstrip("/")
-        path_candidates: list[Path] = []
-        raw_path = Path(text).expanduser()
-        if raw_path.is_absolute():
-            path_candidates.append(raw_path)
-
-        relative_variants = [Path(normalized)]
-        for prefix in ("static/images/", "database_editor/static/images/"):
-            if normalized.startswith(prefix):
-                relative_variants.append(Path(normalized[len(prefix) :]))
-        filename = Path(normalized).name
-        if filename:
-            relative_variants.append(Path(filename))
-
-        for root in self.legacy_image_roots:
-            for relative in relative_variants:
-                if not str(relative):
-                    continue
-                path_candidates.append(root / relative)
-
-        for candidate in path_candidates:
-            try:
-                if candidate.is_file():
-                    return candidate
-            except OSError:
-                continue
-        return None
+        failures = []
+        for name, expected, actual in checks:
+            passed = expected == actual
+            self.report.validate(name, passed, f"expected {expected}, imported {actual}")
+            if not passed:
+                failures.append(f"{name}: expected {expected}, imported {actual}")
+        if failures:
+            raise RuntimeError("Migration validation failed: " + "; ".join(failures))
 
     def import_instance_image(self, instance: ProjectInstance, row: sqlite3.Row) -> None:
         if "image_path" not in row.keys():
             return
-        legacy_image_path = normalize_text(row["image_path"])
-        if legacy_image_path is None:
+        uri = normalize_legacy_image_uri(row["image_path"])
+        if uri is None:
             return
-
-        asset = self.media_asset_by_legacy_path.get(legacy_image_path)
-        if asset is None:
-            source_path = self.resolve_legacy_image_file(legacy_image_path)
-            if source_path is None:
-                uri = legacy_image_path if legacy_image_path.startswith("/") else f"/static/images/{legacy_image_path}"
-                instance.media.append(
-                    ProjectInstanceMedia(
-                        kind="image",
-                        uri=uri,
-                        caption=Path(legacy_image_path).name,
-                        sort_order=0,
-                    )
-                )
-                instance.image_uri = uri
-                self.warnings.append(
-                    f"Legacy image '{legacy_image_path}' for instance '{instance.name}' was not found; imported URI only."
-                )
-                self.stats["image_uri_fallbacks"] += 1
-                return
-
-            with source_path.open("rb") as image_file:
-                asset = create_media_asset_from_upload(
-                    self.session,
-                    settings=self.settings,
-                    file=image_file,
-                    original_filename=source_path.name,
-                    content_type=mimetypes.guess_type(source_path.name)[0],
-                    actor_user=None,
-                    commit=False,
-                )
-            self.media_asset_by_legacy_path[legacy_image_path] = asset
-            self.stats["media_assets"] += 1
-
         instance.media.append(
             ProjectInstanceMedia(
-                media_asset_id=asset.id,
                 kind="image",
-                uri=asset.uri,
-                caption=asset.original_filename,
+                uri=uri,
+                caption=Path(uri).name,
                 sort_order=0,
             )
         )
-        instance.image_uri = asset.uri
-        self.stats["instance_images"] += 1
+        instance.image_uri = uri
+        self.stats["image_uris"] += 1
 
     def import_catalog(self) -> None:
+        item_unit_type = ", unit_type" if sqlite_has_column(self.main_conn, "Items", "unit_type") else ", NULL AS unit_type"
+        accessory_unit_type = (
+            ", unit_type" if sqlite_has_column(self.main_conn, "Accesory_Item", "unit_type") else ", NULL AS unit_type"
+        )
+        unit_qty_per_unit = (
+            ", unit_qty_per_unit"
+            if sqlite_has_column(self.main_conn, "Materials", "unit_qty_per_unit")
+            else ", NULL AS unit_qty_per_unit"
+        )
         categories = fetch_all(
             self.main_conn,
             'SELECT category_id, name, parent_id, linked_categories, item_type, "order" FROM Categories ORDER BY COALESCE(parent_id, 0), COALESCE("order", 0), category_id',
         )
         items = fetch_all(
             self.main_conn,
-            "SELECT item_id, name, short_name, description, short_description, installation, category_id FROM Items ORDER BY item_id",
+            f"SELECT item_id, name, short_name, description, short_description, installation, category_id{item_unit_type} FROM Items ORDER BY item_id",
         )
         accessories = fetch_all(
             self.main_conn,
-            "SELECT accesory_id, name, short_name, description, short_description, installation, category_id FROM Accesory_Item ORDER BY accesory_id",
+            f"SELECT accesory_id, name, short_name, description, short_description, installation, category_id{accessory_unit_type} FROM Accesory_Item ORDER BY accesory_id",
         )
         item_attributes = fetch_grouped(
             self.main_conn,
@@ -504,7 +630,7 @@ class LegacyImporter:
         )
         materials = fetch_all(
             self.main_conn,
-            "SELECT material_id, item_id, accesory_id, material_name, SKU, Units, display_order FROM Materials ORDER BY material_id",
+            f"SELECT material_id, item_id, accesory_id, material_name, SKU, Units, display_order{unit_qty_per_unit} FROM Materials ORDER BY material_id",
         )
         conditions_by_material = fetch_grouped(
             self.main_conn,
@@ -536,7 +662,32 @@ class LegacyImporter:
         for row in auxiliary_materials:
             self.import_auxiliary_material(row)
 
+        self.expected_semantic_counts["catalog unit types"] = sum(
+            1 for row in [*items, *accessories] if normalize_text(row["unit_type"]) is not None
+        )
+        self.expected_semantic_counts["material per-unit quantities"] = sum(
+            1 for row in materials if row["unit_qty_per_unit"] is not None
+        )
+
     def import_projects(self) -> None:
+        item_unit_amount = (
+            ", unit_amount" if sqlite_has_column(self.projects_conn, "Item_Instances", "unit_amount") else ", NULL AS unit_amount"
+        )
+        accessory_unit_amount = (
+            ", unit_amount"
+            if sqlite_has_column(self.projects_conn, "Accessory_Instance", "unit_amount")
+            else ", NULL AS unit_amount"
+        )
+        bom_auto_calculated = (
+            ", auto_calculated"
+            if sqlite_has_column(self.projects_conn, "Bill_Of_Materials", "auto_calculated")
+            else ", 0 AS auto_calculated"
+        )
+        comment_is_deleted = (
+            ", is_deleted"
+            if sqlite_has_column(self.projects_conn, "Instance_Comments", "is_deleted")
+            else ", 0 AS is_deleted"
+        )
         projects = fetch_all(
             self.projects_conn,
             "SELECT project_id, name, created_date, modified_date, estado FROM Projects ORDER BY project_id",
@@ -548,11 +699,11 @@ class LegacyImporter:
         item_image_column = ", image_path" if sqlite_has_column(self.projects_conn, "Item_Instances", "image_path") else ""
         item_instances = fetch_all(
             self.projects_conn,
-            f"SELECT instance_id, project_id, item_id, name, short_name, description, short_description, installation, created_date, modified_date{item_image_column} FROM Item_Instances ORDER BY project_id, instance_id",
+            f"SELECT instance_id, project_id, item_id, name, short_name, description, short_description, installation, created_date, modified_date{item_image_column}{item_unit_amount} FROM Item_Instances ORDER BY project_id, instance_id",
         )
         accessory_instances = fetch_all(
             self.projects_conn,
-            "SELECT accessory_instance_id, project_id, accessory_id, name, short_name, description, short_description, installation, created_date, modified_date FROM Accessory_Instance ORDER BY project_id, accessory_instance_id",
+            f"SELECT accessory_instance_id, project_id, accessory_id, name, short_name, description, short_description, installation, created_date, modified_date{accessory_unit_amount} FROM Accessory_Instance ORDER BY project_id, accessory_instance_id",
         )
         item_instance_attributes = fetch_grouped(
             self.projects_conn,
@@ -566,8 +717,20 @@ class LegacyImporter:
         )
         bom_rows = fetch_all(
             self.projects_conn,
-            "SELECT bom_id, project_id, subtype_id, material_id, quantity, assembly_kit, unit, item_instance_id, accessory_instance_id FROM Bill_Of_Materials ORDER BY project_id, bom_id",
+            f"SELECT bom_id, project_id, subtype_id, material_id, quantity, assembly_kit, unit, item_instance_id, accessory_instance_id{bom_auto_calculated} FROM Bill_Of_Materials ORDER BY project_id, bom_id",
         )
+        bom_rows, duplicate_bom_rows = deduplicate_bom_rows(bom_rows)
+        for kept, ignored in duplicate_bom_rows:
+            self.report.add(
+                "Duplicate BOM cleanup",
+                (
+                    f"Kept bom_id {kept['bom_id']} (quantity={kept['quantity']!r}, assembly_kit={kept['assembly_kit']!r}) "
+                    f"and ignored bom_id {ignored['bom_id']} (quantity={ignored['quantity']!r}, "
+                    f"assembly_kit={ignored['assembly_kit']!r}) for project {kept['project_id']}, "
+                    f"material {kept['material_id']}. The lowest bom_id matches the legacy editing UI."
+                ),
+            )
+        self.stats["duplicate_bom_rows_cleaned"] = len(duplicate_bom_rows)
         material_config_rows = fetch_grouped(
             self.projects_conn,
             "SELECT project_id, material_id, is_per_subtype FROM Project_Material_Config ORDER BY project_id, material_id",
@@ -583,7 +746,7 @@ class LegacyImporter:
         )
         comments = fetch_all(
             self.projects_conn,
-            "SELECT comment_id, project_id, item_instance_id, accessory_instance_id, parent_comment_id, author_username, body, created_at, updated_at FROM Instance_Comments ORDER BY comment_id",
+            f"SELECT comment_id, project_id, item_instance_id, accessory_instance_id, parent_comment_id, author_username, body, created_at, updated_at{comment_is_deleted} FROM Instance_Comments ORDER BY comment_id",
         )
         mentions = fetch_grouped(
             self.projects_conn,
@@ -649,6 +812,18 @@ class LegacyImporter:
 
         for row in changelog_rows:
             self.import_changelog_row(row)
+
+        self.expected_semantic_counts["instance unit amounts"] = sum(
+            1 for row in [*item_instances, *accessory_instances] if row["unit_amount"] is not None
+        )
+        self.expected_semantic_counts["auto-calculated BOM rows"] = sum(
+            1 for row in bom_rows if bool(row["auto_calculated"])
+        )
+        self.expected_semantic_counts["deleted comments"] = sum(1 for row in comments if bool(row["is_deleted"]))
+        self.expected_semantic_counts["blank BOM quantities"] = sum(1 for row in bom_rows if row["quantity"] is None)
+        self.expected_semantic_counts["zero BOM quantities"] = sum(
+            1 for row in bom_rows if row["quantity"] is not None and float(row["quantity"]) == 0
+        )
 
     def import_category(self, row: sqlite3.Row, all_rows: list[sqlite3.Row]) -> CatalogCategory:
         legacy_id = int(row["category_id"])
@@ -743,6 +918,7 @@ class LegacyImporter:
                 description=normalize_text(row["description"]),
                 short_description=normalize_text(row["short_description"]),
                 installation=normalize_text(row["installation"]),
+                unit_type=normalize_text(row["unit_type"]),
             )
             self.session.add(component)
             self.session.flush()
@@ -841,6 +1017,11 @@ class LegacyImporter:
                 material=material,
                 display_order=int(row["display_order"] or 0),
                 unit=normalize_text(row["Units"]),
+                unit_qty_per_unit=(
+                    float(row["unit_qty_per_unit"])
+                    if row["unit_qty_per_unit"] is not None
+                    else None
+                ),
             )
             self.session.add(rule)
             self.session.flush()
@@ -1005,16 +1186,26 @@ class LegacyImporter:
             description=normalize_text(row["description"]),
             short_description=normalize_text(row["short_description"]),
             installation=normalize_text(row["installation"]),
+            unit_amount=float(row["unit_amount"]) if row["unit_amount"] is not None else None,
         )
         self.session.add(instance)
         self.session.flush()
         self.stats["instances"] += 1
         sync_state = instance.sync_state
         if sync_state is None:
+            snapshot_fields = ("name", "short_name", "description", "short_description", "installation")
+            customized = any(
+                normalize_text(getattr(instance, field)) != normalize_text(getattr(component, field))
+                for field in snapshot_fields
+            )
             self.session.add(
                 ProjectInstanceSyncState(
                     instance=instance,
-                    sync_status=SyncStatus.UP_TO_DATE,
+                    sync_status=SyncStatus.CUSTOMIZED if customized else SyncStatus.UP_TO_DATE,
+                    last_synced_at=parse_datetime(row["created_date"]),
+                    source_component_updated_at=component.updated_at,
+                    sync_notes="Imported from a legacy project snapshot.",
+                    source_snapshot=_current_component_source_snapshot(component),
                 )
             )
         return instance
@@ -1384,11 +1575,13 @@ class LegacyImporter:
             bom_by_project[int(row["project_id"])].append(row)
 
         for project_row in projects:
-            project = self.project_by_legacy_id[int(project_row["project_id"])]
+            legacy_project_id = int(project_row["project_id"])
+            project = self.project_by_legacy_id[legacy_project_id]
+            project_config_rows = material_config_rows.get(legacy_project_id, [])
             mode = MaterialMode.GENERAL
-            if any(bool(row["is_per_subtype"]) for row in material_config_rows.get(int(project_row["project_id"]), [])):
+            if any(bool(row["is_per_subtype"]) for row in project_config_rows):
                 mode = MaterialMode.PER_SUBTYPE
-            elif any(row["subtype_id"] is not None for row in bom_by_project.get(int(project_row["project_id"]), [])):
+            elif any(row["subtype_id"] is not None for row in bom_by_project.get(legacy_project_id, [])):
                 mode = MaterialMode.PER_SUBTYPE
 
             existing = self.session.scalar(
@@ -1400,6 +1593,38 @@ class LegacyImporter:
             else:
                 existing.mode = mode
                 existing.updated_at = project.updated_at
+
+            for config_row in project_config_rows:
+                legacy_material_id = int(config_row["material_id"])
+                rule = self.material_rule_by_legacy_id.get(legacy_material_id)
+                if rule is None:
+                    self.warnings.append(
+                        f"Could not preserve material mode for project {legacy_project_id}, legacy material {legacy_material_id}: rule missing."
+                    )
+                    continue
+                matching_instances = [
+                    instance
+                    for instance in self.instance_by_legacy_key.values()
+                    if instance.project_id == project.id and instance.component_id == rule.component_id
+                ]
+                if not matching_instances:
+                    self.warnings.append(
+                        f"Material mode for project {legacy_project_id}, legacy material {legacy_material_id} had no matching instance."
+                    )
+                    continue
+                occurrence_mode = MaterialMode.PER_SUBTYPE if bool(config_row["is_per_subtype"]) else MaterialMode.GENERAL
+                for instance in matching_instances:
+                    self.session.add(
+                        ProjectMaterialOccurrenceMode(
+                            project=project,
+                            instance=instance,
+                            material_rule=rule,
+                            material=rule.material,
+                            mode=occurrence_mode,
+                            updated_at=project.updated_at,
+                        )
+                    )
+                    self.stats["material_occurrence_modes"] += 1
 
     def import_bom_row(self, row: sqlite3.Row) -> None:
         project = self.project_by_legacy_id.get(int(row["project_id"]))
@@ -1426,6 +1651,7 @@ class LegacyImporter:
                 )
             )
         if existing is None:
+            is_auto_calculated = bool(row["auto_calculated"])
             existing = ProjectBomEntry(
                 project=project,
                 instance=instance,
@@ -1435,8 +1661,12 @@ class LegacyImporter:
                 quantity=float(row["quantity"]) if row["quantity"] is not None else None,
                 assembly_quantity=float(row["assembly_kit"]) if row["assembly_kit"] is not None else None,
                 unit=normalize_text(row["unit"]) or rule.unit or rule.material.unit,
-                calculation_mode=BomCalculationMode.MANUAL,
-                calculation_formula=None,
+                calculation_mode=BomCalculationMode.AUTO if is_auto_calculated else BomCalculationMode.MANUAL,
+                calculation_formula=(
+                    "instance.unit_amount * material.unit_qty_per_unit"
+                    if is_auto_calculated
+                    else None
+                ),
             )
             self.session.add(existing)
             self.bom_entry_by_key[key] = existing
@@ -1451,6 +1681,14 @@ class LegacyImporter:
             existing.quantity = float(row["quantity"]) if row["quantity"] is not None else None
             existing.assembly_quantity = float(row["assembly_kit"]) if row["assembly_kit"] is not None else None
             existing.unit = normalize_text(row["unit"]) or existing.unit
+            existing.calculation_mode = (
+                BomCalculationMode.AUTO if bool(row["auto_calculated"]) else BomCalculationMode.MANUAL
+            )
+            existing.calculation_formula = (
+                "instance.unit_amount * material.unit_qty_per_unit"
+                if bool(row["auto_calculated"])
+                else None
+            )
 
     def create_placeholder_rule_for_missing_bom_material(
         self,
@@ -1513,6 +1751,7 @@ class LegacyImporter:
         author = self.ensure_legacy_user(normalize_text(row["author_username"])) or self.legacy_system_user()
         parent = self.comment_by_legacy_id.get(int(row["parent_comment_id"])) if row["parent_comment_id"] is not None else None
         created_at = parse_datetime(row["created_at"]) or datetime.now(UTC)
+        updated_at = parse_datetime(row["updated_at"]) or created_at
         existing = self.session.scalar(
             select(ProjectComment).where(
                 ProjectComment.project_id == project.id,
@@ -1530,7 +1769,8 @@ class LegacyImporter:
                 author=author,
                 body=row["body"],
                 created_at=created_at,
-                updated_at=parse_datetime(row["updated_at"]) or created_at,
+                updated_at=updated_at,
+                deleted_at=updated_at if bool(row["is_deleted"]) else None,
             )
             self.session.add(existing)
             self.session.flush()
@@ -2093,22 +2333,35 @@ def main() -> int:
     args = parse_args()
     settings = Settings()
     database_url = args.database_url or settings.database_url
-    engine = create_engine_for_url(
-        database_url,
-        connect_timeout_seconds=settings.database_connect_timeout_seconds,
-        statement_timeout_ms=settings.database_statement_timeout_ms,
+    main_db_path = Path(args.main_db).expanduser().resolve()
+    projects_db_path = Path(args.projects_db).expanduser().resolve()
+    report_path = Path(args.report_file).expanduser().resolve()
+    report = MigrationReport(
+        main_db=main_db_path,
+        projects_db=projects_db_path,
+        target_url=database_url,
+        dry_run=args.dry_run,
     )
+    importer: LegacyImporter | None = None
     try:
-        if not schema_is_ready(engine):
-            print("Target database schema is missing. Run `alembic upgrade head` first.", file=sys.stderr)
-            return 1
-    except OperationalError as exc:
-        print(
-            "Could not connect to the target database.\n"
-            f"Database URL: {database_url}\n"
-            "Check that PostgreSQL is running, the URL is correct, and the database is reachable.",
-            file=sys.stderr,
+        engine = create_engine_for_url(
+            database_url,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            statement_timeout_ms=settings.database_statement_timeout_ms,
         )
+        if not schema_is_ready(engine) or not inspect(engine).has_table("project_material_occurrence_modes"):
+            message = "Target database schema is missing. Run `alembic upgrade head` first."
+            report.status = "failed"
+            report.add("Errors", message)
+            write_report(report_path, report, stats={}, warnings=[])
+            print(message, file=sys.stderr)
+            return 1
+    except Exception as exc:
+        message = "Could not initialize or connect to the target database. Check PostgreSQL and the database URL."
+        report.status = "failed"
+        report.add("Errors", f"{message} Driver error: {exc}")
+        write_report(report_path, report, stats={}, warnings=[])
+        print(f"{message}\nDatabase URL: {redact_database_url(database_url)}", file=sys.stderr)
         print(f"Driver error: {exc}", file=sys.stderr)
         return 1
 
@@ -2118,50 +2371,83 @@ def main() -> int:
         statement_timeout_ms=settings.database_statement_timeout_ms,
     )
 
-    main_conn = connect_sqlite(args.main_db)
-    projects_conn = connect_sqlite(args.projects_db)
+    main_conn: sqlite3.Connection | None = None
+    projects_conn: sqlite3.Connection | None = None
     try:
+        main_conn = connect_sqlite(str(main_db_path))
+        projects_conn = connect_sqlite(str(projects_db_path))
+        for label, connection in (("Main SQLite integrity", main_conn), ("Projects SQLite integrity", projects_conn)):
+            passed, detail = sqlite_integrity_check(connection)
+            report.validate(label, passed, detail)
+            if not passed:
+                raise RuntimeError(f"{label} check failed: {detail}")
         if not sqlite_has_table(main_conn, "Categories"):
+            report.status = "failed"
+            report.add("Errors", f"Main database is missing Categories: {main_db_path}")
+            write_report(report_path, report, stats={}, warnings=[])
             print(
                 "Legacy main SQLite database is missing the expected 'Categories' table.\n"
-                f"Path: {args.main_db}\n"
+                f"Path: {main_db_path}\n"
                 "Pass the correct file with --main-db.",
                 file=sys.stderr,
             )
             return 1
         if not sqlite_has_table(projects_conn, "Projects"):
+            report.status = "failed"
+            report.add("Errors", f"Projects database is missing Projects: {projects_db_path}")
+            write_report(report_path, report, stats={}, warnings=[])
             print(
                 "Legacy projects SQLite database is missing the expected 'Projects' table.\n"
-                f"Path: {args.projects_db}\n"
+                f"Path: {projects_db_path}\n"
                 "Pass the correct file with --projects-db.",
                 file=sys.stderr,
             )
             return 1
 
         with session_factory() as session:
-            wipe_target_database(session)
-            if args.dry_run:
-                session.flush()
+            target_has_data = target_database_has_data(session)
+            if target_has_data and not args.replace_target:
+                message = (
+                    "Target database is not empty. Re-run with --replace-target only after confirming this is the "
+                    "database that should be replaced."
+                )
+                report.status = "failed"
+                report.add("Errors", message)
+                write_report(report_path, report, stats={}, warnings=[])
+                print(message, file=sys.stderr)
+                return 1
+            if target_has_data:
+                wipe_target_database(session)
+                report.add("Target handling", "Existing target contents were replaced inside the migration transaction.")
             else:
-                session.commit()
+                report.add("Target handling", "Target database was empty; no replacement was needed.")
 
             importer = LegacyImporter(
                 session=session,
                 main_conn=main_conn,
                 projects_conn=projects_conn,
                 legacy_email_domain=args.legacy_email_domain,
-                settings=settings,
-                legacy_image_dir=Path(args.legacy_image_dir) if args.legacy_image_dir else None,
+                report=report,
             )
             try:
                 importer.run()
+                importer.validate_import()
                 if args.dry_run:
                     session.rollback()
+                    report.status = "dry run passed; database rolled back"
                 else:
                     session.commit()
-            except Exception:
+                    report.status = "completed and committed"
+            except Exception as exc:
                 session.rollback()
-                raise
+                report.status = "failed; database rolled back"
+                report.add("Errors", f"{type(exc).__name__}: {exc}")
+                write_report(report_path, report, stats=dict(importer.stats), warnings=importer.warnings)
+                print(f"Migration failed and was rolled back: {exc}", file=sys.stderr)
+                print(f"Report: {report_path}", file=sys.stderr)
+                return 1
+
+            write_report(report_path, report, stats=dict(importer.stats), warnings=importer.warnings)
 
             print("Legacy import summary")
             for key in sorted(importer.stats):
@@ -2172,9 +2458,24 @@ def main() -> int:
                     print(f"- {warning}")
             if args.dry_run:
                 print("\nDry run only; no changes were committed.")
+            print(f"\nReport: {report_path}")
+    except Exception as exc:
+        report.status = "failed"
+        report.add("Errors", f"{type(exc).__name__}: {exc}")
+        write_report(
+            report_path,
+            report,
+            stats=dict(importer.stats) if importer is not None else {},
+            warnings=importer.warnings if importer is not None else [],
+        )
+        print(f"Migration failed: {exc}", file=sys.stderr)
+        print(f"Report: {report_path}", file=sys.stderr)
+        return 1
     finally:
-        main_conn.close()
-        projects_conn.close()
+        if main_conn is not None:
+            main_conn.close()
+        if projects_conn is not None:
+            projects_conn.close()
     return 0
 
 

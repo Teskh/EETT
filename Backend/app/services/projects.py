@@ -32,6 +32,7 @@ from app.models import (
     ProjectInstanceSyncState,
     ProjectMaterialCalculationCell,
     ProjectMaterialCalculationSheet,
+    ProjectMaterialOccurrenceMode,
     ProjectMaterialMode,
     ProjectMembership,
     CommentNotification,
@@ -593,6 +594,20 @@ def copy_project(
                 unit=entry.unit,
                 calculation_mode=entry.calculation_mode,
                 calculation_formula=entry.calculation_formula,
+            )
+        )
+
+    for setting in source_project.material_occurrence_modes:
+        copied_instance = instance_map.get(setting.instance_id)
+        if copied_instance is None:
+            continue
+        session.add(
+            ProjectMaterialOccurrenceMode(
+                project=copied_project,
+                instance=copied_instance,
+                material_rule_id=setting.material_rule_id,
+                material_id=setting.material_id,
+                mode=setting.mode,
             )
         )
 
@@ -1564,6 +1579,7 @@ def get_project_with_details(session: Session, project_id: int) -> Project | Non
             .selectinload(ProjectInstance.bom_entries)
             .selectinload(ProjectBomEntry.material_rule)
             .selectinload(ComponentMaterialRule.material),
+            selectinload(Project.instances).selectinload(ProjectInstance.material_occurrence_modes),
             selectinload(Project.instances).selectinload(ProjectInstance.category),
             selectinload(Project.instances).selectinload(ProjectInstance.sync_state),
             selectinload(Project.instances).selectinload(ProjectInstance.media).selectinload(ProjectInstanceMedia.asset),
@@ -1646,6 +1662,7 @@ def replace_project_material_occurrence(
             .selectinload(MaterialRuleGroup.conditions),
             selectinload(ProjectInstance.attribute_groups).selectinload(ProjectInstanceAttributeGroup.attribute_values),
             selectinload(ProjectInstance.bom_entries),
+            selectinload(ProjectInstance.material_occurrence_modes),
         )
     )
     if instance is None:
@@ -1696,11 +1713,33 @@ def replace_project_material_occurrence(
         if required_subtype_ids != submitted_subtype_ids:
             raise ValueError("Subtype material mode requires one row for each project subtype.")
 
-    previous_snapshot = _bom_entry_snapshot(existing_entries)
+    current_setting = next(
+        (
+            setting
+            for setting in instance.material_occurrence_modes
+            if (
+                setting.material_rule_id == parsed_id
+                if parsed_kind == "rule"
+                else setting.material_rule_id is None and setting.material_id == material.id
+            )
+        ),
+        None,
+    )
+    previous_mode = _material_mode_for_entries(
+        existing_entries,
+        current_setting.mode.value if current_setting is not None else None,
+    )
+    previous_snapshot = _bom_entry_snapshot(_active_entries_for_mode(existing_entries, previous_mode))
     previous_unit = next((entry.unit for entry in existing_entries if entry.unit), None)
 
     for bom_entry in list(instance.bom_entries):
-        if _material_key_for_entry(bom_entry) == normalized_key:
+        same_material = _material_key_for_entry(bom_entry) == normalized_key
+        active_context = (
+            bom_entry.subtype_id is None
+            if normalized_mode == MaterialMode.GENERAL.value
+            else bom_entry.subtype_id is not None
+        )
+        if same_material and active_context:
             instance.bom_entries.remove(bom_entry)
             session.delete(bom_entry)
     session.flush()
@@ -1721,6 +1760,18 @@ def replace_project_material_occurrence(
                 calculation_formula=None,
             )
         )
+
+    if current_setting is None:
+        current_setting = ProjectMaterialOccurrenceMode(
+            project=project,
+            instance=instance,
+            material_rule=rule,
+            material_rule_id=parsed_id if parsed_kind == "rule" else None,
+            material=material,
+        )
+        session.add(current_setting)
+    current_setting.mode = MaterialMode(normalized_mode)
+    current_setting.updated_at = utcnow()
 
     next_snapshot = _normalized_bom_snapshot(normalized_entries, project)
     if actor_user is not None and previous_snapshot != next_snapshot:
@@ -2342,12 +2393,22 @@ def _serialize_instance(
     bom_by_key: dict[str, list[ProjectBomEntry]] = defaultdict(list)
     for entry in instance.bom_entries:
         bom_by_key[_material_key_for_entry(entry)].append(entry)
+    occurrence_mode_by_key = {
+        (
+            _material_key_for_rule(setting.material_rule_id)
+            if setting.material_rule_id is not None
+            else _material_key_for_manual(setting.material_id)
+        ): setting.mode.value
+        for setting in instance.material_occurrence_modes
+    }
 
     applicable_materials = []
     for rule in sorted(instance.component.material_rules, key=lambda item: item.display_order):
         evaluation = _evaluate_rule(rule, merged_attributes)
         material_key = _material_key_for_rule(rule.id)
         entries = bom_by_key.pop(material_key, [])
+        material_mode = _material_mode_for_entries(entries, occurrence_mode_by_key.get(material_key))
+        active_entries = _active_entries_for_mode(entries, material_mode)
         if not evaluation["applies"] and not entries:
             continue
         source_status = "catalog" if entries and evaluation["applies"] else "stale" if entries else "missing"
@@ -2363,12 +2424,13 @@ def _serialize_instance(
                 "source_status": source_status,
                 "source_label": _material_source_label(source_status, rule_exists=True, applies=evaluation["applies"]),
                 "applicability": evaluation,
-                "mode": _material_mode_for_entries(entries),
+                "mode": material_mode,
                 "bom_entries": _serialize_material_bom_entries(
                     material=rule.material,
                     unit=rule.unit or rule.material.unit,
-                    entries=entries,
+                    entries=active_entries,
                     flat_subtypes=flat_subtypes,
+                    mode=material_mode,
                 ),
             }
         )
@@ -2385,6 +2447,8 @@ def _serialize_instance(
             continue
         first_entry = entries[0]
         rule = first_entry.material_rule
+        material_mode = _material_mode_for_entries(entries, occurrence_mode_by_key.get(material_key))
+        active_entries = _active_entries_for_mode(entries, material_mode)
         source_status = "manual" if first_entry.material_rule_id is None else "stale"
         applicable_materials.append(
             {
@@ -2398,12 +2462,13 @@ def _serialize_instance(
                 "source_status": source_status,
                 "source_label": _material_source_label(source_status, rule_exists=rule is not None, applies=False),
                 "applicability": _manual_material_applicability(source_status != "stale"),
-                "mode": _material_mode_for_entries(entries),
+                "mode": material_mode,
                 "bom_entries": _serialize_material_bom_entries(
                     material=first_entry.material,
                     unit=first_entry.unit or (rule.unit if rule else None) or first_entry.material.unit,
-                    entries=entries,
+                    entries=active_entries,
                     flat_subtypes=flat_subtypes,
+                    mode=material_mode,
                 ),
             }
         )
@@ -2832,8 +2897,16 @@ def _collect_attribute_values(instance: ProjectInstance) -> dict[str, str | None
     return attribute_values
 
 
-def _material_mode_for_entries(entries: list[ProjectBomEntry]) -> str:
+def _material_mode_for_entries(entries: list[ProjectBomEntry], explicit_mode: str | None = None) -> str:
+    if explicit_mode in {MaterialMode.GENERAL.value, MaterialMode.PER_SUBTYPE.value}:
+        return explicit_mode
     return MaterialMode.PER_SUBTYPE.value if any(entry.subtype_id is not None for entry in entries) else MaterialMode.GENERAL.value
+
+
+def _active_entries_for_mode(entries: list[ProjectBomEntry], mode: str) -> list[ProjectBomEntry]:
+    if mode == MaterialMode.PER_SUBTYPE.value:
+        return [entry for entry in entries if entry.subtype_id is not None]
+    return [entry for entry in entries if entry.subtype_id is None]
 
 
 def _material_source_label(source_status: str, *, rule_exists: bool, applies: bool) -> str | None:
@@ -2863,8 +2936,9 @@ def _serialize_material_bom_entries(
     unit: str | None,
     entries: list[ProjectBomEntry],
     flat_subtypes: list[dict],
+    mode: str | None = None,
 ) -> list[dict]:
-    if _material_mode_for_entries(entries) == MaterialMode.PER_SUBTYPE.value:
+    if _material_mode_for_entries(entries, mode) == MaterialMode.PER_SUBTYPE.value:
         entries_by_subtype = {entry.subtype_id: entry for entry in entries if entry.subtype_id is not None}
         rows: list[dict] = []
         for subtype in flat_subtypes:

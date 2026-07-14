@@ -17,7 +17,7 @@ import { MetricRow, PurchaseOrderHoverValue } from "./Metrics";
 function MetricSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mb-5 last:mb-0">
-      <h4 className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-400 dark:text-zinc-500">{title}</h4>
+      <h4 className="mb-1 text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-400 dark:text-zinc-500">{title}</h4>
       <div className="space-y-1.5">{children}</div>
     </div>
   );
@@ -63,9 +63,9 @@ export function ProcurementMetricsPanel({
   };
 
   return (
-    <div className="flex flex-col gap-5 p-5">
+    <div className="flex flex-col gap-5 bg-transparent p-5">
       <div>
-        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Métricas de Compras</h3>
+        <h3 className="mb-3 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Métricas de compras</h3>
         <MetricSection title="Consumo y stock">
           <MetricRow
             label="Cons. usada"
@@ -102,7 +102,7 @@ export function ProcurementMetricsPanel({
                   onChange={(event) => onLeadTimeModeChange(event.target.value as LeadTimeMode)}
                   onBlur={() => onEditingLeadTimeModeChange(false)}
                   onKeyDown={closeOnEnterOrEscape(() => onEditingLeadTimeModeChange(false))}
-                  className="rounded-lg border border-black/10 bg-white px-2 py-1 text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 dark:border-white/10 dark:bg-zinc-900 dark:text-white"
+                  className="border border-black/10 bg-white px-2 py-1 text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 dark:border-white/10 dark:bg-zinc-900 dark:text-white"
                 >
                   <option value="worst">Peor</option>
                   <option value="median">Mediana</option>
@@ -112,7 +112,7 @@ export function ProcurementMetricsPanel({
                 <button
                   type="button"
                   onClick={() => onEditingLeadTimeModeChange(true)}
-                  className="-mx-2 rounded-lg px-2 py-1 text-sm font-semibold text-zinc-900 transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/5"
+                  className="-mx-2 px-2 py-1 text-sm font-semibold text-zinc-900 transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/5"
                   title="Haz clic para elegir la métrica de plazo usada en esta página"
                 >
                   {leadTimeReference ? `${formatNumber(leadTimeReference.days, getLeadTimeDigits(leadTimeReference.source))} d` : "—"}
@@ -137,7 +137,7 @@ export function ProcurementMetricsPanel({
                     onChange={(event) => onBufferWeeksInputChange(event.target.value)}
                     onBlur={() => onEditingBufferWeeksChange(false)}
                     onKeyDown={closeOnEnterOrEscape(() => onEditingBufferWeeksChange(false))}
-                    className="w-24 rounded-lg border border-black/10 bg-white px-2 py-1 text-right text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 dark:border-white/10 dark:bg-zinc-900 dark:text-white"
+                    className="w-24 border border-black/10 bg-white px-2 py-1 text-right text-sm font-semibold text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400/50 dark:border-white/10 dark:bg-zinc-900 dark:text-white"
                   />
                   <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">semanas</span>
                 </div>
@@ -145,7 +145,7 @@ export function ProcurementMetricsPanel({
                 <button
                   type="button"
                   onClick={() => onEditingBufferWeeksChange(true)}
-                  className="-mx-2 rounded-lg px-2 py-1 text-sm font-semibold text-zinc-900 transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/5"
+                  className="-mx-2 px-2 py-1 text-sm font-semibold text-zinc-900 transition-colors hover:bg-black/5 dark:text-white dark:hover:bg-white/5"
                   title="Haz clic para editar el colchón de stock en semanas"
                 >
                   {formatNumber(bufferWeeks)}

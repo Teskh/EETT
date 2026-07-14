@@ -71,7 +71,7 @@ function SelectionRegion({ frame, edges, fill, stroke }: { frame: ChartFrame; ed
 function DateAxis({ frame, firstDate, lastDate }: { frame: ChartFrame; firstDate: string | undefined; lastDate: string | undefined }) {
   return (
     <>
-      <text x={frame.padding.left} y={frame.height - 8} fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
+      <text x={frame.padding.left} y={frame.height - 8} fontSize="11" fontWeight="600" fill="currentColor" opacity="0.65" pointerEvents="none">
         {formatDate(firstDate)}
       </text>
       <text
@@ -79,8 +79,9 @@ function DateAxis({ frame, firstDate, lastDate }: { frame: ChartFrame; firstDate
         y={frame.height - 8}
         textAnchor="end"
         fontSize="11"
+        fontWeight="600"
         fill="currentColor"
-        opacity="0.55"
+        opacity="0.65"
         pointerEvents="none"
       >
         {formatDate(lastDate)}
@@ -114,6 +115,13 @@ export function StockTrendChart({
     >
       <title>Evolución del stock de material</title>
       <SelectionClipPath id="stock-selection-clip" frame={chart} edges={selectionEdges} />
+      <rect
+        x={chart.padding.left}
+        y={chart.padding.top}
+        width={chart.plotWidth}
+        height={chart.plotHeight}
+        fill="rgba(113,113,122,0.025)"
+      />
       {GRID_STOPS.map((stop) => {
         const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
         return (
@@ -123,10 +131,10 @@ export function StockTrendChart({
               y1={y}
               x2={chart.width - chart.padding.right}
               y2={y}
-              stroke="rgba(113,113,122,0.18)"
+              stroke="rgba(113,113,122,0.14)"
               strokeDasharray="4 6"
             />
-            <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55" pointerEvents="none">
+            <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.62" pointerEvents="none">
               {formatNumber(chart.maxValue * stop)}
             </text>
           </g>
@@ -143,23 +151,11 @@ export function StockTrendChart({
         opacity={dimmed}
         className="transition-opacity duration-300"
       />
-      {chart.points.map((point) => (
-        <circle
-          key={`base-${point.date}`}
-          cx={point.x}
-          cy={point.y}
-          r={hoveredPoint?.index === point.index ? 5 : 2.5}
-          fill="rgb(245 158 11)"
-          opacity={dimmed}
-          className="transition-opacity duration-300"
-          pointerEvents="none"
-        />
-      ))}
       {selectionBounds ? (
         <g clipPath="url(#stock-selection-clip)">
           <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
           {chart.points.map((point) => {
-            if (point.index < selectionBounds.startIndex || point.index > selectionBounds.endIndex) {
+            if (point.index !== selectionBounds.startIndex && point.index !== selectionBounds.endIndex) {
               return null;
             }
             return (
@@ -294,6 +290,13 @@ export function HouseTrendChart({
     >
       <title>Comparación de stock e inicios de vivienda</title>
       <SelectionClipPath id="house-selection-clip" frame={chart} edges={selectionEdges} />
+      <rect
+        x={chart.padding.left}
+        y={chart.padding.top}
+        width={chart.plotWidth}
+        height={chart.plotHeight}
+        fill="rgba(113,113,122,0.025)"
+      />
       {GRID_STOPS.map((stop) => {
         const y = chart.padding.top + chart.plotHeight - stop * chart.plotHeight;
         return (
@@ -303,13 +306,13 @@ export function HouseTrendChart({
               y1={y}
               x2={chart.width - chart.padding.right}
               y2={y}
-              stroke="rgba(113,113,122,0.18)"
+              stroke="rgba(113,113,122,0.14)"
               strokeDasharray="4 6"
             />
-            <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.55">
+            <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.62">
               {formatNumber(chart.minStock + (chart.maxStock - chart.minStock) * stop)}
             </text>
-            <text x={chart.width - chart.padding.right + 10} y={y + 4} fontSize="11" fill="currentColor" opacity="0.55">
+            <text x={chart.width - chart.padding.right + 10} y={y + 4} fontSize="11" fill="currentColor" opacity="0.62">
               {formatNumber(chart.maxRemainingHouseStarts * stop, 0)}
             </text>
           </g>
@@ -319,20 +322,11 @@ export function HouseTrendChart({
       <g opacity={dimmed} className="transition-opacity duration-300">
         <HouseSeriesPaths chart={chart} strokeWidth={3} />
       </g>
-      {chart.points.map((point) => (
-        <HouseSeriesDots
-          key={point.date}
-          point={point}
-          hovered={hoveredPoint?.index === point.index}
-          variant="base"
-          opacity={dimmed}
-        />
-      ))}
       {selectionBounds ? (
         <g clipPath="url(#house-selection-clip)">
           <HouseSeriesPaths chart={chart} strokeWidth={3.5} />
           {chart.points.map((point) => {
-            if (point.index < selectionBounds.startIndex || point.index > selectionBounds.endIndex) {
+            if (point.index !== selectionBounds.startIndex && point.index !== selectionBounds.endIndex) {
               return null;
             }
             return (
