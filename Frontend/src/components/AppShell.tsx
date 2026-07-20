@@ -215,8 +215,8 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
               </h1>
             </div>
             <div className="flex items-center gap-3">
-              <UnitChangeAlertsButton currentUser={currentUser} />
-              <NotificationButton onNavigate={onNavigate} />
+              {!currentUser.is_guest ? <UnitChangeAlertsButton currentUser={currentUser} /> : null}
+              {!currentUser.is_guest ? <NotificationButton onNavigate={onNavigate} /> : null}
               <div className="text-right">
                 <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{currentUser.display_name}</div>
                 <div className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">{roleLabels}</div>

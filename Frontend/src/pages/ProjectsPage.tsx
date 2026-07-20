@@ -582,8 +582,8 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       {loading ? (
         <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-500">Cargando tablero de proyectos...</div>
       ) : data ? (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {orderedStatuses.map((status) => {
+        <div className={isGuest ? "grid grid-cols-1 gap-6 max-w-3xl" : "grid grid-cols-1 md:grid-cols-3 gap-6"}>
+          {(isGuest ? ["execution"] : orderedStatuses).map((status) => {
             const projects = data.grouped_projects[status] || [];
             return (
               <div
@@ -641,24 +641,20 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                       >
                         <div>
                           <h3 className="mb-1">
-                            {isGuest ? (
-                              <span className="text-left text-sm font-bold text-zinc-900 dark:text-white">{project.name}</span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => onNavigate(`/projects/${project.id}`)}
-                                className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
-                              >
-                                {project.name}
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              onClick={() => onNavigate(`/projects/${project.id}`)}
+                              className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
+                            >
+                              {project.name}
+                            </button>
                           </h3>
                         </div>
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
                             <i className="ph-bold ph-stack" /> {project.instance_count} instancias
                           </div>
-                          <div className="flex items-center gap-2">
+                          {!isGuest ? <div className="flex items-center gap-2">
                             {currentUser.permissions.project_create && !isGuest ? (
                               <button
                                 type="button"
@@ -717,7 +713,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                                 />
                               </button>
                             ) : null}
-                          </div>
+                          </div> : null}
                         </div>
                       </div>
                     ))

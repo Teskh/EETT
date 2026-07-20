@@ -15,26 +15,42 @@ import { FactoryQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
 import { getMaterialDashboardCacheValue, setMaterialDashboardCacheValue } from "../lib/materialDashboardCache";
 import {
+  GROUP_CATALOG_CACHE_KEY,
   HOUSE_TYPES_CACHE_KEY,
   detailCacheKey,
   economicMetricsCacheKey,
+  groupEconomicMetricsCacheKey,
   historyCacheKey,
 } from "../lib/materialDashboardCacheKeys";
 import type {
   CostModelAdjustment,
   CostModelRow,
   CostModelView,
+  ExportJob,
   MaterialDashboardDetailData,
   MaterialDashboardEconomicMetricsResponse,
+  MaterialDashboardGroupEconomicMetricsResponse,
   MaterialDashboardHouseComparisonData,
   MaterialDashboardHouseType,
   MaterialDashboardMaterialStudyData,
   MaterialDashboardMovementData,
   MaterialDashboardMovementPoint,
+  MaterialStudyGroupRow,
   ProjectSummary,
   ProjectsBoardData,
   SessionUser,
 } from "../lib/types";
+import {
+  computeDisplayedQuantity,
+  computeRowQuantity,
+  findSubtypeAdjustment,
+  getMaterialGroupMemberships,
+  hasUsablePrice,
+  matchesCostModelReviewFilter,
+  quantityCost,
+  summarizeCostModelRows,
+  type CostModelReviewFilter,
+} from "./costModel/model";
 
 type CostModelPageProps = {
   projectId: number | null;
@@ -184,6 +200,53 @@ function formatDate(value: string | null | undefined) {
     return value;
   }
   return date.toLocaleDateString("es-CL", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatMaterialMode(value: string) {
+  return value === "per_subtype" ? "Por subtipo" : "General";
+}
+
+function formatAdjustmentSource(value: string) {
+  if (value === "historic_consumption") {
+    return "Consumo histórico";
+  }
+  if (value === "manual") {
+    return "Ajuste manual";
+  }
+  return value;
+}
+
+function resolveExportFilename(job: ExportJob, contentDisposition: string | null) {
+  const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+  const plainMatch = contentDisposition?.match(/filename="?([^";]+)"?/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1];
+  }
+  const pathParts = (job.artifact_uri ?? "").split("/");
+  return pathParts[pathParts.length - 1] || "modelo-de-costos.xlsx";
+}
+
+async function downloadExportArtifact(job: ExportJob) {
+  if (!job.artifact_uri) {
+    throw new Error("La exportación terminó sin archivo.");
+  }
+  const response = await fetch(job.artifact_uri, { credentials: "same-origin" });
+  if (!response.ok) {
+    throw new Error("No se pudo descargar el archivo exportado.");
+  }
+  const blob = await response.blob();
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = resolveExportFilename(job, response.headers.get("content-disposition"));
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1000);
 }
 
 function parseNumberInput(raw: string): number | null {
@@ -346,44 +409,6 @@ function getClampedSelectionBounds(selection: ChartSelection, pointCount: number
     startIndex: clamp(bounds.startIndex, 0, pointCount - 1),
     endIndex: clamp(bounds.endIndex, 0, pointCount - 1),
   };
-}
-
-function findSubtypeAdjustment(row: CostModelRow, subtypeId: number | null): CostModelAdjustment | null {
-  return row.adjustments.find((adj) => adj.subtype_id === subtypeId) ?? null;
-}
-
-function computeEffectiveQuantity(row: CostModelRow, subtypeId: number | null): number | null {
-  const override = findSubtypeAdjustment(row, subtypeId);
-  if (override) {
-    return override.adjusted_quantity;
-  }
-  const subtypeEntry = row.subtypes.find((entry) => entry.subtype_id === subtypeId);
-  return subtypeEntry ? subtypeEntry.estimated_quantity : null;
-}
-
-function computeDisplayedQuantity(row: CostModelRow, subtypeId: number | null): number | null {
-  return computeEffectiveQuantity(row, subtypeId);
-}
-
-function computeRowQuantity(row: CostModelRow): number | null {
-  let total = 0;
-  let hasAny = false;
-  for (const subtype of row.subtypes) {
-    const value = computeDisplayedQuantity(row, subtype.subtype_id);
-    if (value === null || value === undefined) {
-      continue;
-    }
-    total += value;
-    hasAny = true;
-  }
-  return hasAny ? total : null;
-}
-
-function quantityCost(quantity: number | null, price: number | null): number | null {
-  if (quantity === null || price === null) {
-    return null;
-  }
-  return quantity * price;
 }
 
 function metricKeyForSku(sku: string) {
@@ -732,9 +757,17 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [economicMetrics, setEconomicMetrics] = useState<MaterialDashboardEconomicMetricsResponse | null>(null);
+  const [materialGroups, setMaterialGroups] = useState<MaterialStudyGroupRow[]>([]);
+  const [materialGroupsLoading, setMaterialGroupsLoading] = useState(true);
+  const [groupComparisonRow, setGroupComparisonRow] = useState<CostModelRow | null>(null);
+  const [groupEconomicMetrics, setGroupEconomicMetrics] = useState<MaterialDashboardGroupEconomicMetricsResponse | null>(null);
+  const [groupEconomicMetricsLoading, setGroupEconomicMetricsLoading] = useState(false);
+  const [groupEconomicMetricsError, setGroupEconomicMetricsError] = useState<string | null>(null);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [exportingWorkbook, setExportingWorkbook] = useState(false);
   const [viewBySubtype, setViewBySubtype] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [reviewFilter, setReviewFilter] = useState<CostModelReviewFilter>("all");
   const [sort, setSort] = useState<CostModelSortState>(DEFAULT_SORT_STATE);
   const [detailsRow, setDetailsRow] = useState<CostModelRow | null>(null);
   const [consumptionSelection, setConsumptionSelection] = useState<ConsumptionSelection | null>(null);
@@ -760,6 +793,16 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
     return map;
   }, [economicMetrics]);
+
+  const groupEconomicMetricsKey = useMemo(
+    () => (groupComparisonRow ? groupEconomicMetricsCacheKey([], houseRange) : null),
+    [groupComparisonRow, houseRange],
+  );
+
+  const groupComparisonGroups = useMemo(
+    () => getMaterialGroupMemberships(materialGroups, groupComparisonRow?.sku),
+    [groupComparisonRow?.sku, materialGroups],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -797,6 +840,35 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     void loadProjects();
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setMaterialGroupsLoading(true);
+      const cached = await getMaterialDashboardCacheValue<MaterialStudyGroupRow[]>(GROUP_CATALOG_CACHE_KEY);
+      if (!cancelled && cached) {
+        setMaterialGroups(cached);
+      }
+      try {
+        const response = await api.getMaterialStudyGroupCatalog();
+        if (!cancelled) {
+          setMaterialGroups(response);
+          void setMaterialDashboardCacheValue(GROUP_CATALOG_CACHE_KEY, response);
+        }
+      } catch {
+        if (!cancelled && !cached) {
+          setMaterialGroups([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setMaterialGroupsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -873,6 +945,48 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   }, [economicMetricsKey, houseRange.endDate, houseRange.startDate, selectedHouseTypeId, selectedProjectId]);
 
   useEffect(() => {
+    if (!groupComparisonRow || !groupEconomicMetricsKey) {
+      setGroupEconomicMetrics(null);
+      setGroupEconomicMetricsError(null);
+      setGroupEconomicMetricsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      setGroupEconomicMetricsLoading(true);
+      setGroupEconomicMetricsError(null);
+      setGroupEconomicMetrics(null);
+      const cached = await getMaterialDashboardCacheValue<MaterialDashboardGroupEconomicMetricsResponse>(groupEconomicMetricsKey);
+      if (!cancelled && cached) {
+        setGroupEconomicMetrics(cached);
+      }
+      try {
+        const response = await api.getMaterialDashboardGroupEconomicMetrics(
+          {},
+          { startDate: houseRange.startDate, endDate: houseRange.endDate },
+        );
+        if (!cancelled) {
+          setGroupEconomicMetrics(response);
+          void setMaterialDashboardCacheValue(groupEconomicMetricsKey, response);
+        }
+      } catch (err) {
+        if (!cancelled && !cached) {
+          setGroupEconomicMetrics(null);
+          setGroupEconomicMetricsError(err instanceof ApiError ? err.message : "No se pudo comparar el consumo del grupo.");
+        }
+      } finally {
+        if (!cancelled) {
+          setGroupEconomicMetricsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [groupComparisonRow, groupEconomicMetricsKey, houseRange.endDate, houseRange.startDate]);
+
+  useEffect(() => {
     if (view?.project.name) {
       onTitleChange?.(view.project.name);
       return;
@@ -907,7 +1021,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     return values;
   }, [view]);
 
-  const filteredRows = useMemo(() => {
+  const searchedRows = useMemo(() => {
     if (!view) {
       return [];
     }
@@ -921,6 +1035,14 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
         row.material_name.toLowerCase().includes(needle),
     );
   }, [view, searchTerm]);
+
+  const modelSummary = useMemo(() => summarizeCostModelRows(view?.rows ?? []), [view]);
+
+  const filteredRows = useMemo(
+    () => searchedRows.filter((row) => matchesCostModelReviewFilter(row, reviewFilter)),
+    [reviewFilter, searchedRows],
+  );
+  const visibleSummary = useMemo(() => summarizeCostModelRows(filteredRows), [filteredRows]);
 
   useEffect(() => {
     if (!viewBySubtype && sort.key.startsWith("subtype:")) {
@@ -985,6 +1107,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
     return {
       perSubtype,
+      general: perSubtype.get("__none__") ?? 0,
     };
   }, [filteredRows, view]);
 
@@ -1007,7 +1130,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
 
     if (
-      consumptionSelection?.subtypeId !== null &&
+      consumptionSelection !== null &&
+      consumptionSelection.subtypeId !== null &&
       !currentRow.subtypes.some((entry) => entry.subtype_id === consumptionSelection.subtypeId)
     ) {
       setConsumptionSelection({ sku: currentRow.sku, subtypeId: null });
@@ -1112,20 +1236,44 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
   }
 
+  async function handleExportWorkbook() {
+    if (selectedProjectId === null || exportingWorkbook) {
+      return;
+    }
+    setExportingWorkbook(true);
+    setError(null);
+    try {
+      const job = await api.requestProjectExport(selectedProjectId, {
+        kind: "cost_model_workbook",
+        payload: {},
+      });
+      if (job.status !== "completed") {
+        const payloadError = typeof job.payload.error === "string" ? job.payload.error : null;
+        throw new Error(payloadError || "La exportación no se completó correctamente.");
+      }
+      await downloadExportArtifact(job);
+    } catch (err) {
+      setError(err instanceof ApiError || err instanceof Error ? err.message : "No se pudo exportar el modelo de costos.");
+    } finally {
+      setExportingWorkbook(false);
+    }
+  }
+
   const projectSelect = (
-    <div className="w-full max-w-[320px] shrink-0">
-      <label className="block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2">
-        Project
+    <div className="w-full shrink-0">
+      <label htmlFor="cost-model-project" className="mb-2 block text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">
+        Proyecto
       </label>
       <select
+        id="cost-model-project"
         value={selectedProjectId ?? ""}
         onChange={(event) => {
           const nextProjectId = event.target.value ? Number(event.target.value) : null;
           onNavigate(nextProjectId ? `/cost-model?project_id=${nextProjectId}` : "/cost-model");
         }}
-        className="w-full rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500"
+        className="w-full rounded-none border border-black/15 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition-colors focus:border-red-600 focus:ring-1 focus:ring-red-600 dark:border-white/15 dark:bg-zinc-900 dark:text-white"
       >
-        <option value="">Select a project...</option>
+        <option value="">Seleccionar proyecto...</option>
         {allProjects.map((project) => (
           <option key={project.id} value={project.id}>
             {project.name}
@@ -1173,60 +1321,90 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
   }
 
   const pageHeader = (
-    <div className="flex flex-col gap-4 h-full">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold text-accent-600 dark:text-accent-500 uppercase tracking-widest mb-1">
-            Cost Model
-          </p>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 font-mono">
-            {view.rows.length} materials · {view.project.instance_count} instances · mode: {view.material_mode}
-          </p>
-        </div>
-        {projectSelect}
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <input
-          type="text"
-          placeholder="Filtrar por SKU o material..."
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-500 focus:outline-none focus:border-accent-500/50 font-mono"
-        />
-        <label className="flex items-center gap-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={viewBySubtype}
-            onChange={(event) => setViewBySubtype(event.target.checked)}
-            className="accent-accent-500"
-          />
-          Ver por subtipo
-        </label>
-        <p className="text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
-          Muestra u oculta las columnas de <FactoryQuantityLabel /> General y por subtipo en la tabla. Los totales de abajo siempre permanecen separados por grupo.
+    <div className="flex flex-col gap-4">
+      <div className="border-l-4 border-red-600 pl-3">
+        <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-red-700 dark:text-red-400">
+          Modelo de costos
+        </p>
+        <h1 className="mt-1 truncate text-2xl font-semibold text-zinc-950 dark:text-white">{view.project.name}</h1>
+        <p className="mt-1 text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400">
+          Contrasta cantidades definidas, consumo real y precios ERP antes de valorizar el proyecto.
+        </p>
+        <p className="mt-2 font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+          {view.rows.length} materiales · {view.project.instance_count} instancias · {formatMaterialMode(view.material_mode)}
         </p>
       </div>
 
-      <div className="mt-2">
-        <SummaryMetric label="Materiales visibles" value={formatNumber(sortedRows.length, 0)} />
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+        {projectSelect}
+        {currentUser.permissions.cost_model_export ? (
+          <button
+            type="button"
+            onClick={() => void handleExportWorkbook()}
+            disabled={exportingWorkbook}
+            className="inline-flex h-[38px] items-center justify-center gap-2 border border-zinc-950 bg-zinc-950 px-3 text-xs font-semibold text-white transition-colors hover:bg-red-600 disabled:cursor-wait disabled:opacity-60 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:border-red-500 dark:hover:bg-red-500 dark:hover:text-white"
+            title="Descargar el libro de Excel con los ajustes vigentes"
+          >
+            <i className={`ph-bold ${exportingWorkbook ? "ph-circle-notch animate-spin" : "ph-file-xls"}`} />
+            {exportingWorkbook ? "Generando" : "Excel"}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  const modelReviewRail = (
+    <div
+      className="flex shrink-0 flex-col gap-2 border-b border-black/10 bg-white px-3 py-2 dark:border-white/10 dark:bg-zinc-950 xl:flex-row xl:items-center"
+      aria-label="Preparación y costos del modelo"
+    >
+      <div className="flex shrink-0 items-center gap-3 border-black/10 xl:border-r xl:pr-4 dark:border-white/10">
+        <span className={`h-2 w-2 ${modelSummary.reviewRows === 0 ? "bg-zinc-400" : "bg-red-600"}`} aria-hidden="true" />
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">Preparación</p>
+          <p className="text-xs font-semibold text-zinc-950 dark:text-white">
+            {modelSummary.reviewRows === 0 ? "Sin pendientes" : `${modelSummary.reviewRows} por revisar`}
+          </p>
+        </div>
+        <span className="border border-black/15 px-2 py-1 font-mono text-[10px] text-zinc-600 dark:border-white/15 dark:text-zinc-300">
+          {modelSummary.pricedRows}/{modelSummary.totalRows} con precio
+        </span>
       </div>
 
+      <dl className="flex shrink-0 divide-x divide-black/10 text-[10px] dark:divide-white/10">
+        <div className="px-3 first:pl-0 xl:first:pl-3">
+          <dt className="uppercase tracking-wider text-zinc-500">Sin precio</dt>
+          <dd className="font-mono text-xs text-zinc-950 dark:text-white">{modelSummary.missingPriceRows}</dd>
+        </div>
+        <div className="px-3">
+          <dt className="uppercase tracking-wider text-zinc-500">Sin cantidad</dt>
+          <dd className="font-mono text-xs text-zinc-950 dark:text-white">{modelSummary.missingQuantityRows}</dd>
+        </div>
+        <div className="px-3">
+          <dt className="uppercase tracking-wider text-zinc-500">Ajustados</dt>
+          <dd className="font-mono text-xs text-zinc-950 dark:text-white">{modelSummary.adjustedRows}</dd>
+        </div>
+      </dl>
+
       {subtypeColumns.length > 0 && totals ? (
-        <div className="space-y-1 mt-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Totales en vista</p>
-          <div className="flex flex-wrap gap-2 pb-1">
-            {subtypeColumns.map((column) => {
-              const key = column.id === null ? "__none__" : String(column.id);
-              return (
-                <SubtypeTotalChip
-                  key={column.id ?? "none"}
-                  label={column.name}
-                  value={formatCurrency(totals.perSubtype.get(key) ?? null)}
-                />
-              );
-            })}
-          </div>
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto xl:justify-end">
+          <span className="shrink-0 text-[9px] font-bold uppercase tracking-[0.18em] text-zinc-500">Costo por escenario</span>
+          {subtypeColumns.map((column) => {
+            const key = column.id === null ? "__none__" : String(column.id);
+            const scenarioTotal =
+              column.id === null
+                ? totals.general
+                : totals.general + (totals.perSubtype.get(key) ?? 0);
+            return (
+              <SubtypeTotalChip
+                key={column.id ?? "none"}
+                label={column.id === null ? column.name : `General + ${column.name}`}
+                value={formatCurrency(scenarioTotal)}
+                partial={visibleSummary.reviewRows > 0}
+              />
+            );
+          })}
+          <span className="shrink-0 font-mono text-[9px] text-zinc-400">{visibleSummary.totalRows} en vista</span>
         </div>
       ) : null}
     </div>
@@ -1240,21 +1418,79 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
         </div>
       ) : null}
 
-        <ConsumptionStudyWrapper
-          target={selectedConsumptionTarget}
-          prefetchTarget={prefetchConsumptionTarget}
-          projectId={selectedProjectId}
-          selectedHouseTypeId={selectedHouseTypeId}
-          onSelectedHouseTypeIdChange={setSelectedHouseTypeId}
-          houseRange={houseRange}
-          onHouseRangeChange={setHouseRange}
-          canEdit={canEdit}
-          onSave={handleUpsert}
-          headerLeft={pageHeader}
+      <ConsumptionStudyWrapper
+        target={selectedConsumptionTarget}
+        prefetchTarget={prefetchConsumptionTarget}
+        projectId={selectedProjectId}
+        selectedHouseTypeId={selectedHouseTypeId}
+        onSelectedHouseTypeIdChange={setSelectedHouseTypeId}
+        houseRange={houseRange}
+        onHouseRangeChange={setHouseRange}
+        canEdit={canEdit}
+        onSave={handleUpsert}
+        headerLeft={pageHeader}
       >
         <section className="flex-1 flex flex-col min-h-0 overflow-hidden border-r border-black/5 dark:border-white/5">
+          {modelReviewRail}
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-black/10 bg-zinc-50/70 px-3 py-2 dark:border-white/10 dark:bg-white/[0.025]">
+            <div className="relative w-full sm:w-[280px]">
+              <i className="ph ph-magnifying-glass pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400" />
+              <input
+                type="search"
+                aria-label="Filtrar materiales"
+                placeholder="Buscar SKU o material"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="w-full rounded-none border border-black/15 bg-white py-1.5 pl-9 pr-9 font-mono text-xs text-zinc-800 outline-none placeholder:text-zinc-400 focus:border-red-600 dark:border-white/15 dark:bg-black/40 dark:text-zinc-200"
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm("")}
+                  className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center text-zinc-400 hover:text-red-600"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <i className="ph-bold ph-x" />
+                </button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Filtrar estado de revisión">
+              {([
+                { key: "all", label: "Todos", count: modelSummary.totalRows },
+                { key: "review", label: "Por revisar", count: modelSummary.reviewRows },
+                { key: "missing_price", label: "Sin precio", count: modelSummary.missingPriceRows },
+                { key: "adjusted", label: "Ajustados", count: modelSummary.adjustedRows },
+              ] as const).map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  aria-pressed={reviewFilter === option.key}
+                  onClick={() => setReviewFilter(option.key)}
+                  className={
+                    reviewFilter === option.key
+                      ? "border border-zinc-950 bg-zinc-950 px-2 py-1 text-[10px] font-semibold text-white dark:border-white dark:bg-white dark:text-zinc-950"
+                      : "border border-black/15 bg-white px-2 py-1 text-[10px] font-semibold text-zinc-600 hover:border-red-600 hover:text-red-700 dark:border-white/15 dark:bg-transparent dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-400"
+                  }
+                >
+                  {option.label} <span className="font-mono opacity-70">{option.count}</span>
+                </button>
+              ))}
+            </div>
+            <label
+              className="ml-auto flex cursor-pointer select-none items-center gap-2 text-[11px] font-semibold text-zinc-700 dark:text-zinc-200"
+              title="Añade una columna editable para General y para cada subtipo"
+            >
+              <input
+                type="checkbox"
+                checked={viewBySubtype}
+                onChange={(event) => setViewBySubtype(event.target.checked)}
+                className="accent-red-600"
+              />
+              Desglosar por subtipo
+            </label>
+          </div>
           <div className="h-full overflow-auto">
-            <table className="w-full text-sm">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="sticky top-0 z-10 bg-white/95 dark:bg-zinc-950/95 backdrop-blur">
                 <tr className="text-left text-[11px] uppercase tracking-widest text-zinc-500 dark:text-zinc-400 border-b border-black/10 dark:border-white/10">
                   <SortableHeader
@@ -1293,7 +1529,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                     }
                   />
                   <SortableHeader
-                    label={<FactoryQuantityLabel />}
+                    label={viewBySubtype ? <FactoryQuantityLabel /> : <>Cantidad combinada</>}
+                    title={viewBySubtype ? undefined : "Suma las cantidades de todos los grupos; los costos comparables están separados por escenario"}
                     align="right"
                     active={sort.key === "quantity"}
                     direction={sort.direction}
@@ -1306,7 +1543,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                     }
                   />
                   <SortableHeader
-                    label="% vs usage"
+                    label="% vs consumo"
                     align="right"
                     active={sort.key === "usage_delta"}
                     direction={sort.direction}
@@ -1338,7 +1575,8 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                       ))
                     : null}
                   <SortableHeader
-                    label="Costo"
+                    label="Costo combinado"
+                    title="Suma los grupos del material; usa Costo por escenario para comparar variantes"
                     align="right"
                     active={sort.key === "cost"}
                     direction={sort.direction}
@@ -1357,9 +1595,19 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                   <tr>
                     <td
                       colSpan={viewBySubtype ? 6 + subtypeColumns.length : 6}
-                      className="px-4 py-8 text-center text-zinc-500 dark:text-zinc-400 text-xs"
+                      className="px-4 py-10 text-center text-zinc-500 dark:text-zinc-400 text-xs"
                     >
-                      No materials match the current filter.
+                      <p>No hay materiales que coincidan con la búsqueda y los filtros actuales.</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchTerm("");
+                          setReviewFilter("all");
+                        }}
+                        className="mt-3 border-b border-red-600 pb-0.5 font-semibold text-red-700 hover:text-red-600 dark:text-red-400"
+                      >
+                        Limpiar filtros
+                      </button>
                     </td>
                   </tr>
                 ) : null}
@@ -1374,6 +1622,9 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
                     selectedConsumption={consumptionSelection}
                     onFocusConsumption={(subtypeId) => setConsumptionSelection({ sku: row.sku, subtypeId })}
                     onOpenDetails={() => setDetailsRow(row)}
+                    materialGroups={getMaterialGroupMemberships(materialGroups, row.sku)}
+                    materialGroupsLoading={materialGroupsLoading}
+                    onOpenGroupComparison={() => setGroupComparisonRow(row)}
                     onUpsert={handleUpsert}
                     onDelete={handleDelete}
                     usageMetric={economicMetricsBySku.get(metricKeyForSku(row.sku)) ?? null}
@@ -1386,6 +1637,15 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       </ConsumptionStudyWrapper>
 
       <DetailsModal row={detailsRow} onClose={() => setDetailsRow(null)} />
+      <GroupOverconsumptionModal
+        row={groupComparisonRow}
+        groups={groupComparisonGroups}
+        metrics={groupEconomicMetrics}
+        loading={groupEconomicMetricsLoading}
+        error={groupEconomicMetricsError}
+        range={houseRange}
+        onClose={() => setGroupComparisonRow(null)}
+      />
     </section>
   );
 }
@@ -1465,11 +1725,12 @@ function TrendChartSkeleton({ dualSeries = false }: { dualSeries?: boolean }) {
   );
 }
 
-function SubtypeTotalChip({ label, value }: { label: string; value: string }) {
+function SubtypeTotalChip({ label, value, partial = false }: { label: string; value: string; partial?: boolean }) {
   return (
-    <div className="rounded-full border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/[0.04] px-3 py-1.5 text-xs">
+    <div className="border border-black/15 bg-white px-2.5 py-1.5 text-[11px] dark:border-white/15 dark:bg-white/[0.04]">
       <span className="font-semibold text-zinc-700 dark:text-zinc-100">{label}</span>
-      <span className="ml-2 font-mono text-zinc-500 dark:text-zinc-300">{value}</span>
+      <span className="ml-2 font-mono text-zinc-950 dark:text-zinc-200">{value}</span>
+      {partial ? <span className="ml-1 text-[9px] uppercase tracking-wider text-red-700 dark:text-red-400">parcial</span> : null}
     </div>
   );
 }
@@ -1479,19 +1740,29 @@ function SortableHeader({
   active,
   direction,
   align = "left",
+  title,
   onClick,
 }: {
   label: ReactNode;
   active: boolean;
   direction: 1 | -1;
   align?: "left" | "right";
+  title?: string;
   onClick: () => void;
 }) {
   return (
     <th className={`px-4 py-3 font-semibold ${align === "right" ? "text-right" : "text-left"}`}>
-      <button type="button" onClick={onClick} className={`inline-flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        title={title}
+        className={`inline-flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}
+      >
         <span>{label}</span>
-        <span className={`text-xs ${active ? "opacity-100" : "opacity-35"}`}>{direction === 1 ? "↑" : "↓"}</span>
+        <i
+          className={`ph-bold ${direction === 1 ? "ph-caret-up" : "ph-caret-down"} text-xs ${active ? "opacity-100" : "opacity-30"}`}
+          aria-hidden="true"
+        />
       </button>
     </th>
   );
@@ -2089,7 +2360,7 @@ function ConsumptionStudyWrapper({
                 </span>
                 {currentAdjustment?.source_kind && currentAdjustment.source_kind !== "manual" ? (
                   <span className="rounded-full border border-amber-300 dark:border-amber-500/30 bg-amber-100 dark:bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
-                    {currentAdjustment.source_kind}
+                    {formatAdjustmentSource(currentAdjustment.source_kind)}
                   </span>
                 ) : null}
               </div>
@@ -2134,7 +2405,7 @@ function ConsumptionStudyWrapper({
                   onClick={() => onHouseRangeChange(getDefaultHouseRange())}
                   className="rounded-full px-2.5 py-0.5 text-[11px] font-medium text-zinc-500 transition-colors hover:bg-black/[0.05] hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-white/[0.06] dark:hover:text-zinc-200"
                 >
-                  90d
+                  90 días
                 </button>
               </div>
 
@@ -2196,13 +2467,21 @@ function ConsumptionStudyWrapper({
                 onPointerLeave={handlePointerLeave}
               >
               <defs>
+                <clipPath id="cost-model-plot-clip">
+                  <rect
+                    x={chart.padding.left}
+                    y={chart.padding.top}
+                    width={chart.plotWidth}
+                    height={chart.plotHeight}
+                  />
+                </clipPath>
                 {selectionStart && selectionEnd ? (
                   <clipPath id="cost-model-selection-clip">
                     <rect
                       x={Math.min(selectionStart.x, selectionEnd.x)}
-                      y={0}
+                      y={chart.padding.top}
                       width={Math.max(Math.abs(selectionEnd.x - selectionStart.x), 0.001)}
-                      height={chart.height}
+                      height={chart.plotHeight}
                     />
                   </clipPath>
                 ) : null}
@@ -2264,6 +2543,7 @@ function ConsumptionStudyWrapper({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   opacity={selectionBounds ? 0.25 : 1}
+                  clipPath="url(#cost-model-plot-clip)"
                 />
               ) : null}
               {chart.projectedStockPath ? (
@@ -2275,6 +2555,7 @@ function ConsumptionStudyWrapper({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   opacity={selectionBounds ? 0.25 : 1}
+                  clipPath="url(#cost-model-plot-clip)"
                 />
               ) : null}
               {chart.housePath ? (
@@ -2287,10 +2568,11 @@ function ConsumptionStudyWrapper({
                   strokeLinejoin="round"
                   opacity={selectionBounds ? 0.25 : 1}
                   className="dark:stroke-slate-300"
+                  clipPath="url(#cost-model-plot-clip)"
                 />
               ) : null}
               {chart.points.map((point) => (
-                <g key={point.date}>
+                <g key={point.date} clipPath="url(#cost-model-plot-clip)">
                   {point.stockY !== null ? (
                     <circle
                       cx={point.x}
@@ -2420,6 +2702,7 @@ function ConsumptionStudyWrapper({
                       stroke="rgb(255 255 255)"
                       strokeWidth="2"
                       className="dark:stroke-zinc-900"
+                      clipPath="url(#cost-model-plot-clip)"
                     />
                   ) : null}
                   {hoveredPoint.projectedStockY !== null ? (
@@ -2431,6 +2714,7 @@ function ConsumptionStudyWrapper({
                       stroke="rgb(255 255 255)"
                       strokeWidth="2"
                       className="dark:stroke-zinc-900"
+                      clipPath="url(#cost-model-plot-clip)"
                     />
                   ) : null}
                   <circle
@@ -2441,16 +2725,17 @@ function ConsumptionStudyWrapper({
                     stroke="rgb(255 255 255)"
                     strokeWidth="2"
                     className="dark:fill-slate-300 dark:stroke-zinc-900"
+                    clipPath="url(#cost-model-plot-clip)"
                   />
                   <g
-                    transform={`translate(${clamp(hoveredPoint.x - 90, chart.padding.left, chart.width - chart.padding.right - 180)}, ${
+                    transform={`translate(${clamp(hoveredPoint.x - 105, chart.padding.left, chart.width - chart.padding.right - 210)}, ${
                       Math.min(hoveredPoint.stockY ?? hoveredPoint.houseY, hoveredPoint.houseY) < chart.padding.top + 74
                         ? Math.max(hoveredPoint.stockY ?? hoveredPoint.houseY, hoveredPoint.houseY) + 16
                         : Math.min(hoveredPoint.stockY ?? hoveredPoint.houseY, hoveredPoint.houseY) - 76
                     })`}
                   >
                     <rect
-                      width="180"
+                      width="210"
                       height={hoveredPoint.projectedStockValue !== null ? "80" : "66"}
                       rx="10"
                       fill="rgba(24, 24, 27, 0.92)"
@@ -2464,14 +2749,14 @@ function ConsumptionStudyWrapper({
                     </text>
                     {hoveredPoint.projectedStockValue !== null ? (
                       <text x="12" y="45" fontSize="12" fill="white" fontWeight="700">
-                        Projected: {formatNumber(hoveredPoint.projectedStockValue)}
+                        Proyección: {formatNumber(hoveredPoint.projectedStockValue)}
                       </text>
                     ) : null}
                     <text x="12" y={hoveredPoint.projectedStockValue !== null ? "59" : "45"} fontSize="12" fill="white" fontWeight="700">
-                      Remaining starts: {formatNumber(hoveredPoint.remainingHouseStarts, 0)}
+                      Inicios restantes: {formatNumber(hoveredPoint.remainingHouseStarts, 0)}
                     </text>
                     <text x="12" y={hoveredPoint.projectedStockValue !== null ? "73" : "59"} fontSize="12" fill="white" fontWeight="700">
-                      Starts today: {formatNumber(hoveredPoint.house_starts, 0)}
+                      Inicios del día: {formatNumber(hoveredPoint.house_starts, 0)}
                     </text>
                   </g>
                 </g>
@@ -2570,6 +2855,9 @@ type CostModelRowViewProps = {
   selectedConsumption: ConsumptionSelection | null;
   onFocusConsumption: (subtypeId: number | null) => void;
   onOpenDetails: () => void;
+  materialGroups: MaterialStudyGroupRow[];
+  materialGroupsLoading: boolean;
+  onOpenGroupComparison: () => void;
   onUpsert: (
     row: CostModelRow,
     subtypeId: number | null,
@@ -2591,6 +2879,9 @@ function CostModelRowView({
   selectedConsumption,
   onFocusConsumption,
   onOpenDetails,
+  materialGroups,
+  materialGroupsLoading,
+  onOpenGroupComparison,
   onUpsert,
   onDelete,
 }: CostModelRowViewProps) {
@@ -2624,7 +2915,7 @@ function CostModelRowView({
       className={[
         "border-b border-black/5 dark:border-white/5 transition-colors",
         row.is_auxiliary ? "" : "cursor-pointer hover:bg-zinc-50/60 dark:hover:bg-white/5",
-        rowSelected ? "bg-accent-500/[0.06] dark:bg-accent-500/[0.08]" : "",
+        rowSelected ? "bg-red-600/[0.045] dark:bg-red-500/[0.08]" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -2644,14 +2935,41 @@ function CostModelRowView({
           >
             <i className="ph-bold ph-info text-[11px]" />
           </button>
+          <button
+            type="button"
+            disabled={materialGroups.length === 0}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenGroupComparison();
+            }}
+            className={
+              materialGroups.length > 0
+                ? "inline-flex h-5 w-5 items-center justify-center rounded-full border border-black/10 bg-white/80 text-zinc-500 transition-colors hover:border-red-500/50 hover:text-red-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-400 dark:hover:text-red-300"
+                : "inline-flex h-5 w-5 cursor-not-allowed items-center justify-center rounded-full border border-black/[0.06] bg-zinc-50 text-zinc-300 dark:border-white/[0.06] dark:bg-white/[0.025] dark:text-zinc-700"
+            }
+            title={
+              materialGroupsLoading
+                ? "Cargando pertenencia a grupos"
+                : materialGroups.length > 0
+                  ? `Revisar sobreconsumo en ${materialGroups.length === 1 ? materialGroups[0].name : `${materialGroups.length} grupos`}`
+                  : "Este SKU no pertenece a un grupo"
+            }
+            aria-label={
+              materialGroups.length > 0
+                ? `Revisar sobreconsumo del grupo de ${row.material_name}`
+                : `${row.material_name} no pertenece a un grupo`
+            }
+          >
+            <i className="ph-bold ph-stack text-[11px]" />
+          </button>
           {row.is_auxiliary ? (
             <span className="px-1.5 py-0.5 rounded bg-zinc-200 dark:bg-white/10 text-[9px] uppercase tracking-widest text-zinc-600 dark:text-zinc-400">
               aux
             </span>
           ) : null}
           {rowHasOverrides ? (
-            <span className="rounded-full border border-amber-300/70 bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-              ajuste
+            <span className="border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-zinc-700 dark:border-white/15 dark:bg-white/[0.06] dark:text-zinc-300">
+              ajustado
             </span>
           ) : null}
         </div>
@@ -2665,10 +2983,20 @@ function CostModelRowView({
         ) : null}
       </td>
       <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
-        {formatCurrency(row.price)}
+        {hasUsablePrice(row) ? (
+          formatCurrency(row.price)
+        ) : (
+          <span className="border border-red-300 bg-red-50 px-1.5 py-0.5 font-sans text-[9px] font-semibold uppercase tracking-wider text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            Sin precio
+          </span>
+        )}
       </td>
       <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-900 dark:text-white whitespace-nowrap">
-        {formatNumber(rowQuantity)}
+        {rowQuantity === null ? (
+          <span className="font-sans text-[9px] font-semibold uppercase tracking-wider text-red-700 dark:text-red-300">Sin cantidad</span>
+        ) : (
+          formatNumber(rowQuantity)
+        )}
       </td>
       <td
         className={`px-4 py-3 text-right font-mono text-[11px] whitespace-nowrap ${usageDeltaClass}`}
@@ -2799,7 +3127,12 @@ function AdjustableQuantityCell({
         </button>
       </div>
 
-      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={<>Editar <FactoryQuantityLabel />: {row.sku}</>}>
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={<>Editar <FactoryQuantityLabel />: {row.sku}</>}
+        kicker="Cantidad del modelo"
+      >
         <div className="p-4 flex flex-col gap-4">
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             {row.material_name}
@@ -2866,6 +3199,206 @@ function AdjustableQuantityCell({
         </div>
       </Modal>
     </>
+  );
+}
+
+function GroupOverconsumptionModal({
+  row,
+  groups,
+  metrics,
+  loading,
+  error,
+  range,
+  onClose,
+}: {
+  row: CostModelRow | null;
+  groups: MaterialStudyGroupRow[];
+  metrics: MaterialDashboardGroupEconomicMetricsResponse | null;
+  loading: boolean;
+  error: string | null;
+  range: HouseRange;
+  onClose: () => void;
+}) {
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setSelectedGroupId(groups[0]?.group_id ?? null);
+  }, [groups, row?.sku]);
+
+  const selectedGroup = groups.find((group) => group.group_id === selectedGroupId) ?? groups[0] ?? null;
+  const metric = metrics?.metrics.find((item) => item.group_id === selectedGroup?.group_id) ?? null;
+  const actualPerHouse = metric?.material_per_house ?? null;
+  const budgetPerHouse = metric?.predicted_quantity_per_house ?? null;
+  const delta = metric?.consumption_delta_percent ?? null;
+  const hasComparison = actualPerHouse !== null && budgetPerHouse !== null;
+  const hasBudget = budgetPerHouse !== null && budgetPerHouse > 0;
+  const overconsumption = (delta !== null && delta > 0.05) || (!hasBudget && actualPerHouse !== null && actualPerHouse > 0);
+  const underBudget = delta !== null && delta < -0.05;
+  const statusLabel = !hasComparison
+    ? "Sin comparación disponible"
+    : overconsumption
+      ? "Sobreconsumo"
+      : underBudget
+        ? "Bajo presupuesto"
+        : "En presupuesto";
+
+  return (
+    <Modal
+      open={row !== null}
+      title={selectedGroup?.name ?? row?.material_name ?? "Comparación de grupo"}
+      kicker="Consumo del grupo vs presupuesto"
+      onClose={onClose}
+      panelClassName="max-w-5xl rounded-none"
+    >
+      {row ? (
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-black/10 pb-3 dark:border-white/10">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] text-zinc-500">SKU consultado: {row.sku}</span>
+              <span className="text-[10px] text-zinc-400">
+                {formatDate(range.startDate)} — {formatDate(range.endDate)}
+              </span>
+            </div>
+            {loading && metrics ? <span className="text-[10px] font-semibold text-zinc-400">Actualizando…</span> : null}
+          </div>
+
+          {groups.length > 1 ? (
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Grupos del material">
+              {groups.map((group) => (
+                <button
+                  key={group.group_id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedGroup?.group_id === group.group_id}
+                  onClick={() => setSelectedGroupId(group.group_id)}
+                  className={
+                    selectedGroup?.group_id === group.group_id
+                      ? "border border-zinc-950 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white dark:border-white dark:bg-white dark:text-zinc-950"
+                      : "border border-black/15 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-600 hover:border-red-600 hover:text-red-700 dark:border-white/15 dark:bg-transparent dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-300"
+                  }
+                >
+                  {group.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+              {error}
+            </div>
+          ) : loading && !metrics ? (
+            <div className="grid grid-cols-2 gap-px border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10 md:grid-cols-4">
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} className="h-20 animate-pulse bg-zinc-50 dark:bg-zinc-900" />
+              ))}
+            </div>
+          ) : selectedGroup ? (
+            <>
+              <div
+                className={
+                  overconsumption
+                    ? "grid gap-px border border-red-300 bg-red-300 dark:border-red-500/30 dark:bg-red-500/30 md:grid-cols-[1.25fr_repeat(4,1fr)]"
+                    : "grid gap-px border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10 md:grid-cols-[1.25fr_repeat(4,1fr)]"
+                }
+              >
+                <div className={overconsumption ? "bg-red-600 p-4 text-white" : "bg-zinc-950 p-4 text-white dark:bg-white dark:text-zinc-950"}>
+                  <p className="text-[9px] font-bold uppercase tracking-[0.18em] opacity-70">Estado</p>
+                  <p className="mt-1 text-lg font-semibold">{statusLabel}</p>
+                  <p className="mt-1 text-[10px] opacity-70">{selectedGroup.member_count} materiales · {selectedGroup.study_unit}</p>
+                </div>
+                <GroupComparisonStat
+                  label="Consumo real / viv."
+                  value={actualPerHouse === null ? "—" : `${formatNumber(actualPerHouse)} ${selectedGroup.study_unit}`}
+                />
+                <GroupComparisonStat
+                  label="Presupuesto / viv. vinculada"
+                  value={budgetPerHouse === null ? "—" : `${formatNumber(budgetPerHouse)} ${selectedGroup.study_unit}`}
+                />
+                <GroupComparisonStat
+                  label="Variación total"
+                  value={delta === null ? "—" : formatPercent(delta)}
+                  alert={overconsumption}
+                />
+                <GroupComparisonStat
+                  label={metric?.consumption_cost_delta_per_house && metric.consumption_cost_delta_per_house < 0 ? "Ahorro / viv." : "Sobrecosto / viv."}
+                  value={metric?.consumption_cost_delta_per_house === null || metric?.consumption_cost_delta_per_house === undefined ? "—" : formatCurrency(Math.abs(metric.consumption_cost_delta_per_house))}
+                  alert={(metric?.consumption_cost_delta_per_house ?? 0) > 0}
+                />
+              </div>
+
+              {!hasBudget ? (
+                <div className="border border-black/10 bg-zinc-50 px-4 py-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-300">
+                  No hay consumo presupuestado vinculado para este grupo en el rango seleccionado. Revisa la vinculación de tipos de vivienda y proyectos.
+                </div>
+              ) : null}
+
+              {metric?.cost_breakdown.length ? (
+                <section className="border border-black/10 dark:border-white/10">
+                  <header className="flex items-center justify-between gap-3 border-b border-black/10 bg-zinc-50 px-4 py-2.5 dark:border-white/10 dark:bg-white/[0.03]">
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-900 dark:text-white">Desglose por material</h4>
+                      <p className="mt-0.5 text-[10px] text-zinc-500">Cantidades totales del rango; costo expresado por vivienda.</p>
+                    </div>
+                    <span className="font-mono text-[10px] text-zinc-400">{metric.cost_breakdown.length} filas</span>
+                  </header>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[720px] text-xs">
+                      <thead>
+                        <tr className="border-b border-black/10 text-left text-[9px] uppercase tracking-[0.14em] text-zinc-500 dark:border-white/10">
+                          <th className="px-4 py-2 font-semibold">Material</th>
+                          <th className="px-4 py-2 text-right font-semibold">Real</th>
+                          <th className="px-4 py-2 text-right font-semibold">Presupuesto</th>
+                          <th className="px-4 py-2 text-right font-semibold">Delta costo / viv.</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-black/5 dark:divide-white/5">
+                        {metric.cost_breakdown.map((item) => {
+                          const selectedSku = metricKeyForSku(item.sku) === metricKeyForSku(row.sku);
+                          const itemOvercost = (item.cost_delta_per_house ?? 0) > 0;
+                          return (
+                            <tr key={item.sku} className={selectedSku ? "bg-red-600/[0.045] dark:bg-red-500/[0.08]" : undefined}>
+                              <td className="px-4 py-2.5">
+                                <span className="block font-medium text-zinc-900 dark:text-white">{item.material_name}</span>
+                                <span className="font-mono text-[10px] text-zinc-500">{item.sku} · factor {formatNumber(item.factor_to_study_unit)}</span>
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-mono text-zinc-800 dark:text-zinc-200">
+                                {formatNumber(item.actual_source_quantity)} {item.unit || ""}
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-mono text-zinc-800 dark:text-zinc-200">
+                                {formatNumber(item.expected_source_quantity)} {item.unit || ""}
+                              </td>
+                              <td className={`px-4 py-2.5 text-right font-mono ${itemOvercost ? "font-semibold text-red-700 dark:text-red-300" : "text-zinc-800 dark:text-zinc-200"}`}>
+                                {item.cost_delta_per_house === null ? "—" : `${item.cost_delta_per_house > 0 ? "+" : item.cost_delta_per_house < 0 ? "−" : ""}${formatCurrency(Math.abs(item.cost_delta_per_house))}`}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
+
+              <p className="text-[10px] leading-4 text-zinc-500">
+                La variación compara el consumo total real del grupo con el presupuesto de las viviendas vinculadas. Viviendas iniciadas: {formatNumber(metrics?.total_house_starts, 0)} · vinculadas: {formatNumber(metrics?.total_mapped_house_starts, 0)}.
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-zinc-500">Este SKU ya no pertenece a un grupo disponible.</p>
+          )}
+        </div>
+      ) : null}
+    </Modal>
+  );
+}
+
+function GroupComparisonStat({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
+  return (
+    <div className="bg-white p-4 dark:bg-zinc-900">
+      <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-zinc-500">{label}</p>
+      <p className={`mt-2 font-mono text-base font-semibold ${alert ? "text-red-700 dark:text-red-300" : "text-zinc-950 dark:text-white"}`}>{value}</p>
+    </div>
   );
 }
 

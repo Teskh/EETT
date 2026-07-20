@@ -72,6 +72,7 @@ from app.api_models import (
     MaterialDashboardListRequest,
     MaterialDashboardMovementResponse,
     MaterialDashboardResponse,
+    MaterialDashboardStockRiskMetricsResponse,
     ManualMaterialAddRequest,
     MaterialCalculationSheetResponse,
     MaterialCalculationSheetUpdateRequest,
@@ -117,11 +118,15 @@ from app.seed import seed_demo_data_if_empty
 from app.services import backups as backup_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
+    attach_microsoft_identity,
     authenticate_user,
-    get_enabled_user_by_email,
-    get_user_by_username,
+    get_user_by_email,
+    get_user_by_microsoft_identity,
     get_current_user,
     is_sysadmin,
+    is_guest_user,
+    provision_microsoft_guest_user,
+    require_guest_request_access,
     resolve_current_user,
     require_project_create,
     require_catalog_edit,
@@ -136,7 +141,6 @@ from app.services.auth import (
     require_page_edit,
     require_page_read,
     require_user_admin,
-    role_codes,
     serialize_page_catalog,
     serialize_session_user,
 )
@@ -178,6 +182,7 @@ from app.services.dashboard import (
     get_material_dashboard_mapped_house_comparison,
     get_material_dashboard_project_comparison,
     get_material_dashboard_project_usage,
+    get_material_dashboard_stock_risk_metrics,
     get_production_house_starts_with_links,
     get_project_material_dashboard,
     get_recent_material_dashboard,
@@ -200,6 +205,7 @@ from app.services.material_groups import (
     get_material_dashboard_group_history,
     get_material_dashboard_group_house_comparison,
     get_material_dashboard_groups,
+    list_material_study_groups,
     update_material_study_group,
 )
 from app.services.material_calculation_sheets import get_material_calculation_sheet, replace_material_calculation_sheet
@@ -211,6 +217,7 @@ from app.services.exports import build_project_export_artifact, execute_project_
 from app.services.media import (
     create_media_asset_from_upload,
     get_media_asset,
+    guest_can_view_media_asset,
     list_media_assets,
     resolve_media_storage_path,
     serialize_media_asset,
@@ -326,12 +333,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session: Session = Depends(get_session),
         x_spec_sheets_user: Annotated[str | None, Header()] = None,
     ):
-        return get_current_user(
+        user = get_current_user(
             session,
             session_username=request.session.get("username"),
             trusted_username=x_spec_sheets_user,
             allow_trusted_username=request.app.state.settings.allow_trusted_user_header,
         )
+        require_guest_request_access(user, method=request.method, path=request.url.path)
+        return user
 
     def get_optional_actor_user(
         request: Request,
@@ -493,6 +502,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         asset = get_media_asset(session, asset_id)
         if asset is None:
             raise HTTPException(status_code=404, detail="Media asset not found")
+        if is_guest_user(current_user) and not guest_can_view_media_asset(session, asset_id):
+            raise HTTPException(status_code=403, detail="Guest cannot access this media asset")
         try:
             asset_path = resolve_media_storage_path(settings=app.state.settings, storage_key=asset.storage_key)
         except ValueError as exc:
@@ -731,13 +742,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+    async def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
         if frontend_index.exists():
             return serve_frontend_app()
         if current_user is None:
             raise HTTPException(status_code=401, detail="Authentication required")
-        if request.session.get("guest"):
-            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -862,9 +871,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_projects_page_data(session, user=current_user)
 
     @app.get("/api/projects/{project_id}")
-    async def project_detail_api(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
-        if request.session.get("guest"):
-            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
+    async def project_detail_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         data = get_project_view_data(session, project_id, user=current_user)
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -919,17 +926,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             access_token = await microsoft_auth.exchange_code_for_token(config, code=code)
-            email = await microsoft_auth.fetch_user_email(access_token)
+            profile = await microsoft_auth.fetch_user_profile(access_token)
         except microsoft_auth.MicrosoftAuthError as exc:
             return _login_redirect_error(str(exc))
 
-        user = get_enabled_user_by_email(session, email)
+        user = get_user_by_microsoft_identity(
+            session,
+            tenant_id=config.tenant_id,
+            object_id=profile.object_id,
+        )
         if user is None:
-            return _login_redirect_error(f"El correo {email} no está habilitado en EETT.")
+            user = get_user_by_email(session, profile.email)
+            if user is not None:
+                if not user.is_active:
+                    return _login_redirect_error(f"El correo {profile.email} está deshabilitado en EETT.")
+                try:
+                    user = attach_microsoft_identity(
+                        session,
+                        user,
+                        tenant_id=config.tenant_id,
+                        object_id=profile.object_id,
+                    )
+                except ValueError as exc:
+                    return _login_redirect_error(str(exc))
+            else:
+                try:
+                    user = provision_microsoft_guest_user(
+                        session,
+                        tenant_id=config.tenant_id,
+                        object_id=profile.object_id,
+                        email=profile.email,
+                        display_name=profile.display_name,
+                    )
+                except (RuntimeError, ValueError) as exc:
+                    return _login_redirect_error(str(exc))
+        elif not user.is_active:
+            return _login_redirect_error(f"El correo {profile.email} está deshabilitado en EETT.")
 
         request.session.clear()
         request.session["username"] = user.username
-        request.session["guest"] = False
         return RedirectResponse(url="/", status_code=303)
 
     @app.post("/api/v1/login", response_model=SessionUserResponse)
@@ -953,26 +988,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="Password login is disabled")
         request.session.clear()
         request.session["username"] = user.username
-        request.session["guest"] = False
         return serialize_session_user(user)
-
-    @app.post("/api/v1/guest-login", response_model=SessionUserResponse)
-    async def guest_login_api(
-        request: Request,
-        session: Session = Depends(get_session),
-    ):
-        if not request.app.state.settings.guest_login_enabled:
-            raise HTTPException(status_code=403, detail="Guest login is disabled")
-        user = get_user_by_username(session, "viewer")
-        if user is None or not user.is_active:
-            raise HTTPException(status_code=503, detail="Guest access is not configured")
-        codes = role_codes(user)
-        if "viewer" not in codes or any(code in codes for code in {"sysadmin", "admin", "editor", "ot"}):
-            raise HTTPException(status_code=503, detail="Guest access is not configured")
-        request.session.clear()
-        request.session["username"] = user.username
-        request.session["guest"] = True
-        return serialize_session_user(user, is_guest=True)
 
     @app.post("/api/v1/logout", status_code=204)
     async def logout_api(request: Request) -> Response:
@@ -980,9 +996,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return Response(status_code=204)
 
     @app.get("/api/v1/session", response_model=SessionUserResponse)
-    async def session_api(request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def session_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         del session
-        return serialize_session_user(current_user, is_guest=bool(request.session.get("guest")))
+        return serialize_session_user(current_user)
 
     @app.get("/api/v1/users", response_model=UserDirectoryResponse)
     async def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -1436,9 +1452,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id}
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
-    async def project_detail_v1(project_id: int, request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
-        if request.session.get("guest"):
-            raise HTTPException(status_code=403, detail="Guest access is limited to project exports")
+    async def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "projects")
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1913,8 +1927,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         from app.services.cost_model import get_cost_model_view
 
-        if request.session.get("guest"):
-            raise HTTPException(status_code=403, detail="Guest access cannot open the cost model")
         require_page_read(current_user, "cost_model")
         view = get_cost_model_view(
             session,
@@ -2259,9 +2271,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_activity(session, project_id)
 
     @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
-    async def activity_history_api(request: Request, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
-        return get_activity_history(session, current_user, execution_only=bool(request.session.get("guest")))
+        return get_activity_history(session, current_user)
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
     async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
@@ -2452,6 +2464,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return get_material_dashboard_house_types(app.state.settings)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/dashboard/material-groups/catalog", response_model=list[MaterialStudyGroupModel])
+    def material_study_group_catalog_v1(
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        return list_material_study_groups(session)
 
     @app.get("/api/v1/dashboard/material-groups", response_model=MaterialStudyGroupListResponse)
     def material_study_groups_v1(
@@ -2801,6 +2821,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request.app.state.settings,
                 session=session,
                 movement_days=movement_days,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                cost_centers=payload.cecos,
+                excluded_cost_centers=payload.excluded_cecos,
+                force_refresh=payload.refresh,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.post("/api/v1/dashboard/materials/stock-risk-metrics", response_model=MaterialDashboardStockRiskMetricsResponse)
+    def material_dashboard_stock_risk_metrics_v1_post(
+        payload: MaterialDashboardListRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        try:
+            return get_material_dashboard_stock_risk_metrics(
+                request.app.state.settings,
+                session=session,
+                movement_days=payload.movement_days,
                 start_date=payload.start_date,
                 end_date=payload.end_date,
                 cost_centers=payload.cecos,

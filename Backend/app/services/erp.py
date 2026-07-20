@@ -622,11 +622,33 @@ def _get_last_purchase_orders_for_products_batch(
     cursor,
     product_codes: Sequence[str],
 ) -> dict[str, tuple[datetime | None, str | None, float | None, datetime | None, str | None]]:
+    summaries = _get_purchase_order_summaries_for_products_batch(cursor, product_codes)
+    return {
+        code: (summary[0], summary[1], summary[2], summary[3], summary[4])
+        for code, summary in summaries.items()
+    }
+
+
+def _get_purchase_order_summaries_for_products_batch(
+    cursor,
+    product_codes: Sequence[str],
+) -> dict[
+    str,
+    tuple[
+        datetime | None,
+        str | None,
+        float | None,
+        datetime | None,
+        str | None,
+        float | None,
+        float | None,
+    ],
+]:
     if not product_codes:
         return {}
 
-    results: dict[str, tuple[datetime | None, str | None, float | None, datetime | None, str | None]] = {
-        code: (None, None, None, None, None) for code in product_codes
+    results = {
+        code: (None, None, None, None, None, None, None) for code in product_codes
     }
     placeholders = ",".join(["?"] * len(product_codes))
     status_placeholders = ",".join(["?"] * len(VISIBLE_PURCHASE_ORDER_STATUSES))
@@ -664,6 +686,7 @@ def _get_last_purchase_orders_for_products_batch(
                 v.CodProd,
                 v.fechaOC,
                 v.numoc,
+                v.CodEstado,
                 v.NumLinea,
                 v.OCNumInterOc,
                 v.cantidadOrdenadaDetalle,
@@ -676,6 +699,7 @@ def _get_last_purchase_orders_for_products_batch(
                 v.CodProd,
                 v.fechaOC,
                 v.numoc,
+                v.CodEstado,
                 v.NumLinea,
                 v.OCNumInterOc,
                 v.cantidadOrdenadaDetalle
@@ -689,7 +713,21 @@ def _get_last_purchase_orders_for_products_batch(
                         THEN cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv)
                         ELSE 0
                     END
-                ) AS pendingPurchaseQuantity
+                ) AS pendingPurchaseQuantity,
+                SUM(
+                    CASE
+                        WHEN CodEstado = ? AND cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv) > 0
+                        THEN cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv)
+                        ELSE 0
+                    END
+                ) AS pendingApprovalQuantity,
+                SUM(
+                    CASE
+                        WHEN CodEstado = ? AND cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv) > 0
+                        THEN cantidadOrdenadaDetalle - (cantidadIngresadaMovim + cantidadRecepcionNoInv)
+                        ELSE 0
+                    END
+                ) AS inTransitQuantity
             FROM LinePending
             WHERE fechaOC >= DATEADD(MONTH, -4, CONVERT(date, GETDATE()))
             GROUP BY CodProd
@@ -700,28 +738,43 @@ def _get_last_purchase_orders_for_products_batch(
             lpo.numoc,
             lpo.FecFinalOC,
             lpo.CodEstado,
-            COALESCE(rp.pendingPurchaseQuantity, 0) AS pendingPurchaseQuantity
+            COALESCE(rp.pendingPurchaseQuantity, 0) AS pendingPurchaseQuantity,
+            COALESCE(rp.pendingApprovalQuantity, 0) AS pendingApprovalQuantity,
+            COALESCE(rp.inTransitQuantity, 0) AS inTransitQuantity
         FROM LastPOBase lpo
         LEFT JOIN RecentPending rp ON rp.CodProd = lpo.CodProd
         """,
-        [*product_codes, *VISIBLE_PURCHASE_ORDER_STATUSES],
+        [
+            *product_codes,
+            *VISIBLE_PURCHASE_ORDER_STATUSES,
+            PENDING_PURCHASE_ORDER_STATUS,
+            APPROVED_PURCHASE_ORDER_STATUS,
+        ],
     )
     for row in cursor.fetchall():
         code = (getattr(row, "CodProd", None) or "").strip().upper()
         if not code:
             continue
         pending_quantity = getattr(row, "pendingPurchaseQuantity", None)
+        pending_approval_quantity = getattr(row, "pendingApprovalQuantity", None)
+        in_transit_quantity = getattr(row, "inTransitQuantity", None)
         if pending_quantity is None:
             ordered = float(getattr(row, "cantidadOrdenadaDetalle", 0.0) or 0.0)
             entered_mov = float(getattr(row, "cantidadIngresadaMovim", 0.0) or 0.0)
             entered_non_inv = float(getattr(row, "cantidadRecepcionNoInv", 0.0) or 0.0)
             pending_quantity = max(ordered - (entered_mov + entered_non_inv), 0.0)
+        if pending_approval_quantity is None and in_transit_quantity is None:
+            status_code = (getattr(row, "CodEstado", None) or "").strip()
+            pending_approval_quantity = pending_quantity if status_code == PENDING_PURCHASE_ORDER_STATUS else 0.0
+            in_transit_quantity = pending_quantity if status_code == APPROVED_PURCHASE_ORDER_STATUS else 0.0
         results[code] = (
             getattr(row, "fechaOC", None),
             str(getattr(row, "numoc", "")).strip() or None,
             round(float(pending_quantity or 0.0), 2),
             getattr(row, "FecFinalOC", None),
             (getattr(row, "CodEstado", None) or "").strip() or None,
+            round(float(pending_approval_quantity or 0.0), 2),
+            round(float(in_transit_quantity or 0.0), 2),
         )
     return results
 

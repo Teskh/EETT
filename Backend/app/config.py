@@ -59,12 +59,9 @@ class Settings(BaseSettings):
     # is used here must be registered verbatim in the App Registration.
     microsoft_redirect_uri: str = ""
     microsoft_login_enabled: bool = True
-    # Login-method toggles. We currently force Microsoft as the only door, so the
-    # local username/password and guest flows are disabled by default. The code for
-    # them is kept intact; set these to true (env: SPEC_SHEETS_PASSWORD_LOGIN_ENABLED,
-    # SPEC_SHEETS_GUEST_LOGIN_ENABLED) to bring them back.
+    # Microsoft is the normal login door. Local password login is retained only
+    # for the reserved sysadmin escape hatch unless explicitly enabled.
     password_login_enabled: bool = False
-    guest_login_enabled: bool = False
     softland_driver: str = "ODBC Driver 18 for SQL Server"
     softland_server: str | None = "216.155.78.65"
     softland_database: str | None = "PATAGUALHOME2024"

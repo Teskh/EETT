@@ -1,5 +1,6 @@
 export const CECO_CACHE_KEY = "material-dashboard::cecos";
 export const HOUSE_TYPES_CACHE_KEY = "material-dashboard::house-types";
+export const GROUP_CATALOG_CACHE_KEY = "material-dashboard::group-catalog";
 
 type DateRangeLike = {
   startDate?: string | null;
@@ -38,6 +39,10 @@ export function houseComparisonCacheKey(sku: string, cecos: string[], range: Hou
 
 export function economicMetricsCacheKey(cecos: string[], range: HouseRangeLike, linksVersion = 0) {
   return `economics::v2::${range.startDate}::${range.endDate}::links:${linksVersion}::${normalizeCecos(cecos).join("|") || "all"}`;
+}
+
+export function stockRiskMetricsCacheKey(cecos: string[], range: HouseRangeLike) {
+  return `stock-risk::v1::${range.startDate}::${range.endDate}::${normalizeCecos(cecos).join("|") || "all"}`;
 }
 
 export function groupEconomicMetricsCacheKey(cecos: string[], range: HouseRangeLike, linksVersion = 0) {

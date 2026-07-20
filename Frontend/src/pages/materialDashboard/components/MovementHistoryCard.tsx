@@ -91,7 +91,7 @@ function NoSelectionPlaceholder() {
 }
 
 function HeaderStatLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">{children}</div>;
+  return <div className="mb-1 whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">{children}</div>;
 }
 
 function HeaderStatDivider() {
@@ -476,8 +476,8 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
 
   return (
     <section className="flex h-full flex-1 flex-col overflow-y-auto bg-zinc-100/60 dark:bg-zinc-950 lg:overflow-hidden">
-      <div className="z-10 flex shrink-0 flex-col justify-between gap-4 border-b border-black/[0.07] bg-white px-5 py-4 shadow-[0_4px_18px_rgba(0,0,0,0.025)] dark:border-white/10 dark:bg-zinc-950 md:flex-row md:px-6">
-        <div>
+      <div className="z-10 flex shrink-0 flex-col justify-between gap-4 border-b border-black/[0.07] bg-white px-5 py-4 shadow-[0_4px_18px_rgba(0,0,0,0.025)] dark:border-white/10 dark:bg-zinc-950 md:flex-row md:items-start md:px-6">
+        <div className="min-w-0 md:flex-1">
           <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Gráfico fijado</p>
           <div className="flex min-w-0 items-start gap-3">
             <h2 className="min-w-0 flex-1 break-words text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">{selected.material_name}</h2>
@@ -493,7 +493,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
               </button>
             ) : null}
           </div>
-          <p className="text-sm font-medium text-zinc-500 mt-2 flex items-center gap-2">
+          <p className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-sm font-medium text-zinc-500">
             <span className="bg-zinc-200 px-2 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">{selectedBadge}</span>
             {selectedUnitLabel ? <span>&bull; {selectedUnitLabel}</span> : null}
             {groupSelection ? <span>&bull; {formatNumber(selectedGroup?.member_count, 0)} miembros</span> : null}
@@ -511,7 +511,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-3 tabular-nums">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3 tabular-nums md:min-w-0 md:justify-end xl:shrink-0 xl:flex-nowrap">
           <div className="text-right">
             <HeaderStatLabel>{housesMode ? "Cons./Vivienda" : "Stock Disponible"}</HeaderStatLabel>
             <div className="flex items-center justify-end gap-2">

@@ -16,6 +16,7 @@ import {
   historyCacheKey,
   houseComparisonCacheKey,
   normalizeCecos,
+  stockRiskMetricsCacheKey,
 } from "../lib/materialDashboardCacheKeys";
 import type {
   HouseTypeLink,
@@ -30,6 +31,7 @@ import type {
   MaterialDashboardListRow,
   MaterialDashboardMappedHouseComparisonData,
   MaterialDashboardMovementData,
+  MaterialDashboardStockRiskMetricsResponse,
   MaterialStudyGroupListResponse,
 } from "../lib/types";
 
@@ -69,7 +71,10 @@ import {
   DEFAULT_SORT_STATE,
   compareEconomicMetricValues,
   compareRows,
+  compareStockRiskMetricValues,
+  hasPositiveEstimatedQuantityPerHouse,
   isEconomicSortKey,
+  isStockRiskSortKey,
   materialSearchResultToDashboardRow,
   toBaseSort,
   type SortKey,
@@ -136,6 +141,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [visibleMaterialCount, setVisibleMaterialCount] = useState(LIST_PAGE_SIZE);
   const [visibleGroupCount, setVisibleGroupCount] = useState(LIST_PAGE_SIZE);
   const [visibleCecoCount, setVisibleCecoCount] = useState(LIST_PAGE_SIZE);
+  const [onlyEstimatedPerHouse, setOnlyEstimatedPerHouse] = useState(false);
 
   // ERP-wide material search (materials without recent movements).
   const [erpMaterialSearchRows, setErpMaterialSearchRows] = useState<MaterialDashboardListRow[]>([]);
@@ -226,6 +232,24 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     onData: syncSelectedMaterial,
     onError: () => setSelectedMaterialSku(null),
   });
+
+  const stockRiskMetricsResource = useDashboardResource<MaterialDashboardStockRiskMetricsResponse>({
+    cacheKey: stockRiskMetricsCacheKey(normalizedSelectedCecos, currentDashboardRange),
+    enabled: !allCecosExcluded && activeStudyTab === "materials" && isStockRiskSortKey(sort.key),
+    refreshNonce,
+    fetcher: (forceRefresh) =>
+      api.getMaterialDashboardStockRiskMetrics(cecoApiFilters, {
+        refresh: forceRefresh,
+        movementDays: currentDashboardMovementDays,
+        startDate: houseRange.startDate,
+        endDate: houseRange.endDate,
+      }),
+    errorMessage: "No se pudo calcular el riesgo de quiebre de los materiales.",
+  });
+  const stockRiskMetricsBySku = useMemo(
+    () => new Map((stockRiskMetricsResource.data?.metrics || []).map((metric) => [metric.sku, metric])),
+    [stockRiskMetricsResource.data],
+  );
 
   const groupListResource = useDashboardResource<MaterialStudyGroupListResponse>({
     cacheKey: groupDashboardCacheKey(normalizedSelectedCecos, currentDashboardRange, currentDashboardMovementDays),
@@ -485,13 +509,26 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     const fallbackSort = toBaseSort(sort);
     return (data?.materials || [])
       .filter((row) => {
+        if (onlyEstimatedPerHouse && !hasPositiveEstimatedQuantityPerHouse(economicMetricsBySku.get(row.sku))) {
+          return false;
+        }
         if (!normalizedMaterialSearch) {
           return true;
         }
-        return row.material_name.toLowerCase().includes(normalizedMaterialSearch) || row.sku.toLowerCase().includes(normalizedMaterialSearch);
+        if (!row.material_name.toLowerCase().includes(normalizedMaterialSearch) && !row.sku.toLowerCase().includes(normalizedMaterialSearch)) {
+          return false;
+        }
+        return true;
       })
       .slice()
       .sort((left, right) => {
+        if (isStockRiskSortKey(sort.key)) {
+          return compareStockRiskMetricValues(
+            { metric: stockRiskMetricsBySku.get(left.sku), name: left.material_name },
+            { metric: stockRiskMetricsBySku.get(right.sku), name: right.material_name },
+            sort.direction,
+          );
+        }
         if (!isEconomicSortKey(sort.key) || !currentEconomicMetrics) {
           return compareRows(left, right, fallbackSort);
         }
@@ -501,10 +538,10 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           sort.direction,
         );
       });
-  }, [currentEconomicMetrics, data?.materials, economicMetricsBySku, normalizedMaterialSearch, sort]);
+  }, [currentEconomicMetrics, data?.materials, economicMetricsBySku, normalizedMaterialSearch, onlyEstimatedPerHouse, sort, stockRiskMetricsBySku]);
 
   const erpOnlyRows = useMemo(() => {
-    if (!normalizedMaterialSearch) {
+    if (!normalizedMaterialSearch || onlyEstimatedPerHouse) {
       return [];
     }
     const movementSkus = new Set((data?.materials || []).map((row) => row.sku));
@@ -516,7 +553,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       seen.add(row.sku);
       return true;
     });
-  }, [data?.materials, erpMaterialSearchRows, normalizedMaterialSearch]);
+  }, [data?.materials, erpMaterialSearchRows, normalizedMaterialSearch, onlyEstimatedPerHouse]);
 
   const groupRows = useMemo(() => {
     const groupSort = toBaseSort(sort);
@@ -618,6 +655,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     if (tab === "materials" || tab === "groups") {
       setActiveStudyTab(tab);
     }
+    if (tab === "groups" && isStockRiskSortKey(sort.key)) {
+      setSort(DEFAULT_SORT_STATE);
+    }
   }
 
   function handleSelectMaterial(key: string) {
@@ -645,7 +685,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   useEffect(() => {
     setVisibleMaterialCount(LIST_PAGE_SIZE);
-  }, [currentDashboardKey, normalizedMaterialSearch, sort.direction, sort.key]);
+  }, [currentDashboardKey, normalizedMaterialSearch, onlyEstimatedPerHouse, sort.direction, sort.key]);
 
   useEffect(() => {
     setVisibleGroupCount(LIST_PAGE_SIZE);
@@ -661,7 +701,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     }
   }, [shouldCollapseSelectedCecos, showAllSelectedCecos]);
 
-  const materialSortOptions: Array<{ key: SortKey; label: string }> = [
+  const sharedSortOptions: Array<{ key: SortKey; label: string }> = [
     { key: "last_movement_date", label: "Último movimiento ERP" },
     { key: "movement_quantity_60d", label: "Cantidad de movimiento" },
     { key: "movement_count_60d", label: "Conteo de movimientos" },
@@ -676,6 +716,11 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
         ]
       : []),
   ];
+  const materialSortOptions: Array<{ key: SortKey; label: string }> = [
+    { key: "stockout_risk", label: "Riesgo de quiebre" },
+    ...sharedSortOptions,
+  ];
+  const groupSortOptions = sharedSortOptions;
 
   return (
     <div className="absolute inset-0 top-16 z-30 flex min-h-0 flex-col overflow-hidden bg-zinc-100/70 dark:bg-zinc-950 xl:flex-row">
@@ -708,7 +753,28 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   </div>
                   <ReloadIconButton onClick={handleReload} />
                 </div>
-                <SortControls options={materialSortOptions} sort={sort} onChange={setSort} />
+                <SortControls
+                  options={materialSortOptions}
+                  sort={sort}
+                  onChange={setSort}
+                  filter={{
+                    active: onlyEstimatedPerHouse,
+                    label: "Estimado/vivienda > 0",
+                    description: !materialEconomicSortAvailable
+                      ? "Configura la vinculación de tipos de vivienda con proyectos para habilitar este filtro."
+                      : "Solo materiales especificados en proyectos con viviendas iniciadas dentro del rango seleccionado.",
+                    disabled: !onlyEstimatedPerHouse && (!materialEconomicSortAvailable || !currentEconomicMetrics),
+                    loading: economicMetricsResource.loading && !currentEconomicMetrics,
+                    onToggle: () => setOnlyEstimatedPerHouse((current) => !current),
+                  }}
+                />
+                {isStockRiskSortKey(sort.key) ? (
+                  <div className="text-[11px] text-zinc-500">
+                    {stockRiskMetricsResource.loading && !stockRiskMetricsResource.data
+                      ? "Calculando riesgo de quiebre por material..."
+                      : "Proyección basada en consumo histórico de 30 días, stock actual y OC pendientes con fecha de entrega."}
+                  </div>
+                ) : null}
                 {linksLoaded && !materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
                     Configura la vinculación de tipos de vivienda con proyectos (botón &quot;Vinculación&quot; junto al gráfico) para
@@ -718,7 +784,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 {materialEconomicSortAvailable && economicMetricsResource.loading && !currentEconomicMetrics ? (
                   <div className="text-[11px] text-zinc-500">Calculando ahorro y sobrecosto por vivienda para el rango seleccionado...</div>
                 ) : null}
-                <ErrorBanners errors={[error, historyError, houseComparisonError, economicMetricsResource.error]} />
+                <ErrorBanners errors={[error, historyError, houseComparisonError, economicMetricsResource.error, stockRiskMetricsResource.error]} />
               </div>
 
               <div
@@ -728,7 +794,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                 }
               >
                 <MaterialResultsList
-                  loading={listLoading}
+                  loading={listLoading || (onlyEstimatedPerHouse && economicMetricsResource.loading && !currentEconomicMetrics)}
                   rows={visibleMaterialRows}
                   erpRows={erpOnlyRows}
                   erpLoading={erpMaterialSearchLoading}
@@ -736,6 +802,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                   hasMore={hasMoreMaterialRows}
                   movementWindowDays={data?.movement_window_days || currentDashboardMovementDays}
                   economicMetricsBySku={economicMetricsBySku}
+                  stockRiskMetricsBySku={stockRiskMetricsBySku}
                   selectedMaterialSku={selectedMaterialSku}
                   onSelect={handleSelectMaterial}
                   onSelectErpMaterial={handleSelectErpMaterial}
@@ -763,7 +830,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
                     </button>
                   </div>
                 ) : null}
-                <SortControls options={materialSortOptions} sort={sort} onChange={setSort} />
+                <SortControls options={groupSortOptions} sort={sort} onChange={setSort} />
                 {linksLoaded && !materialEconomicSortAvailable ? (
                   <div className="text-[11px] text-zinc-500">
                     Configura la vinculación de tipos de vivienda con proyectos para mostrar sobreconsumo y costo por vivienda en grupos.

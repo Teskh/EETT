@@ -19,6 +19,10 @@ from app.models import (
     ProjectMaterialCalculationSheet,
 )
 from app.services.erp import (
+    _get_outgoing_quantities_for_products_batch,
+    _get_purchase_order_lines_for_products_batch,
+    _get_stock_for_products_batch,
+    _open_connection,
     get_cost_centers,
     get_average_prices_for_products,
     get_material_movement_details,
@@ -48,11 +52,13 @@ MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
 MATERIAL_DASHBOARD_CACHE_KIND_HISTORY = "history"
 MATERIAL_DASHBOARD_CACHE_KIND_ECONOMICS = "economics"
+MATERIAL_DASHBOARD_CACHE_KIND_STOCK_RISK = "stock-risk"
 MATERIAL_DASHBOARD_CACHE_TTL_CECOS = timedelta(hours=24)
 MATERIAL_DASHBOARD_CACHE_TTL_LIST = timedelta(minutes=30)
 MATERIAL_DASHBOARD_CACHE_TTL_DETAIL = timedelta(minutes=15)
 MATERIAL_DASHBOARD_CACHE_TTL_HISTORY = timedelta(hours=6)
 MATERIAL_DASHBOARD_CACHE_TTL_ECONOMICS = timedelta(minutes=30)
+MATERIAL_DASHBOARD_CACHE_TTL_STOCK_RISK = timedelta(minutes=15)
 MATERIAL_DASHBOARD_CACHE_KEY_MAX_LENGTH = 255
 
 
@@ -500,6 +506,171 @@ def _build_recent_material_dashboard(
         "ceco_filters": list(cost_centers),
         "generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def get_material_dashboard_stock_risk_metrics(
+    settings: Settings,
+    *,
+    session: Session,
+    movement_days: int = 60,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    cost_centers: list[str] | None = None,
+    excluded_cost_centers: list[str] | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    requested_end_day = end_date or datetime.utcnow().date()
+    requested_start_day = start_date or requested_end_day - timedelta(days=max(int(movement_days), 1) - 1)
+    if requested_start_day > requested_end_day:
+        raise ValueError("start_date must be on or before end_date")
+
+    movement_window_days = max((requested_end_day - requested_start_day).days + 1, 1)
+    normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
+    normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
+    cache_key = _dashboard_cache_key(
+        {
+            "cecos": normalized_cost_centers,
+            "excluded_cecos": normalized_excluded_cost_centers,
+            "movement_days": movement_window_days,
+            "start_date": requested_start_day.isoformat(),
+            "end_date": requested_end_day.isoformat(),
+        }
+    )
+
+    def loader() -> dict:
+        dashboard = get_recent_material_dashboard(
+            settings,
+            session=session,
+            movement_days=movement_window_days,
+            start_date=requested_start_day,
+            end_date=requested_end_day,
+            cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
+            force_refresh=force_refresh,
+        )
+        sku_codes = [str(row.get("sku") or "").strip().upper() for row in dashboard.get("materials", [])]
+        metrics = _build_material_dashboard_stock_risk_metrics(
+            settings,
+            sku_codes=sku_codes,
+            cost_centers=normalized_cost_centers,
+            excluded_cost_centers=normalized_excluded_cost_centers,
+        )
+        return {
+            "ceco_filters": list(normalized_cost_centers),
+            "metrics": metrics,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
+    return _load_material_dashboard_cache(
+        session,
+        cache_kind=MATERIAL_DASHBOARD_CACHE_KIND_STOCK_RISK,
+        cache_key=cache_key,
+        ttl=MATERIAL_DASHBOARD_CACHE_TTL_STOCK_RISK,
+        loader=loader,
+        force_refresh=force_refresh,
+    )
+
+
+def _build_material_dashboard_stock_risk_metrics(
+    settings: Settings,
+    *,
+    sku_codes: list[str],
+    cost_centers: list[str],
+    excluded_cost_centers: list[str],
+) -> list[dict]:
+    if not sku_codes:
+        return []
+
+    today = datetime.utcnow().date()
+    movement_window_start = today - timedelta(days=30)
+    business_days_in_window = _count_business_days(movement_window_start, today)
+    try:
+        with _open_connection(settings) as connection:
+            stock_map = _get_stock_for_products_batch(connection.cursor(), sku_codes, today.strftime("%Y%m%d"))
+            purchase_orders_by_sku = _get_purchase_order_lines_for_products_batch(
+                connection.cursor(),
+                sku_codes,
+                include_receipt_units=False,
+            )
+            outgoing_by_sku = _get_outgoing_quantities_for_products_batch(
+                connection.cursor(),
+                sku_codes,
+                start_day=movement_window_start,
+                cost_centers=cost_centers,
+                excluded_cost_centers=excluded_cost_centers,
+            )
+    except Exception as exc:
+        raise RuntimeError("Could not load ERP stock risk metrics") from exc
+
+    metrics: list[dict] = []
+    for sku in sku_codes:
+        stock_on_hand = _coerce_float(stock_map.get(sku))
+        outgoing_quantity = float(outgoing_by_sku.get(sku) or 0.0)
+        daily_rate = outgoing_quantity / business_days_in_window if business_days_in_window > 0 else 0.0
+        arrivals = _scheduled_stock_arrivals(purchase_orders_by_sku.get(sku) or [], today=today)
+        risk_status, stockout_days, stockout_date = _project_material_stockout(
+            stock_on_hand=stock_on_hand,
+            daily_rate=daily_rate,
+            arrivals=arrivals,
+            today=today,
+        )
+        metrics.append(
+            {
+                "sku": sku,
+                "status": risk_status,
+                "business_days_until_stockout": stockout_days,
+                "stockout_date": stockout_date.isoformat() if stockout_date else None,
+            }
+        )
+    return metrics
+
+
+def _scheduled_stock_arrivals(purchase_orders: list[dict], *, today: date) -> list[tuple[date, float]]:
+    arrivals: list[tuple[date, float]] = []
+    for line in purchase_orders:
+        pending_quantity = _coerce_float(line.get("pending_quantity"))
+        estimated_delivery = str(line.get("estimated_delivery") or "").strip()
+        if not line.get("counted_in_pending") or pending_quantity is None or pending_quantity <= 0 or not estimated_delivery:
+            continue
+        try:
+            delivery_day = date.fromisoformat(estimated_delivery[:10])
+        except ValueError:
+            continue
+        if delivery_day <= today:
+            continue
+        arrivals.append((delivery_day, pending_quantity))
+    return sorted(arrivals, key=lambda item: item[0])
+
+
+def _project_material_stockout(
+    *,
+    stock_on_hand: float | None,
+    daily_rate: float,
+    arrivals: list[tuple[date, float]],
+    today: date,
+    horizon_business_days: int = 120,
+) -> tuple[str, int | None, date | None]:
+    if stock_on_hand is None:
+        return "unavailable", None, None
+    if daily_rate <= 0:
+        return "no_consumption", None, None
+    if stock_on_hand <= 0:
+        return "projected", 0, today
+
+    stock = stock_on_hand
+    arrival_index = 0
+    cursor = today
+    for business_day in range(1, horizon_business_days + 1):
+        cursor += timedelta(days=1)
+        while cursor.weekday() >= 5:
+            cursor += timedelta(days=1)
+        while arrival_index < len(arrivals) and arrivals[arrival_index][0] <= cursor:
+            stock += arrivals[arrival_index][1]
+            arrival_index += 1
+        stock -= daily_rate
+        if stock <= 0:
+            return "projected", business_day, cursor
+    return "outside_horizon", None, None
 
 
 def get_material_dashboard_economic_metrics(

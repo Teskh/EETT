@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Role, RolePageAccess, User, UserRole
-from app.services.auth import ASSIGNABLE_ROLE_CODES, PAGE_KEYS, build_role_page_access_payload, get_role_catalog, get_user_by_username, hash_password, role_codes
+from app.services.auth import ASSIGNABLE_ROLE_CODES, PAGE_KEYS, ROLE_DEFINITION_MAP, build_role_page_access_payload, get_role_catalog, get_user_by_username, hash_password, role_codes
 
 
 def list_users(session: Session) -> list[User]:
@@ -30,6 +30,7 @@ def serialize_role_catalog() -> list[dict]:
             "name": role.name,
             "description": role.description,
             "assignable": role.assignable,
+            "page_access_editable": role.page_access_editable,
         }
         for role in get_role_catalog()
     ]
@@ -43,6 +44,7 @@ def serialize_roles_with_access(roles: list[Role]) -> list[dict]:
             "name": role_definition.name,
             "description": role_definition.description,
             "assignable": role_definition.assignable,
+            "page_access_editable": role_definition.page_access_editable,
             "page_access": build_role_page_access_payload(roles_by_code[role_definition.code]),
         }
         for role_definition in get_role_catalog()
@@ -57,6 +59,7 @@ def serialize_user(user: User) -> dict:
         "display_name": user.display_name,
         "email": user.email,
         "is_active": user.is_active,
+        "is_auto_provisioned": user.is_auto_provisioned,
         "roles": sorted(role_codes(user)),
         "created_at": user.created_at.isoformat(),
     }
@@ -98,6 +101,8 @@ def validate_assignable_role_codes(requested_role_codes: list[str]) -> list[str]
     invalid = [code for code in normalized if code not in ASSIGNABLE_ROLE_CODES]
     if invalid:
         raise ValueError(f"Unsupported role selection: {', '.join(invalid)}")
+    if "guest" in normalized and len(normalized) > 1:
+        raise ValueError("Guest cannot be combined with another role")
     return normalized
 
 
@@ -219,6 +224,9 @@ def update_role_page_access(session: Session, role_access: dict[str, dict[str, d
     invalid = [code for code in requested_role_codes if code not in ASSIGNABLE_ROLE_CODES]
     if invalid:
         raise ValueError(f"Unsupported role selection: {', '.join(invalid)}")
+    fixed = [code for code in requested_role_codes if not ROLE_DEFINITION_MAP[code].page_access_editable]
+    if fixed:
+        raise ValueError(f"Page access is fixed for role: {', '.join(fixed)}")
     roles = session.scalars(
         select(Role)
         .where(Role.code.in_(requested_role_codes))

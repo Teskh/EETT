@@ -20,9 +20,6 @@ export const APP_PAGES: PageDefinition[] = [
 ];
 
 export function canReadPage(user: SessionUser, pageKey: PageKey) {
-  if (user.is_guest && pageKey === "cost_model") {
-    return false;
-  }
   return Boolean(user.page_access?.[pageKey]?.can_read || user.page_access?.[pageKey]?.can_edit);
 }
 

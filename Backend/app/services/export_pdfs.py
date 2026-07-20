@@ -200,8 +200,8 @@ def build_detailed_material_pdf(
 
     pdf_table_rows: list[list[Any | None]] = []
     header_row = [
-        Paragraph("Material", styles["DetailedTableHeader"]),
         Paragraph("Codigo", styles["DetailedTableHeader"]),
+        Paragraph("Material", styles["DetailedTableHeader"]),
     ]
     if has_any_subtypes:
         header_row.append(Paragraph("Subtipo", styles["DetailedTableHeader"]))
@@ -220,8 +220,9 @@ def build_detailed_material_pdf(
             Paragraph("Fecha ult. OC", styles["DetailedTableHeader"]),
             Paragraph("Nro. ult. OC", styles["DetailedTableHeader"]),
             Paragraph("Cant. OC pend.", styles["DetailedTableHeader"]),
+            Paragraph("En transito", styles["DetailedTableHeader"]),
             Paragraph("Viviendas stock", styles["DetailedTableHeader"]),
-            Paragraph("Viviendas c/OC", styles["DetailedTableHeader"]),
+            Paragraph("Viviendas c/OC + transito", styles["DetailedTableHeader"]),
         ]
     )
     pdf_table_rows.append(header_row)
@@ -251,8 +252,8 @@ def build_detailed_material_pdf(
             ("ALIGN", (4 + subtype_offset, 1), (4 + subtype_offset, -1), "RIGHT"),
             ("ALIGN", (5 + subtype_offset + price_offset, 1), (5 + subtype_offset + price_offset, -1), "RIGHT"),
             ("ALIGN", (6 + subtype_offset + price_offset, 1), (7 + subtype_offset + price_offset, -1), "CENTER"),
-            ("ALIGN", (8 + subtype_offset + price_offset, 1), (8 + subtype_offset + price_offset, -1), "RIGHT"),
-            ("ALIGN", (9 + subtype_offset + price_offset, 1), (10 + subtype_offset + price_offset, -1), "RIGHT"),
+            ("ALIGN", (8 + subtype_offset + price_offset, 1), (9 + subtype_offset + price_offset, -1), "RIGHT"),
+            ("ALIGN", (10 + subtype_offset + price_offset, 1), (11 + subtype_offset + price_offset, -1), "RIGHT"),
         ]
     )
     if has_any_subtypes:
@@ -264,7 +265,7 @@ def build_detailed_material_pdf(
     for section in sections:
         if not section.get("hide_header"):
             category_header_text = f"{section['number']}. {section['name']}"
-            span_end_col = 10 + subtype_offset + price_offset
+            span_end_col = 11 + subtype_offset + price_offset
             pdf_table_rows.append(
                 [Paragraph(escape(category_header_text), styles["DetailedCategoryHeader"]), *[None for _ in range(span_end_col)]]
             )
@@ -284,6 +285,10 @@ def build_detailed_material_pdf(
 
             stock_value = _coerce_float(material.get("stock_on_hand"))
             pending_po_value = _coerce_float(material.get("pending_purchase_quantity"))
+            in_transit_value = _coerce_float(material.get("in_transit_quantity"))
+            open_purchase_value = _coerce_float(material.get("open_purchase_quantity"))
+            if open_purchase_value is None and (pending_po_value is not None or in_transit_value is not None):
+                open_purchase_value = (pending_po_value or 0.0) + (in_transit_value or 0.0)
             avg_price_value = _coerce_float(material.get("average_price")) if show_prices else None
             movement_value = _coerce_float(material.get("movement_quantity_30d"))
             stock_str = _format_optional_number(stock_value, decimals=0)
@@ -292,15 +297,16 @@ def build_detailed_material_pdf(
             last_po_date_display = _format_date(material.get("last_purchase_order_date"))
             last_po_code_display = str(material.get("last_purchase_order_number") or "N/D")
             last_po_pending_qty_display = _format_optional_number(pending_po_value, decimals=0)
+            in_transit_qty_display = _format_optional_number(in_transit_value, decimals=0)
             po_is_approved = material.get("last_purchase_order_is_approved")
 
             stock_is_zero = stock_value == 0 if stock_value is not None else False
-            pending_po_is_zero = pending_po_value == 0 if pending_po_value is not None else False
-            pending_po_is_positive = pending_po_value is not None and pending_po_value > 0
-            if stock_is_zero and pending_po_is_zero:
-                table_style_commands.append(("BACKGROUND", (0, current_row_idx), (0, current_row_idx), colors.lightcoral))
-            elif stock_is_zero and pending_po_is_positive:
-                table_style_commands.append(("BACKGROUND", (0, current_row_idx), (0, current_row_idx), colors.Color(1, 0.75, 0.5)))
+            open_purchase_is_zero = open_purchase_value == 0 if open_purchase_value is not None else False
+            open_purchase_is_positive = open_purchase_value is not None and open_purchase_value > 0
+            if stock_is_zero and open_purchase_is_zero:
+                table_style_commands.append(("BACKGROUND", (1, current_row_idx), (1, current_row_idx), colors.lightcoral))
+            elif stock_is_zero and open_purchase_is_positive:
+                table_style_commands.append(("BACKGROUND", (1, current_row_idx), (1, current_row_idx), colors.Color(1, 0.75, 0.5)))
 
             if po_is_approved is False:
                 po_start_col = 6 + subtype_offset + price_offset
@@ -320,12 +326,12 @@ def build_detailed_material_pdf(
                 if quantity_value is not None and quantity_value > 0:
                     if stock_value is not None:
                         homes_in_stock = stock_value / quantity_value
-                    homes_with_po = ((stock_value or 0.0) + (pending_po_value or 0.0)) / quantity_value
+                    homes_with_po = ((stock_value or 0.0) + (open_purchase_value or 0.0)) / quantity_value
 
                 homes_in_stock_str = _format_optional_number(homes_in_stock, decimals=1)
                 homes_with_po_str = _format_optional_number(homes_with_po, decimals=1)
-                homes_stock_col_idx = 9 + subtype_offset + price_offset
-                homes_po_col_idx = 10 + subtype_offset + price_offset
+                homes_stock_col_idx = 10 + subtype_offset + price_offset
+                homes_po_col_idx = 11 + subtype_offset + price_offset
                 if homes_in_stock is not None:
                     if homes_in_stock < 10:
                         table_style_commands.append(("BACKGROUND", (homes_stock_col_idx, current_row_idx), (homes_stock_col_idx, current_row_idx), colors.lightcoral))
@@ -341,8 +347,8 @@ def build_detailed_material_pdf(
                 if index == 0:
                     row_cells.extend(
                         [
-                            Paragraph(escape(material["material_name"]), styles["DetailedNormal"]),
                             Paragraph(escape(material["sku"]), styles["DetailedNormalCenter"]),
+                            Paragraph(escape(material["material_name"]), styles["DetailedNormal"]),
                         ]
                     )
                 else:
@@ -364,12 +370,13 @@ def build_detailed_material_pdf(
                             Paragraph(last_po_date_display, styles["DetailedNormalCenter"]),
                             Paragraph(escape(last_po_code_display), styles["DetailedNormalCenter"]),
                             Paragraph(last_po_pending_qty_display, styles["DetailedNormalRight"]),
+                            Paragraph(in_transit_qty_display, styles["DetailedNormalRight"]),
                             Paragraph(homes_in_stock_str, styles["DetailedNormalRight"]),
                             Paragraph(homes_with_po_str, styles["DetailedNormalRight"]),
                         ]
                     )
                 else:
-                    row_cells.extend([Paragraph("", styles["DetailedNormal"])] * (6 + price_offset))
+                    row_cells.extend([Paragraph("", styles["DetailedNormal"])] * (7 + price_offset))
                     row_cells.extend(
                         [
                             Paragraph(homes_in_stock_str, styles["DetailedNormalRight"]),
@@ -391,6 +398,7 @@ def build_detailed_material_pdf(
                         6 + subtype_offset + price_offset,
                         7 + subtype_offset + price_offset,
                         8 + subtype_offset + price_offset,
+                        9 + subtype_offset + price_offset,
                     ]
                 )
                 for column_index in span_columns:
@@ -404,7 +412,7 @@ def build_detailed_material_pdf(
     material_table.setStyle(TableStyle(table_style_commands))
     story.append(
         Paragraph(
-            "Color en nombre: rojo = sin stock en 001 y sin cantidad en OC; naranjo = sin stock con cantidad en OC. Celdas OC naranjas = ultima OC pendiente de aprobacion.",
+            "Color en nombre: rojo = sin stock en 001 y sin cantidades pendientes o en transito; naranjo = sin stock con cantidad pendiente o en transito. Celdas OC naranjas = ultima OC pendiente de aprobacion.",
             styles["DetailedFootnote"],
         )
     )
@@ -961,14 +969,14 @@ def _markup_text(value: Any) -> str:
 def _detailed_material_column_widths(available_width: float, *, has_any_subtypes: bool, show_prices: bool) -> list[float]:
     if has_any_subtypes:
         if show_prices:
-            ratios = [0.20, 0.07, 0.09, 0.04, 0.05, 0.05, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
+            ratios = [0.07, 0.18, 0.08, 0.04, 0.05, 0.05, 0.05, 0.05, 0.075, 0.05, 0.055, 0.055, 0.055, 0.055]
         else:
-            ratios = [0.22, 0.08, 0.11, 0.04, 0.05, 0.05, 0.05, 0.08, 0.05, 0.06, 0.055, 0.055]
+            ratios = [0.08, 0.20, 0.10, 0.04, 0.05, 0.05, 0.05, 0.075, 0.05, 0.055, 0.055, 0.055, 0.055]
     else:
         if show_prices:
-            ratios = [0.23, 0.08, 0.05, 0.05, 0.055, 0.055, 0.05, 0.08, 0.05, 0.07, 0.06, 0.06]
+            ratios = [0.08, 0.21, 0.05, 0.05, 0.055, 0.055, 0.05, 0.075, 0.05, 0.065, 0.065, 0.055, 0.055]
         else:
-            ratios = [0.26, 0.105, 0.05, 0.05, 0.055, 0.05, 0.08, 0.05, 0.07, 0.06, 0.06]
+            ratios = [0.10, 0.23, 0.05, 0.05, 0.055, 0.05, 0.075, 0.05, 0.065, 0.065, 0.055, 0.055]
     total_ratio = sum(ratios)
     return [available_width * (ratio / total_ratio) for ratio in ratios]
 

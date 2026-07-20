@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +48,7 @@ class RoleOptionModel(BaseModel):
     name: str
     description: str
     assignable: bool
+    page_access_editable: bool = True
     page_access: dict[str, PageAccessModel] = Field(default_factory=dict)
 
 
@@ -57,6 +58,7 @@ class ManagedUserModel(BaseModel):
     display_name: str
     email: str
     is_active: bool
+    is_auto_provisioned: bool = False
     roles: list[str]
     created_at: str
 
@@ -1025,6 +1027,19 @@ class MaterialDashboardEconomicMetricsResponse(BaseModel):
     total_mapped_house_starts: int = 0
     link_count: int = 0
     metrics: list[MaterialDashboardEconomicMetricModel] = Field(default_factory=list)
+    generated_at: str
+
+
+class MaterialDashboardStockRiskMetricModel(BaseModel):
+    sku: str
+    status: Literal["projected", "outside_horizon", "no_consumption", "unavailable"]
+    business_days_until_stockout: int | None
+    stockout_date: str | None
+
+
+class MaterialDashboardStockRiskMetricsResponse(BaseModel):
+    ceco_filters: list[str] = Field(default_factory=list)
+    metrics: list[MaterialDashboardStockRiskMetricModel] = Field(default_factory=list)
     generated_at: str
 
 

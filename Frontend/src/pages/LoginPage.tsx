@@ -1,15 +1,13 @@
 import { FormEvent, useState } from "react";
 
-// We currently force Microsoft as the only sign-in method for regular users.
-// Set this to `true` (and re-enable the backend endpoints) to bring the old
-// username/password + guest flow back for everyone.
+// Microsoft is the only sign-in method for regular users. The reserved
+// sysadmin account retains a local-password escape hatch.
 const PASSWORD_LOGIN_ENABLED = false;
 
 const MICROSOFT_LOGIN_URL = "/api/v1/auth/microsoft/login";
 
 type LoginPageProps = {
   onLogin: (username: string, password: string) => Promise<void>;
-  onGuestLogin: () => Promise<void>;
   loading: boolean;
   error: string | null;
 };
@@ -20,7 +18,7 @@ function readAuthErrorFromUrl(): string | null {
   return value && value.trim() ? value : null;
 }
 
-export function LoginPage({ onLogin, onGuestLogin, loading, error }: LoginPageProps) {
+export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   // The reserved "sysadmin" account is the sole exception to Microsoft-only login.
@@ -99,16 +97,7 @@ export function LoginPage({ onLogin, onGuestLogin, loading, error }: LoginPagePr
           Iniciar sesión con Microsoft
         </button>
 
-        {PASSWORD_LOGIN_ENABLED ? (
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => void onGuestLogin()}
-            className="px-4 py-3 border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 disabled:opacity-60 text-zinc-800 dark:text-zinc-100 rounded-xl text-sm font-bold transition-all"
-          >
-            Entrar como invitado
-          </button>
-        ) : !adminMode ? (
+        {!PASSWORD_LOGIN_ENABLED && !adminMode ? (
           <button
             type="button"
             onClick={openAdminMode}

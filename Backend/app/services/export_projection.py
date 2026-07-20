@@ -154,7 +154,7 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
             "hide_header": True,
             "materials": sorted(
                 aggregated_materials,
-                key=lambda item: (item["material_name"].lower(), item["sku"]),
+                key=lambda item: (item["sku"], item["material_name"].lower()),
             ),
         }
     ]

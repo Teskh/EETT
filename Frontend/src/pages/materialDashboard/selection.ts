@@ -9,6 +9,7 @@ import type {
   MaterialDashboardListRow,
   MaterialDashboardMovementData,
   MaterialDashboardMovementDetail,
+  MaterialDashboardStockRiskMetric,
   MaterialStudyGroupRow,
 } from "../../lib/types";
 
@@ -45,7 +46,8 @@ export type EconomicSortKey =
   | "consumption_cost_delta_per_house"
   | "historical_weighted_overprice"
   | "estimated_weighted_overprice";
-export type SortKey = BaseSortKey | EconomicSortKey;
+export type StockRiskSortKey = "stockout_risk";
+export type SortKey = BaseSortKey | EconomicSortKey | StockRiskSortKey;
 
 export type SortDirection = 1 | -1;
 
@@ -70,8 +72,22 @@ export function isEconomicSortKey(key: SortKey): key is EconomicSortKey {
   );
 }
 
+export function isStockRiskSortKey(key: SortKey): key is StockRiskSortKey {
+  return key === "stockout_risk";
+}
+
+export function hasPositiveEstimatedQuantityPerHouse(
+  metric: { predicted_quantity_per_house: number | null | undefined } | null | undefined,
+) {
+  return typeof metric?.predicted_quantity_per_house === "number" &&
+    Number.isFinite(metric.predicted_quantity_per_house) &&
+    metric.predicted_quantity_per_house > 0;
+}
+
 export function toBaseSort(sort: SortState): BaseSortState {
-  return isEconomicSortKey(sort.key) ? DEFAULT_SORT_STATE : { key: sort.key, direction: sort.direction };
+  return isEconomicSortKey(sort.key) || isStockRiskSortKey(sort.key)
+    ? DEFAULT_SORT_STATE
+    : { key: sort.key, direction: sort.direction };
 }
 
 /**
@@ -99,6 +115,45 @@ export function compareEconomicMetricValues(
     return left.name.localeCompare(right.name);
   }
   return ((left.value as number) - (right.value as number)) * direction;
+}
+
+/**
+ * Orders projected stock-outs by urgency. Descending means highest risk first:
+ * projected stock-outs precede safe/no-consumption rows, and earlier projected
+ * dates precede later ones. ERP-unavailable rows always remain at the end.
+ */
+export function compareStockRiskMetricValues(
+  left: { metric: MaterialDashboardStockRiskMetric | null | undefined; name: string },
+  right: { metric: MaterialDashboardStockRiskMetric | null | undefined; name: string },
+  direction: SortDirection,
+) {
+  const leftUnavailable = !left.metric || left.metric.status === "unavailable";
+  const rightUnavailable = !right.metric || right.metric.status === "unavailable";
+  if (leftUnavailable && rightUnavailable) {
+    return left.name.localeCompare(right.name);
+  }
+  if (leftUnavailable) {
+    return 1;
+  }
+  if (rightUnavailable) {
+    return -1;
+  }
+
+  const statusRank = { projected: 2, outside_horizon: 1, no_consumption: 0 } as const;
+  const leftRank = statusRank[left.metric!.status as keyof typeof statusRank];
+  const rightRank = statusRank[right.metric!.status as keyof typeof statusRank];
+  if (leftRank !== rightRank) {
+    return (leftRank - rightRank) * direction;
+  }
+
+  if (left.metric!.status === "projected" && right.metric!.status === "projected") {
+    const leftDays = left.metric!.business_days_until_stockout ?? Number.POSITIVE_INFINITY;
+    const rightDays = right.metric!.business_days_until_stockout ?? Number.POSITIVE_INFINITY;
+    if (leftDays !== rightDays) {
+      return (leftDays - rightDays) * -direction;
+    }
+  }
+  return left.name.localeCompare(right.name);
 }
 
 export function compareRows(left: MaterialDashboardListRow, right: MaterialDashboardListRow, sort: BaseSortState) {

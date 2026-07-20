@@ -250,6 +250,19 @@ export type MaterialDashboardEconomicMetricsResponse = {
   generated_at: string;
 };
 
+export type MaterialDashboardStockRiskMetric = {
+  sku: string;
+  status: "projected" | "outside_horizon" | "no_consumption" | "unavailable";
+  business_days_until_stockout: number | null;
+  stockout_date: string | null;
+};
+
+export type MaterialDashboardStockRiskMetricsResponse = {
+  ceco_filters: string[];
+  metrics: MaterialDashboardStockRiskMetric[];
+  generated_at: string;
+};
+
 export type MaterialDashboardGroupEconomicMetric = MaterialDashboardEconomicMetric & {
   group_id: number;
   name: string;
@@ -541,6 +554,7 @@ export type RoleOption = {
   name: string;
   description: string;
   assignable: boolean;
+  page_access_editable: boolean;
   page_access: PageAccessMap;
 };
 
@@ -555,6 +569,7 @@ export type ManagedUser = {
   display_name: string;
   email: string;
   is_active: boolean;
+  is_auto_provisioned: boolean;
   roles: string[];
   created_at: string;
 };

@@ -11,7 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import BACKEND_DIR, Settings
-from app.models import ErpMaterialCache, ExportKind, ExportStatus, Project, ProjectExportJob, User
+from app.models import (
+    ErpMaterialCache,
+    ExportKind,
+    ExportStatus,
+    Project,
+    ProjectCostModelAdjustment,
+    ProjectExportJob,
+    User,
+)
 from app.models.entities import utcnow
 from app.services.auth import role_codes
 from app.services.export_projection import (
@@ -290,10 +298,21 @@ def _render_cost_model_workbook_export(
         raise ValueError("Project not found")
 
     output = BytesIO()
+    adjustments = session.scalars(
+        select(ProjectCostModelAdjustment).where(ProjectCostModelAdjustment.project_id == project_id)
+    ).all()
     build_cost_model_workbook(
         project_data,
         output,
         prices_by_sku=_load_cost_model_price_map(session, settings=settings, project_data=project_data),
+        adjustments=[
+            {
+                "material_id": adjustment.material_id,
+                "subtype_id": adjustment.subtype_id,
+                "adjusted_quantity": adjustment.adjusted_quantity,
+            }
+            for adjustment in adjustments
+        ],
     )
     filename = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
     return ExportArtifact(
@@ -477,7 +496,9 @@ def _enrich_detailed_material_sections(
             cache = cache_by_sku.get(sku)
             detail = detail_by_sku.get(sku) or {
                 "stock_on_hand": cache.stock_on_hand if cache else None,
-                "pending_purchase_quantity": cache.pending_purchase_quantity if cache else None,
+                "pending_purchase_quantity": None,
+                "in_transit_quantity": None,
+                "open_purchase_quantity": cache.pending_purchase_quantity if cache else None,
                 "average_price": cache.average_price if cache and show_prices else None,
                 "movement_quantity_30d": cache.recent_monthly_consumption if cache else None,
                 "last_purchase_order_date": None,
@@ -490,6 +511,8 @@ def _enrich_detailed_material_sections(
                     **material,
                     "stock_on_hand": detail.get("stock_on_hand"),
                     "pending_purchase_quantity": detail.get("pending_purchase_quantity"),
+                    "in_transit_quantity": detail.get("in_transit_quantity"),
+                    "open_purchase_quantity": detail.get("open_purchase_quantity"),
                     "average_price": detail.get("average_price") if show_prices else None,
                     "movement_quantity_30d": detail.get("movement_quantity_30d"),
                     "last_purchase_order_date": detail.get("last_purchase_order_date"),
@@ -511,7 +534,7 @@ def _load_detailed_material_erp_details(
 ) -> dict[str, dict[str, object]]:
     from app.services.erp import (
         _get_average_prices_for_products_batch,
-        _get_last_purchase_orders_for_products_batch,
+        _get_purchase_order_summaries_for_products_batch,
         _get_outgoing_quantities_for_products_batch,
         _get_stock_for_products_batch,
         _open_connection,
@@ -530,7 +553,7 @@ def _load_detailed_material_erp_details(
 
             today = datetime.utcnow()
             stock_map = _get_stock_for_products_batch(stock_cursor, skus, today.strftime("%Y%m%d"))
-            po_map = _get_last_purchase_orders_for_products_batch(po_cursor, skus)
+            po_map = _get_purchase_order_summaries_for_products_batch(po_cursor, skus)
             movement_map = _get_outgoing_quantities_for_products_batch(
                 movement_cursor,
                 skus,
@@ -545,13 +568,22 @@ def _load_detailed_material_erp_details(
             )
 
             for sku in skus:
-                po_date, po_number, pending_qty, _estimated_delivery, po_status_code = po_map.get(
-                    sku,
-                    (None, None, None, None, None),
+                (
+                    po_date,
+                    po_number,
+                    open_purchase_qty,
+                    _estimated_delivery,
+                    po_status_code,
+                    pending_qty,
+                    in_transit_qty,
+                ) = po_map.get(
+                    sku, (None, None, None, None, None, None, None)
                 )
                 details[sku] = {
                     "stock_on_hand": stock_map.get(sku),
                     "pending_purchase_quantity": pending_qty,
+                    "in_transit_quantity": in_transit_qty,
+                    "open_purchase_quantity": open_purchase_qty,
                     "average_price": price_map.get(sku) if show_prices else None,
                     "movement_quantity_30d": movement_map.get(sku),
                     "last_purchase_order_date": po_date.isoformat() if hasattr(po_date, "isoformat") and po_date is not None else None,

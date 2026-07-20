@@ -203,21 +203,6 @@ export function App() {
     }
   }
 
-  async function handleGuestLogin() {
-    setAuthLoading(true);
-    setAuthError(null);
-    try {
-      const user = await api.guestLogin();
-      setSession(user);
-      applyThemeForUser(user);
-      navigate("/projects", true);
-    } catch (err) {
-      setAuthError(err instanceof ApiError ? err.message : "No se pudo iniciar sesión como invitado.");
-    } finally {
-      setAuthLoading(false);
-    }
-  }
-
   async function handleLogout() {
     setAuthLoading(true);
     setAuthError(null);
@@ -237,7 +222,7 @@ export function App() {
   }
 
   if (!session) {
-    return <LoginPage onLogin={handleLogin} onGuestLogin={handleGuestLogin} loading={authLoading} error={authError} />;
+    return <LoginPage onLogin={handleLogin} loading={authLoading} error={authError} />;
   }
 
   if (route.name === "login") {
@@ -338,7 +323,7 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {canReadPage(session, "history") ? <ChangeHistoryPage currentUser={session} /> : <AccessDenied message="Este rol no puede abrir el historial de cambios." />}
+        {canReadPage(session, "history") ? <ChangeHistoryPage /> : <AccessDenied message="Este rol no puede abrir el historial de cambios." />}
       </AppShell>
     );
   }
@@ -374,10 +359,10 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {canReadPage(session, "projects") && !session.is_guest ? (
-          <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} />
+        {canReadPage(session, "projects") ? (
+          <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} readOnly={Boolean(session.is_guest)} />
         ) : (
-          <AccessDenied message="El acceso invitado solo permite exportar proyectos desde el tablero." />
+          <AccessDenied message="Este rol no puede abrir el proyecto." />
         )}
       </AppShell>
     );

@@ -121,6 +121,9 @@ class MaterialUnitChangeStatus(str, Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("microsoft_tenant_id", "microsoft_object_id", name="uq_users_microsoft_identity"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
@@ -128,6 +131,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_auto_provisioned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    microsoft_tenant_id: Mapped[str | None] = mapped_column(String(80), default=None)
+    microsoft_object_id: Mapped[str | None] = mapped_column(String(80), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     roles: Mapped[list["UserRole"]] = relationship(back_populates="user", cascade="all, delete-orphan")

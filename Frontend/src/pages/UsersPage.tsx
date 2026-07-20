@@ -13,7 +13,7 @@ const initialCreateForm: CreateUserRequest = {
   display_name: "",
   email: "",
   password: "",
-  role_codes: ["viewer"],
+  role_codes: ["guest"],
   is_active: true,
 };
 
@@ -36,7 +36,13 @@ function toEditForm(user: ManagedUser): EditFormState {
 }
 
 function toggleRoleSelection(roleCodes: string[], roleCode: string) {
-  return roleCodes.includes(roleCode) ? roleCodes.filter((code) => code !== roleCode) : [...roleCodes, roleCode];
+  if (roleCodes.includes(roleCode)) {
+    return roleCodes.filter((code) => code !== roleCode);
+  }
+  if (roleCode === "guest") {
+    return ["guest"];
+  }
+  return [...roleCodes.filter((code) => code !== "guest"), roleCode];
 }
 
 function RoleChecklist({
@@ -97,10 +103,12 @@ function PageAccessMatrix({
   pages,
   access,
   onChange,
+  readOnly = false,
 }: {
   pages: PageOption[];
   access: PageAccessMap;
   onChange: (nextAccess: PageAccessMap) => void;
+  readOnly?: boolean;
 }) {
   const normalizedAccess = normalizePageAccess(access);
 
@@ -120,6 +128,7 @@ function PageAccessMatrix({
               <label className="flex justify-center">
                 <input
                   type="checkbox"
+                  disabled={readOnly}
                   checked={row.can_read}
                   onChange={(event) => onChange(setPageAccess(normalizedAccess, page.key, "can_read", event.target.checked))}
                 />
@@ -127,6 +136,7 @@ function PageAccessMatrix({
               <label className="flex justify-center">
                 <input
                   type="checkbox"
+                  disabled={readOnly}
                   checked={row.can_edit}
                   onChange={(event) => onChange(setPageAccess(normalizedAccess, page.key, "can_edit", event.target.checked))}
                 />
@@ -233,7 +243,11 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
     setRoleAccessSaving(true);
     setError(null);
     try {
-      const nextData = await api.updateRolePageAccess({ role_access: roleAccessDraft });
+      const editableRoleCodes = new Set(data?.roles.filter((role) => role.page_access_editable).map((role) => role.code) ?? []);
+      const editableRoleAccess = Object.fromEntries(
+        Object.entries(roleAccessDraft).filter(([roleCode]) => editableRoleCodes.has(roleCode)),
+      );
+      const nextData = await api.updateRolePageAccess({ role_access: editableRoleAccess });
       setData(nextData);
       setRoleAccessDraft(buildRoleAccessDraft(nextData.roles));
     } catch (err) {
@@ -348,6 +362,11 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                           {!user.is_active ? (
                             <span className="rounded-full border border-amber-300/60 bg-amber-200/50 dark:bg-amber-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-amber-800 dark:text-amber-300">
                               Inactivo
+                            </span>
+                          ) : null}
+                          {user.is_auto_provisioned ? (
+                            <span className="rounded-full border border-sky-300/60 bg-sky-100 dark:bg-sky-500/10 px-2 py-0.5 text-[10px] font-mono uppercase tracking-widest text-sky-800 dark:text-sky-300">
+                              Microsoft · Auto
                             </span>
                           ) : null}
                         </div>
@@ -493,6 +512,7 @@ export function UsersPage({ currentUsername }: UsersPageProps) {
                 <PageAccessMatrix
                   pages={data.pages}
                   access={roleAccessDraft[role.code] ?? normalizePageAccess(role.page_access)}
+                  readOnly={!role.page_access_editable}
                   onChange={(pageAccess) =>
                     setRoleAccessDraft((current) => ({
                       ...current,

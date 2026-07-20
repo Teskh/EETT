@@ -42,6 +42,7 @@ import type {
   MaterialDashboardMaterialStudyData,
   MaterialDashboardMovementData,
   MaterialDashboardProjectUsageData,
+  MaterialDashboardStockRiskMetricsResponse,
   MaterialStudyGroupListResponse,
   MaterialStudyGroupPayload,
   MaterialStudyGroupRow,
@@ -199,11 +200,6 @@ export const api = {
     return request<SessionUser>("/api/v1/login", {
       method: "POST",
       body: JSON.stringify(payload),
-    });
-  },
-  guestLogin() {
-    return request<SessionUser>("/api/v1/guest-login", {
-      method: "POST",
     });
   },
   logout() {
@@ -369,6 +365,9 @@ export const api = {
   getMaterialDashboardHouseTypes() {
     return request<MaterialDashboardHouseTypesResponse>("/api/v1/dashboard/materials/house-types");
   },
+  getMaterialStudyGroupCatalog() {
+    return request<MaterialStudyGroupRow[]>("/api/v1/dashboard/material-groups/catalog");
+  },
   getMaterialStudyGroups(filters: MaterialDashboardFilterSelection = {}, options: MaterialDashboardRequestOptions = {}) {
     return request<MaterialStudyGroupListResponse>("/api/v1/dashboard/material-groups/query", {
       method: "POST",
@@ -512,6 +511,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify({
         ...buildMaterialDashboardFilterPayload(filters),
+        start_date: options.startDate ?? null,
+        end_date: options.endDate ?? null,
+        refresh: Boolean(options.refresh),
+      }),
+    });
+  },
+  getMaterialDashboardStockRiskMetrics(
+    filters: MaterialDashboardFilterSelection = {},
+    options: MaterialDashboardRequestOptions = {},
+  ) {
+    return request<MaterialDashboardStockRiskMetricsResponse>("/api/v1/dashboard/materials/stock-risk-metrics", {
+      method: "POST",
+      body: JSON.stringify({
+        ...buildMaterialDashboardFilterPayload(filters),
+        movement_days:
+          options.movementDays && Number.isFinite(options.movementDays)
+            ? Math.max(Math.floor(options.movementDays), 1)
+            : 60,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),

@@ -9,6 +9,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from openpyxl import load_workbook
 from fastapi.testclient import TestClient
@@ -32,7 +33,10 @@ from app.models import (
     ProjectActivityLog,
     ProjectBomEntry,
     ProjectInstance,
+    ProjectMembership,
+    MembershipRole,
     ProjectSubtype,
+    User,
 )
 from app.seed import seed_demo_data_if_empty
 from app.services.catalog import (
@@ -47,12 +51,15 @@ from app.services.catalog import (
     update_attribute_definition,
 )
 from app.services.audit import build_activity_details
+from app.services.auth import provision_microsoft_guest_user, role_codes
+from app.services.microsoft_auth import MicrosoftUserProfile
 from app.services.dashboard import get_material_dashboard_economic_metrics, get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import (
     _calculate_delivery_time_stats,
     _get_last_purchase_orders_for_products_batch,
     _get_lead_time_samples_for_product,
+    _get_purchase_order_summaries_for_products_batch,
     _get_purchase_order_lines_for_products_batch,
 )
 from app.services.export_projection import build_detailed_material_export_sections
@@ -77,6 +84,39 @@ from app.ui import render_catalog_page, render_project_detail_page, render_proje
 
 
 class ExportProjectionTests(unittest.TestCase):
+    def test_detailed_material_export_sorts_materials_by_sku(self) -> None:
+        project_data = {
+            "categories": [
+                {
+                    "name": "Materials",
+                    "depth": 0,
+                    "instances": [
+                        {
+                            "name": "Material List",
+                            "materials": [
+                                {
+                                    "material_name": "First by name",
+                                    "sku": "Z-002",
+                                    "unit": "UN",
+                                    "bom_entries": [{"subtype": None, "quantity": 1, "quantity_state": "value"}],
+                                },
+                                {
+                                    "material_name": "Last by name",
+                                    "sku": "A-001",
+                                    "unit": "UN",
+                                    "bom_entries": [{"subtype": None, "quantity": 1, "quantity_state": "value"}],
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        sections = build_detailed_material_export_sections(project_data)
+
+        self.assertEqual([material["sku"] for material in sections[0]["materials"]], ["A-001", "Z-002"])
+
     def test_detailed_material_export_can_use_work_and_total_quantities(self) -> None:
         project_data = {
             "categories": [
@@ -217,6 +257,9 @@ class ServiceLayerTests(unittest.TestCase):
                 environment="test",
                 allow_trusted_user_header=True,
                 export_output_dir=self.temp_dir.name,
+                microsoft_tenant_id="tenant-id",
+                microsoft_client_id="client-id",
+                microsoft_client_secret="client-secret",
             )
         )
         self.client = TestClient(self.app)
@@ -917,25 +960,57 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIn("Applicable materials", project_html)
 
     def test_session_and_project_permissions_are_typed_and_filtered(self) -> None:
-        guest_login = self.client.post("/api/v1/guest-login")
-        self.assertEqual(guest_login.status_code, 200)
-        self.assertEqual(guest_login.json()["username"], "viewer")
-        self.assertIn("viewer", guest_login.json()["roles"])
-        self.assertTrue(guest_login.json()["is_guest"])
-        self.assertFalse(guest_login.json()["page_access"]["cost_model"]["can_read"])
+        with self.session_factory() as session:
+            guest = provision_microsoft_guest_user(
+                session,
+                tenant_id="tenant-id",
+                object_id="guest-object-id",
+                email="guest@example.com",
+                display_name="Guest User",
+            )
+            finished_project = session.scalar(select(Project).where(Project.status == "finished"))
+            session.add(ProjectMembership(project=finished_project, user=guest, role=MembershipRole.VIEWER))
+            session.commit()
+            guest_username = guest.username
 
-        guest_session = self.client.get("/api/v1/session")
+        guest_headers = {"X-Spec-Sheets-User": guest_username}
+        guest_session = self.client.get("/api/v1/session", headers=guest_headers)
         self.assertEqual(guest_session.status_code, 200)
-        self.assertEqual(guest_session.json()["username"], "viewer")
+        self.assertEqual(guest_session.json()["username"], guest_username)
+        self.assertEqual(guest_session.json()["roles"], ["guest"])
         self.assertTrue(guest_session.json()["is_guest"])
+        self.assertTrue(guest_session.json()["page_access"]["projects"]["can_read"])
+        self.assertFalse(guest_session.json()["page_access"]["history"]["can_read"])
 
-        guest_detail = self.client.get("/api/v1/projects/2")
-        self.assertEqual(guest_detail.status_code, 403)
-        guest_cost_model = self.client.get("/api/v1/projects/2/cost-model")
+        guest_projects = self.client.get("/api/v1/projects", headers=guest_headers)
+        self.assertEqual(guest_projects.status_code, 200)
+        self.assertTrue(guest_projects.json()["grouped_projects"]["execution"])
+        self.assertEqual(guest_projects.json()["grouped_projects"]["template"], [])
+        self.assertEqual(guest_projects.json()["grouped_projects"]["finished"], [])
+
+        guest_detail = self.client.get("/api/v1/projects/2", headers=guest_headers)
+        self.assertEqual(guest_detail.status_code, 200)
+        self.assertEqual(guest_detail.json()["auxiliary_materials"], [])
+        self.assertTrue(all(not category["available_components"] for category in guest_detail.json()["categories"]))
+        self.assertTrue(
+            all(
+                not instance["materials"] and not instance["export_settings"]
+                for category in guest_detail.json()["categories"]
+                for instance in category["instances"]
+            )
+        )
+
+        guest_cost_model = self.client.get("/api/v1/projects/2/cost-model", headers=guest_headers)
         self.assertEqual(guest_cost_model.status_code, 403)
-        guest_history = self.client.get("/api/v1/activity")
-        self.assertEqual(guest_history.status_code, 200)
-        self.assertTrue(all(group["project"]["status"] == "execution" for group in guest_history.json()))
+        guest_history = self.client.get("/api/v1/activity", headers=guest_headers)
+        self.assertEqual(guest_history.status_code, 403)
+        guest_comment = self.client.post(
+            "/api/v1/projects/2/comments",
+            headers=guest_headers,
+            json={"body": "Guest mutation", "instance_id": None, "parent_comment_id": None},
+        )
+        self.assertEqual(guest_comment.status_code, 403)
+        self.assertEqual(self.client.post("/api/v1/guest-login").status_code, 404)
 
         session_response = self.client.get("/api/v1/session", headers={"X-Spec-Sheets-User": "viewer"})
         self.assertEqual(session_response.status_code, 200)
@@ -953,6 +1028,68 @@ class ServiceLayerTests(unittest.TestCase):
         execution_names = [project["name"] for project in payload["grouped_projects"]["execution"]]
         self.assertIn("Casa Robles - Block A", execution_names)
 
+    def test_microsoft_login_provisions_unknown_user_as_guest(self) -> None:
+        start = self.client.get("/api/v1/auth/microsoft/login", follow_redirects=False)
+        self.assertEqual(start.status_code, 303)
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+
+        profile = MicrosoftUserProfile(
+            object_id="entra-object-123",
+            email="new.person@example.com",
+            display_name="New Person",
+        )
+        with (
+            patch("app.services.microsoft_auth.exchange_code_for_token", return_value="token"),
+            patch("app.services.microsoft_auth.fetch_user_profile", return_value=profile),
+        ):
+            callback = self.client.get(
+                f"/api/v1/auth/microsoft/callback?state={state}&code=code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback.status_code, 303)
+        self.assertEqual(callback.headers["location"], "/")
+        session_response = self.client.get("/api/v1/session")
+        self.assertEqual(session_response.status_code, 200)
+        self.assertEqual(session_response.json()["roles"], ["guest"])
+        self.assertTrue(session_response.json()["is_guest"])
+
+        with self.session_factory() as session:
+            user = session.scalar(select(User).where(User.email == profile.email))
+            self.assertIsNotNone(user)
+            self.assertTrue(user.is_auto_provisioned)
+            self.assertEqual(user.microsoft_tenant_id, "tenant-id")
+            self.assertEqual(user.microsoft_object_id, profile.object_id)
+            self.assertEqual(role_codes(user), {"guest"})
+
+    def test_microsoft_login_preserves_existing_user_roles(self) -> None:
+        start = self.client.get("/api/v1/auth/microsoft/login", follow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+        profile = MicrosoftUserProfile(
+            object_id="existing-editor-object",
+            email="editor@specsheets.local",
+            display_name="Project Editor",
+        )
+        with (
+            patch("app.services.microsoft_auth.exchange_code_for_token", return_value="token"),
+            patch("app.services.microsoft_auth.fetch_user_profile", return_value=profile),
+        ):
+            callback = self.client.get(
+                f"/api/v1/auth/microsoft/callback?state={state}&code=code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(callback.status_code, 303)
+        session_response = self.client.get("/api/v1/session")
+        self.assertEqual(session_response.json()["roles"], ["editor"])
+        self.assertFalse(session_response.json()["is_guest"])
+
+        with self.session_factory() as session:
+            user = session.scalar(select(User).where(User.email == profile.email))
+            self.assertFalse(user.is_auto_provisioned)
+            self.assertEqual(user.microsoft_object_id, profile.object_id)
+            self.assertEqual(role_codes(user), {"editor"})
+
     def test_login_logout_and_user_admin_endpoints_require_sysadmin(self) -> None:
         unauthorized_users = self.client.get("/api/v1/users")
         self.assertEqual(unauthorized_users.status_code, 401)
@@ -969,7 +1106,7 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(users_response.status_code, 200)
         sysadmin_id = next(user["id"] for user in users_response.json()["users"] if user["username"] == "sysadmin")
         roles = {role["code"] for role in users_response.json()["roles"]}
-        self.assertEqual(roles, {"admin", "editor", "ot", "viewer"})
+        self.assertEqual(roles, {"admin", "editor", "guest", "ot", "viewer"})
 
         create_user_response = self.client.post(
             "/api/v1/users",
@@ -2825,10 +2962,37 @@ class ErpLeadTimeSampleTests(unittest.TestCase):
         self.assertIn("RTRIM(LTRIM(c.CodEstado)) IN (?,?)", cursor.sql)
         self.assertIn("RecentPending", cursor.sql)
         self.assertIn("DATEADD(MONTH, -4, CONVERT(date, GETDATE()))", cursor.sql)
-        self.assertEqual(cursor.params[-2:], ["AP", "PE"])
+        self.assertEqual(cursor.params[1:3], ["AP", "PE"])
         self.assertEqual(
             result["ERP-001"],
             (date(2026, 4, 10), "OC-123", 5.0, None, "PE"),
+        )
+
+    def test_purchase_order_summaries_split_pending_and_in_transit_quantities(self) -> None:
+        row = SimpleNamespace(
+            CodProd="ERP-001",
+            fechaOC=date(2026, 4, 10),
+            numoc="OC-123",
+            FecFinalOC=date(2026, 4, 30),
+            CodEstado="AP",
+            pendingPurchaseQuantity=14.0,
+            pendingApprovalQuantity=4.0,
+            inTransitQuantity=10.0,
+        )
+
+        class FakeCursor:
+            def execute(self, sql, params):
+                self.sql = sql
+                self.params = params
+
+            def fetchall(self):
+                return [row]
+
+        result = _get_purchase_order_summaries_for_products_batch(FakeCursor(), ["ERP-001"])
+
+        self.assertEqual(
+            result["ERP-001"],
+            (date(2026, 4, 10), "OC-123", 14.0, date(2026, 4, 30), "AP", 4.0, 10.0),
         )
 
     def test_last_purchase_orders_use_recent_pending_sum(self) -> None:

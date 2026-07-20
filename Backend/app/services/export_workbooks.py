@@ -15,6 +15,7 @@ CATEGORY_FILL = PatternFill(fill_type="solid", start_color="E7EDF5", end_color="
 INSTANCE_FILL = PatternFill(fill_type="solid", start_color="F4F7FB", end_color="F4F7FB")
 INPUT_FILL = PatternFill(fill_type="solid", start_color="FFF7D6", end_color="FFF7D6")
 FORMULA_FILL = PatternFill(fill_type="solid", start_color="F3F4F6", end_color="F3F4F6")
+ADJUSTMENT_FILL = PatternFill(fill_type="solid", start_color="FCE8E6", end_color="FCE8E6")
 
 
 def build_materials_workbook(project_data: dict[str, Any], output_path: Any) -> None:
@@ -48,11 +49,16 @@ def build_cost_model_workbook(
     output_path: Any,
     *,
     prices_by_sku: dict[str, float | None],
+    adjustments: list[dict[str, Any]] | None = None,
 ) -> None:
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    cost_rows = _build_cost_model_rows(project_data, prices_by_sku=prices_by_sku)
+    cost_rows = _build_cost_model_rows(
+        project_data,
+        prices_by_sku=prices_by_sku,
+        adjustments=adjustments or [],
+    )
 
     instance_sheet = workbook.create_sheet("Por Instancia")
     _populate_cost_model_instance_sheet(instance_sheet, cost_rows, subtype_names=_flatten_subtype_names(project_data.get("subtypes", [])))
@@ -126,6 +132,7 @@ def _build_cost_model_rows(
     project_data: dict[str, Any],
     *,
     prices_by_sku: dict[str, float | None],
+    adjustments: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
@@ -139,13 +146,18 @@ def _build_cost_model_rows(
                 "category_name": row["category_label"],
                 "subtype_name": row["subtype"] or "General",
                 "material_name": row["material_name"],
+                "material_id": row.get("material_id"),
                 "sku": row["sku"],
                 "unit": row["unit"],
+                "subtype_id": row.get("subtype_id"),
                 "quantity": quantity_value,
                 "price": _coerce_optional_float(prices_by_sku.get(str(row["sku"]).strip().upper())),
                 "is_auxiliary": False,
+                "is_adjustment": False,
             }
         )
+
+    _append_cost_model_adjustment_rows(rows, adjustments or [])
 
     for auxiliary in sorted(
         project_data.get("auxiliary_materials", []),
@@ -160,15 +172,63 @@ def _build_cost_model_rows(
                 "category_name": auxiliary.get("category") or "Materiales auxiliares",
                 "subtype_name": auxiliary.get("subtype") or "General",
                 "material_name": auxiliary.get("name") or code,
+                "material_id": None,
                 "sku": code,
                 "unit": "",
+                "subtype_id": None,
                 "quantity": 1.0,
                 "price": _coerce_optional_float(auxiliary.get("price")),
                 "is_auxiliary": True,
+                "is_adjustment": False,
             }
         )
 
     return rows
+
+
+def _append_cost_model_adjustment_rows(
+    rows: list[dict[str, Any]],
+    adjustments: list[dict[str, Any]],
+) -> None:
+    """Represent project-level overrides as explicit deltas without inventing an instance allocation."""
+    for adjustment in sorted(
+        adjustments,
+        key=lambda item: (
+            int(item.get("material_id") or 0),
+            -1 if item.get("subtype_id") is None else int(item["subtype_id"]),
+        ),
+    ):
+        material_id = adjustment.get("material_id")
+        subtype_id = adjustment.get("subtype_id")
+        adjusted_quantity = _coerce_optional_float(adjustment.get("adjusted_quantity"))
+        if material_id is None or adjusted_quantity is None:
+            continue
+
+        matching_rows = [
+            row
+            for row in rows
+            if not row.get("is_auxiliary")
+            and row.get("material_id") == material_id
+            and row.get("subtype_id") == subtype_id
+        ]
+        if not matching_rows:
+            continue
+
+        base_quantity = sum(
+            float(row["quantity"])
+            for row in matching_rows
+            if isinstance(row.get("quantity"), (int, float))
+        )
+        reference = matching_rows[0]
+        rows.append(
+            {
+                **reference,
+                "instance_name": "Ajustes del modelo",
+                "category_name": "Ajustes del modelo",
+                "quantity": adjusted_quantity - base_quantity,
+                "is_adjustment": True,
+            }
+        )
 
 
 def _populate_cost_model_instance_sheet(ws, cost_rows: list[dict[str, Any]], *, subtype_names: list[str]) -> None:
@@ -218,6 +278,11 @@ def _populate_cost_model_instance_sheet(ws, cost_rows: list[dict[str, Any]], *, 
         ws.cell(row=row_index, column=9).number_format = currency_fmt
         ws.cell(row=row_index, column=8).fill = INPUT_FILL
         ws.cell(row=row_index, column=9).fill = FORMULA_FILL
+        if row.get("is_adjustment"):
+            for column_index in range(1, 10):
+                cell = ws.cell(row=row_index, column=column_index)
+                cell.fill = ADJUSTMENT_FILL
+                cell.font = Font(name="Calibri", size=11, bold=True)
 
     if block_start_row is not None and current_instance is not None:
         _append_instance_subtotal(ws, instance_name=current_instance, block_start_row=block_start_row, block_end_row=ws.max_row)
@@ -291,12 +356,17 @@ def _populate_cost_model_totals_sheet(ws, cost_rows: list[dict[str, Any]], *, su
             f"'Por Instancia'!$E:$E,A{row_index},"
             f"'Por Instancia'!$C:$C,C{row_index})"
         )
+        count_qty_formula = (
+            f"COUNTIFS('Por Instancia'!$E:$E,A{row_index},"
+            f"'Por Instancia'!$C:$C,C{row_index},"
+            f"'Por Instancia'!$G:$G,\"<>\")"
+        )
         sum_cost_formula = (
             f"SUMIFS('Por Instancia'!$I:$I,"
             f"'Por Instancia'!$E:$E,A{row_index},"
             f"'Por Instancia'!$C:$C,C{row_index})"
         )
-        ws.cell(row=row_index, column=5, value=f'=IF({sum_qty_formula}=0,"",{sum_qty_formula})')
+        ws.cell(row=row_index, column=5, value=f'=IF({count_qty_formula}=0,"",{sum_qty_formula})')
         ws.cell(row=row_index, column=6, value=f'=IF(OR(E{row_index}="",E{row_index}=0,G{row_index}=""),"",G{row_index}/E{row_index})')
         ws.cell(row=row_index, column=7, value=f'=IF({sum_cost_formula}=0,"",{sum_cost_formula})')
         _style_data_row(ws, row_index, numeric_columns={5, 6, 7})

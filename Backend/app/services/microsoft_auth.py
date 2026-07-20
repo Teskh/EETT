@@ -6,8 +6,8 @@ sign in with their Microsoft account:
     1. Redirect the browser to Microsoft's authorize endpoint (see ``authorize_url``).
     2. Microsoft sends the browser back to our callback with a short-lived ``code``.
     3. We exchange that ``code`` for an access token (``exchange_code_for_token``).
-    4. We call Microsoft Graph ``/me`` to read the person's email (``fetch_user_email``).
-    5. The caller looks that email up against an existing, enabled local user.
+    4. We call Microsoft Graph ``/me`` to read the person's stable object ID and profile.
+    5. The caller maps that identity to an existing user or provisions a guest.
 
 Only the identity of the user is needed, so we request the minimal Graph scopes.
 """
@@ -50,6 +50,13 @@ class MicrosoftAuthConfig:
     @property
     def token_endpoint(self) -> str:
         return f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
+
+
+@dataclass(frozen=True)
+class MicrosoftUserProfile:
+    object_id: str
+    email: str
+    display_name: str
 
 
 def build_config(settings: Settings, *, redirect_uri: str) -> MicrosoftAuthConfig:
@@ -99,8 +106,8 @@ async def exchange_code_for_token(config: MicrosoftAuthConfig, *, code: str) -> 
     return str(access_token)
 
 
-async def fetch_user_email(access_token: str) -> str:
-    """Read the signed-in user's email from Microsoft Graph."""
+async def fetch_user_profile(access_token: str) -> MicrosoftUserProfile:
+    """Read the signed-in user's stable ID and basic profile from Microsoft Graph."""
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     url = "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName,id"
     async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
@@ -117,7 +124,11 @@ async def fetch_user_email(access_token: str) -> str:
     email = str(payload.get("mail") or payload.get("userPrincipalName") or "").strip()
     if not email:
         raise MicrosoftAuthError("Tu cuenta Microsoft no entregó un correo utilizable para el ingreso.")
-    return email
+    object_id = str(payload.get("id") or "").strip()
+    if not object_id:
+        raise MicrosoftAuthError("Tu cuenta Microsoft no entregó un identificador utilizable para el ingreso.")
+    display_name = str(payload.get("displayName") or email).strip()
+    return MicrosoftUserProfile(object_id=object_id, email=email, display_name=display_name)
 
 
 def _safe_json(response: httpx.Response) -> dict:

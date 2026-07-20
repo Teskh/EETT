@@ -43,7 +43,7 @@ from app.models import (
 )
 from app.models.entities import BomCalculationMode, MaterialMode, MembershipRole, utcnow
 from app.services.audit import build_activity_change, build_activity_details, build_audit_context, record_project_activity
-from app.services.auth import can_view_project
+from app.services.auth import can_view_project, is_guest_user
 from app.services.media import serialize_media_link
 
 
@@ -1497,7 +1497,7 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
     for root in children_by_parent[None]:
         category_sections.extend(_build_category_sections(root, instance_groups, children_by_parent, depth=0))
 
-    return {
+    data = {
         "project": {
             "id": project.id,
             "name": project.name,
@@ -1519,6 +1519,27 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
             for selection in sorted(project.auxiliary_materials, key=lambda item: item.auxiliary_material.code)
         ],
     }
+    return _sanitize_guest_project_view(data) if user is not None and is_guest_user(user) else data
+
+
+def _sanitize_guest_project_view(data: dict) -> dict:
+    for category in data["categories"]:
+        category["available_components"] = []
+        for instance in category["instances"]:
+            instance["editable_attributes"] = []
+            instance["usage_attribute_definitions"] = []
+            instance["materials"] = []
+            instance["sync_state"] = {
+                "status": "up_to_date",
+                "is_outdated": False,
+                "last_synced_at": None,
+                "source_component_updated_at": None,
+                "notes": None,
+            }
+            instance["export_settings"] = []
+            instance["comment_summary"] = {"total_count": 0, "unread_count": 0}
+    data["auxiliary_materials"] = []
+    return data
 
 
 def get_project_with_details(session: Session, project_id: int) -> Project | None:

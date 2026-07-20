@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.models import MediaAsset, User
+from app.models import MediaAsset, Project, ProjectInstance, ProjectInstanceMedia, ProjectStatus, User
 from app.models.entities import utcnow
 
 
@@ -94,6 +94,19 @@ def list_media_assets(session: Session, *, kind: str = "image") -> list[MediaAss
 
 def get_media_asset(session: Session, asset_id: int) -> MediaAsset | None:
     return session.scalar(select(MediaAsset).where(MediaAsset.id == asset_id, MediaAsset.deleted_at.is_(None)))
+
+
+def guest_can_view_media_asset(session: Session, asset_id: int) -> bool:
+    return session.scalar(
+        select(ProjectInstanceMedia.id)
+        .join(ProjectInstance, ProjectInstance.id == ProjectInstanceMedia.instance_id)
+        .join(Project, Project.id == ProjectInstance.project_id)
+        .where(
+            ProjectInstanceMedia.media_asset_id == asset_id,
+            Project.status == ProjectStatus.EXECUTION,
+        )
+        .limit(1)
+    ) is not None
 
 
 def resolve_media_storage_path(*, settings: Settings, storage_key: str) -> Path:

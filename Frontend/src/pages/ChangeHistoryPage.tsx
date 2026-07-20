@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { ApiError, api } from "../lib/api";
-import type { ActivityChange, ActivityEntry, ActivityGroup, SessionUser } from "../lib/types";
+import type { ActivityChange, ActivityEntry, ActivityGroup } from "../lib/types";
 import { renderQuantityText } from "../components/QuantityLabels";
 
 function formatTimestamp(value: string) {
@@ -601,17 +601,13 @@ function ActivityGroupRow({ group, showProject }: { group: ActivityGroup; showPr
   );
 }
 
-type ChangeHistoryPageProps = {
-  currentUser: SessionUser;
-};
-
-export function ChangeHistoryPage({ currentUser }: ChangeHistoryPageProps) {
+export function ChangeHistoryPage() {
   const [groups, setGroups] = useState<ActivityGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState(currentUser.is_guest ? "execution" : "all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [projectFilter, setProjectFilter] = useState("");
   const [changeTypeFilters, setChangeTypeFilters] = useState<Set<ChangeTypeFilter>>(
     () => new Set(DEFAULT_CHANGE_TYPE_FILTERS),
@@ -638,15 +634,12 @@ export function ChangeHistoryPage({ currentUser }: ChangeHistoryPageProps) {
   const projectOptions = useMemo(() => {
     const seen = new Map<number, { id: number; name: string }>();
     for (const group of groups) {
-      if (currentUser.is_guest && group.project.status !== "execution") {
-        continue;
-      }
       if (!seen.has(group.project.id)) {
         seen.set(group.project.id, { id: group.project.id, name: group.project.name });
       }
     }
     return [...seen.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [currentUser.is_guest, groups]);
+  }, [groups]);
 
   const filteredGroups = useMemo(() => {
     if (!projectFilter) {
@@ -654,9 +647,6 @@ export function ChangeHistoryPage({ currentUser }: ChangeHistoryPageProps) {
     }
     const query = deferredSearch.trim().toLowerCase();
     return groups.filter((group) => {
-      if (currentUser.is_guest && group.project.status !== "execution") {
-        return false;
-      }
       if (!hasAnySelectedChangeType(group, changeTypeFilters)) {
         return false;
       }
@@ -671,7 +661,7 @@ export function ChangeHistoryPage({ currentUser }: ChangeHistoryPageProps) {
       }
       return buildHaystack(group).includes(query);
     });
-  }, [changeTypeFilters, currentUser.is_guest, deferredSearch, groups, projectFilter, statusFilter]);
+  }, [changeTypeFilters, deferredSearch, groups, projectFilter, statusFilter]);
 
   function toggleChangeTypeFilter(type: ChangeTypeFilter) {
     setChangeTypeFilters((current) => {
@@ -721,10 +711,10 @@ export function ChangeHistoryPage({ currentUser }: ChangeHistoryPageProps) {
                       onChange={(e) => setStatusFilter(e.target.value)}
                       className="appearance-none w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded pl-7 pr-6 py-1.5 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 cursor-pointer font-mono"
                   >
-                    {currentUser.is_guest ? null : <option value="all">TODOS LOS ESTADOS</option>}
-                    {currentUser.is_guest ? null : <option value="template">PLANTILLA</option>}
+                    <option value="all">TODOS LOS ESTADOS</option>
+                    <option value="template">PLANTILLA</option>
                     <option value="execution">EJECUCIÓN</option>
-                    {currentUser.is_guest ? null : <option value="finished">TERMINADO</option>}
+                    <option value="finished">TERMINADO</option>
                   </select>
                   <Funnel className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
                   <CaretDown className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />

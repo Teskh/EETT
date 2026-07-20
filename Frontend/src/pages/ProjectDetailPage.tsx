@@ -30,6 +30,7 @@ type ProjectDetailPageProps = {
   projectId: number;
   onNavigate: (to: string) => void;
   onTitleChange?: (title: string) => void;
+  readOnly?: boolean;
 };
 
 type ModalState =
@@ -2294,6 +2295,7 @@ function CommentsOverlay({
 
 function InstanceCard({
   instance,
+  readOnly,
   subtypeOptions,
   targetOptions,
   syncPreview,
@@ -2312,6 +2314,7 @@ function InstanceCard({
   onDeleteMaterial,
 }: {
   instance: ProjectInstance;
+  readOnly: boolean;
   subtypeOptions: FlatSubtype[];
   targetOptions: TargetOption[];
   syncPreview: InstanceSyncPreview | null;
@@ -2340,10 +2343,10 @@ function InstanceCard({
   const primaryMedia = instance.media[0] || null;
 
   useEffect(() => {
-    if (expanded && !syncPreview && !syncPreviewLoading) {
+    if (!readOnly && expanded && !syncPreview && !syncPreviewLoading) {
       void onEnsureSyncPreview();
     }
-  }, [expanded, onEnsureSyncPreview, syncPreview, syncPreviewLoading]);
+  }, [expanded, onEnsureSyncPreview, readOnly, syncPreview, syncPreviewLoading]);
 
   return (
     <div className="border-b border-black/10 dark:border-white/10 last:border-0">
@@ -2362,12 +2365,12 @@ function InstanceCard({
           <div className="min-w-0">
           <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2 min-w-0">
             <span className="truncate">{instance.name}</span>
-            <SyncIndicatorButton
+            {!readOnly ? <SyncIndicatorButton
               status={nameSync?.status}
               title="Ver detalles de sincronización del nombre"
               onClick={() => onOpenSyncModal("name")}
-            />
-            <button
+            /> : null}
+            {!readOnly ? <button
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
@@ -2384,12 +2387,12 @@ function InstanceCard({
               <i className="ph-bold ph-chat-circle-text" />
               <span>{instance.comment_summary?.total_count || 0}</span>
               {instance.comment_summary?.unread_count ? <span className="h-1.5 w-1.5 rounded-full bg-accent-500" /> : null}
-            </button>
+            </button> : null}
           </div>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto">
+          {!readOnly ? <div className="flex items-center gap-2 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto">
             <button
               type="button"
               aria-label={`Editar ${instance.name}`}
@@ -2414,7 +2417,7 @@ function InstanceCard({
             >
               <i className="ph-bold ph-trash" />
             </button>
-          </div>
+          </div> : null}
           <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"} text-zinc-600 dark:text-zinc-300`} />
         </div>
       </div>
@@ -2431,11 +2434,11 @@ function InstanceCard({
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Nombre Comercial</span>
-                      <SyncIndicatorButton
+                      {!readOnly ? <SyncIndicatorButton
                         status={shortNameSync?.status}
                         title="Ver detalles de sincronización del nombre comercial"
                         onClick={() => onOpenSyncModal("short_name")}
-                      />
+                      /> : null}
                     </div>
                     <p className="text-sm font-mono text-zinc-800 dark:text-zinc-300">{instance.short_name}</p>
                   </div>
@@ -2443,11 +2446,11 @@ function InstanceCard({
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción</span>
-                    <SyncIndicatorButton
+                    {!readOnly ? <SyncIndicatorButton
                       status={descriptionSync?.status}
                       title="Ver detalles de sincronización de la descripción"
                       onClick={() => onOpenSyncModal("description")}
-                    />
+                    /> : null}
                   </div>
                   <p className={`text-sm ${descriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-2 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-800 dark:text-zinc-300"}`}>
                     {instance.description || "Sin descripción."}
@@ -2456,11 +2459,11 @@ function InstanceCard({
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción Corta</span>
-                    <SyncIndicatorButton
+                    {!readOnly ? <SyncIndicatorButton
                       status={shortDescriptionSync?.status}
                       title="Ver detalles de sincronización de la descripción corta"
                       onClick={() => onOpenSyncModal("short_description")}
-                    />
+                    /> : null}
                   </div>
                   <p className={`text-xs ${shortDescriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-1 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-600 dark:text-zinc-400"}`}>
                     {instance.short_description || "Sin descripción corta."}
@@ -2473,7 +2476,7 @@ function InstanceCard({
                 </div>
               </div>
 
-              {instance.type === "accessory" ? (
+              {instance.type === "accessory" && !readOnly ? (
                 <UsageManager
                   instance={instance}
                   targetOptions={targetOptions}
@@ -2510,11 +2513,11 @@ function InstanceCard({
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-wrench text-zinc-600" /> Instalación
-                  <SyncIndicatorButton
+                  {!readOnly ? <SyncIndicatorButton
                     status={installationSync?.status}
                     title="Ver detalles de sincronización de instalación"
                     onClick={() => onOpenSyncModal("installation")}
-                  />
+                  /> : null}
                 </h6>
                 <p className="text-sm text-zinc-600 dark:text-zinc-400">{instance.installation || "Sin notas de instalación."}</p>
               </div>
@@ -2525,11 +2528,11 @@ function InstanceCard({
                 <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                   <i className="ph-bold ph-list-dashes text-zinc-600" /> Atributos
                 </h5>
-                <SyncIndicatorButton
+                {!readOnly ? <SyncIndicatorButton
                   status={attributeSchemaSync?.status}
                   title="Ver detalles de sincronización de atributos"
                   onClick={() => onOpenSyncModal("attributes")}
-                />
+                /> : null}
               </div>
               
               {(() => {
@@ -2591,7 +2594,7 @@ function InstanceCard({
             </div>
           </div>
 
-          <div className="border-t border-black/10 dark:border-white/10 pt-6">
+          {!readOnly ? <div className="border-t border-black/10 dark:border-white/10 pt-6">
             <button
               type="button"
               onClick={() => setMaterialsExpanded((current) => !current)}
@@ -2650,14 +2653,14 @@ function InstanceCard({
                 ) : null}
               </div>
             ) : null}
-          </div>
+          </div> : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPageProps) {
+export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }: ProjectDetailPageProps) {
   const [data, setData] = useState<ProjectDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -2834,6 +2837,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     if (!commentId) {
       return;
     }
+    const targetCommentId = commentId;
     if (!pending && handledCommentHashRef.current === commentId) {
       return;
     }
@@ -2844,7 +2848,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
     async function openPendingComment() {
       let instance = directInstance || null;
       if (!instance) {
-        const context = await api.getCommentContext(commentId);
+        const context = await api.getCommentContext(targetCommentId);
         if (context.project_id !== projectId || !context.instance_id) {
           return;
         }
@@ -2854,11 +2858,11 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         return;
       }
       window.sessionStorage.removeItem(PENDING_COMMENT_NOTIFICATION_KEY);
-      handledCommentHashRef.current = commentId;
+      handledCommentHashRef.current = targetCommentId;
       await openCommentsForInstance({
         instanceId: instance.id,
         instanceName: instance.name,
-        highlightCommentId: commentId,
+        highlightCommentId: targetCommentId,
         source: pending?.notificationId ? "notification" : undefined,
         notificationId: pending?.notificationId || null,
       });
@@ -3245,7 +3249,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                     </span>
                   </h2>
                 </div>
-                {category.available_components.length ? (
+                {!readOnly && category.available_components.length ? (
                   <button
                     type="button"
                     className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded border border-black/10 dark:border-white/10 text-xs font-semibold transition-colors flex items-center gap-2"
@@ -3253,9 +3257,9 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                   >
                     <i className="ph-bold ph-plus" />
                   </button>
-                ) : (
+                ) : !readOnly ? (
                   <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">No existen componentes reutilizables</p>
-                )}
+                ) : null}
               </div>
               <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {category.instances.length ? (
@@ -3263,6 +3267,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                     <InstanceCard
                       key={instance.id}
                       instance={instance}
+                      readOnly={readOnly}
                       subtypeOptions={flatSubtypeOptions}
                       targetOptions={targetOptions.filter(
                         (target) =>
@@ -3308,7 +3313,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
             </div>
           ))}
 
-          <div className="mt-8 pt-8 border-t border-black/10 dark:border-white/10">
+          {!readOnly ? <div className="mt-8 pt-8 border-t border-black/10 dark:border-white/10">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
                 <i className="ph-bold ph-tags text-zinc-600 dark:text-zinc-400" /> Elementos Auxiliares
@@ -3346,11 +3351,11 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
                 </tbody>
               </table>
             </div>
-          </div>
+          </div> : null}
         </div>
       </div>
 
-      <CommentsOverlay
+      {!readOnly ? <CommentsOverlay
         open={commentOverlay !== null}
         instanceName={commentOverlay?.instanceName || ""}
         comments={comments}
@@ -3361,9 +3366,9 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         onCreate={(body) => createComment(body)}
         onReply={(parentCommentId, body) => createComment(body, parentCommentId)}
         onDelete={deleteComment}
-      />
+      /> : null}
 
-      {activeCategory ? (
+      {!readOnly && activeCategory ? (
         <InstanceFormModal
           open={modalState !== null}
           mode={modalState?.kind === "edit" ? "edit" : "create"}
@@ -3376,7 +3381,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         />
       ) : null}
 
-      {calculationSheetState ? (
+      {!readOnly && calculationSheetState ? (
         <MaterialCalculationSheetModal
           open={calculationSheetState !== null}
           projectId={projectId}
@@ -3387,7 +3392,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
         />
       ) : null}
 
-      <InstanceSyncModal
+      {!readOnly ? <InstanceSyncModal
         open={syncModalState !== null}
         instance={activeSyncInstance}
         preview={syncModalState ? syncPreviews[syncModalState.instanceId] || null : null}
@@ -3425,7 +3430,7 @@ export function ProjectDetailPage({ projectId, onTitleChange }: ProjectDetailPag
           }
           await handleReconcileAttributes(syncModalState.instanceId, { remove_attribute_names: names });
         }}
-      />
+      /> : null}
     </div>
   );
 }

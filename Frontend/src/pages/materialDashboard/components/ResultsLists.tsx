@@ -4,6 +4,7 @@ import type {
   MaterialDashboardCeco,
   MaterialDashboardEconomicMetric,
   MaterialDashboardListRow,
+  MaterialDashboardStockRiskMetric,
   MaterialStudyGroupRow,
 } from "../../../lib/types";
 import {
@@ -97,6 +98,30 @@ const MaterialEconomicDeltaBadge = memo(function MaterialEconomicDeltaBadge({
   );
 });
 
+const MaterialStockRiskBadge = memo(function MaterialStockRiskBadge({
+  metric,
+}: {
+  metric: MaterialDashboardStockRiskMetric | null | undefined;
+}) {
+  if (!metric || metric.status === "unavailable") {
+    return null;
+  }
+  if (metric.status === "no_consumption") {
+    return <div className="mt-1 text-[11px] leading-4 text-zinc-400">Sin consumo activo</div>;
+  }
+  if (metric.status === "outside_horizon") {
+    return <div className="mt-1 text-[11px] leading-4 text-zinc-500">Quiebre fuera de 120 días hábiles</div>;
+  }
+
+  const days = metric.business_days_until_stockout ?? 0;
+  const colorClasses = days <= 10 ? "text-red-600 dark:text-red-400" : days <= 20 ? "text-amber-600 dark:text-amber-400" : "text-zinc-500";
+  return (
+    <div className={`mt-1 text-[11px] font-semibold leading-4 tabular-nums ${colorClasses}`}>
+      Quiebre: {days === 0 ? "hoy" : `${days} días hábiles`}
+    </div>
+  );
+});
+
 export const MaterialResultsList = memo(function MaterialResultsList({
   loading,
   rows,
@@ -106,6 +131,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
   hasMore,
   movementWindowDays,
   economicMetricsBySku,
+  stockRiskMetricsBySku,
   selectedMaterialSku,
   onSelect,
   onSelectErpMaterial,
@@ -118,6 +144,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
   hasMore: boolean;
   movementWindowDays: number;
   economicMetricsBySku: ReadonlyMap<string, MaterialDashboardEconomicMetric>;
+  stockRiskMetricsBySku: ReadonlyMap<string, MaterialDashboardStockRiskMetric>;
   selectedMaterialSku: string | null;
   onSelect: (key: string) => void;
   onSelectErpMaterial: (row: MaterialDashboardListRow) => void;
@@ -149,6 +176,7 @@ export const MaterialResultsList = memo(function MaterialResultsList({
                   {row.material_name}
                 </h4>
                 <MaterialEconomicDeltaBadge metric={active ? null : economicMetricsBySku.get(row.sku)} />
+                <MaterialStockRiskBadge metric={stockRiskMetricsBySku.get(row.sku)} />
               </div>
               <div className={ROW_CODE_CLASSES}>
                 {row.sku}

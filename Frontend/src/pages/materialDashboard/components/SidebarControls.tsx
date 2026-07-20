@@ -1,3 +1,4 @@
+import { Funnel } from "@phosphor-icons/react";
 import { memo } from "react";
 
 import type { CecoFilterMode } from "../preferences";
@@ -15,13 +16,22 @@ export function SortControls({
   options,
   sort,
   onChange,
+  filter,
 }: {
   options: Array<{ key: SortKey; label: string }>;
   sort: SortState;
   onChange: (sort: SortState) => void;
+  filter?: {
+    active: boolean;
+    label: string;
+    description: string;
+    disabled?: boolean;
+    loading?: boolean;
+    onToggle: () => void;
+  };
 }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+    <div className={`grid gap-2 ${filter ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto]"}`}>
       <select
         aria-label="Ordenar resultados por"
         value={sort.key}
@@ -48,6 +58,37 @@ export function SortControls({
       >
         {sort.direction === -1 ? "Desc" : "Asc"}
       </button>
+      {filter ? (
+        <details className="group relative">
+          <summary
+            className={`inline-flex h-10 w-10 list-none cursor-pointer items-center justify-center border shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 [&::-webkit-details-marker]:hidden ${
+              filter.active
+                ? "border-accent-500 bg-accent-500 text-zinc-950 hover:bg-accent-400"
+                : "border-black/10 bg-white text-zinc-600 hover:border-black/15 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:bg-white/10"
+            }`}
+            title="Filtrar resultados"
+            aria-label={filter.active ? "Filtrar resultados, un filtro activo" : "Filtrar resultados"}
+          >
+            <Funnel size={17} weight={filter.active ? "fill" : "regular"} aria-hidden="true" />
+          </summary>
+          <div className="absolute right-0 top-12 z-30 w-72 border border-black/10 bg-white p-3 shadow-xl dark:border-white/10 dark:bg-zinc-900">
+            <label className={`flex items-start gap-3 ${filter.disabled ? "cursor-not-allowed opacity-55" : "cursor-pointer"}`}>
+              <input
+                type="checkbox"
+                checked={filter.active}
+                disabled={filter.disabled}
+                onChange={filter.onToggle}
+                className="mt-0.5 h-4 w-4 accent-accent-500"
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-semibold text-zinc-900 dark:text-white">{filter.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-zinc-500">{filter.description}</span>
+                {filter.loading ? <span className="mt-1 block text-[11px] text-accent-600 dark:text-accent-400">Calculando estimados...</span> : null}
+              </span>
+            </label>
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
