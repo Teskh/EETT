@@ -24,6 +24,7 @@ type MaterialCalculationSheetModalProps = {
   instanceId: number;
   instanceName: string;
   material: InstanceMaterial;
+  subtypes: Array<{ id: number; name: string }>;
   onClose: () => void;
 };
 
@@ -78,9 +79,11 @@ export function MaterialCalculationSheetModal({
   instanceId,
   instanceName,
   material,
+  subtypes,
   onClose,
 }: MaterialCalculationSheetModalProps) {
   const [sheet, setSheet] = useState<MaterialCalculationSheet | null>(null);
+  const [selectedSubtypeId, setSelectedSubtypeId] = useState<number | null>(null);
   const [cellMap, setCellMap] = useState<Record<string, string>>({});
   const [rowCount, setRowCount] = useState(DEFAULT_CALCULATION_SHEET_ROWS);
   const [columnCount, setColumnCount] = useState(DEFAULT_CALCULATION_SHEET_COLUMNS);
@@ -102,7 +105,12 @@ export function MaterialCalculationSheetModal({
     setLoading(true);
     setError(null);
     try {
-      const loadedSheet = await api.getMaterialCalculationSheet(projectId, instanceId, material.rule_id);
+      const loadedSheet = await api.getMaterialCalculationSheet(
+        projectId,
+        instanceId,
+        material.rule_id,
+        selectedSubtypeId,
+      );
       const nextCellMap = buildCalculationCellMap(loadedSheet.cells);
       const dimensions = calculationSheetDimensions(loadedSheet.cells);
       setSheet(loadedSheet);
@@ -124,7 +132,7 @@ export function MaterialCalculationSheetModal({
       return;
     }
     void loadSheet();
-  }, [open, projectId, instanceId, material.rule_id]);
+  }, [open, projectId, instanceId, material.rule_id, selectedSubtypeId]);
 
   const evaluation = evaluateCalculationSheet(cellMap);
   const selectedKey = calculationCellKey(selectedCell.rowIndex, selectedCell.columnIndex);
@@ -306,6 +314,7 @@ export function MaterialCalculationSheetModal({
     setError(null);
     try {
       const nextSheet = await api.updateMaterialCalculationSheet(projectId, instanceId, material.rule_id, {
+        subtype_id: selectedSubtypeId,
         cells: serializeCalculationCellMap(cellMap),
       });
       setSheet(nextSheet);
@@ -339,6 +348,25 @@ export function MaterialCalculationSheetModal({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedSubtypeId ?? ""}
+              disabled={loading || saving}
+              onChange={(event) => {
+                if (isDirty && !window.confirm("¿Descartar cambios sin guardar antes de cambiar de escenario?")) {
+                  return;
+                }
+                setSelectedSubtypeId(event.target.value ? Number(event.target.value) : null);
+              }}
+              className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-800 dark:border-white/10 dark:bg-black/30 dark:text-zinc-200"
+              title="Contexto de la planilla de cálculo"
+            >
+              <option value="">General</option>
+              {subtypes.map((subtype) => (
+                <option key={subtype.id} value={subtype.id}>
+                  {subtype.name}
+                </option>
+              ))}
+            </select>
             <span className="rounded-full border border-black/10 dark:border-white/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
               {serializeCalculationCellMap(cellMap).length} celdas guardadas
             </span>

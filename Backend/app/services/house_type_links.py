@@ -17,13 +17,24 @@ from app.models import (
     ProjectSubtype,
     User,
 )
+from app.services.effective_bom import (
+    build_project_expected_quantity_map,
+    project_bom_fingerprint,
+    selectable_subtypes,
+    subtype_path,
+)
 
 # Key used to resolve a produced house against the mapping: sub-type rows win,
 # rows with production_sub_type_id None act as the house type's general mapping.
 LinkKey = tuple[int, int | None]
 
 
-def serialize_house_type_link(link: ProductionHouseTypeLink) -> dict[str, Any]:
+def serialize_house_type_link(
+    link: ProductionHouseTypeLink,
+    expected_maps: Mapping[int, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    expected_map = (expected_maps or {}).get(link.project_id, {})
+    missing_count = int(expected_map.get("missing_by_subtype", {}).get(link.project_subtype_id, 0))
     return {
         "id": link.id,
         "production_house_type_id": link.production_house_type_id,
@@ -35,6 +46,8 @@ def serialize_house_type_link(link: ProductionHouseTypeLink) -> dict[str, Any]:
         "project_subtype_id": link.project_subtype_id,
         "project_subtype_name": link.project_subtype.name if link.project_subtype else None,
         "updated_at": link.updated_at.isoformat() if link.updated_at else None,
+        "is_complete": missing_count == 0,
+        "missing_quantity_count": missing_count,
     }
 
 
@@ -56,7 +69,9 @@ def load_house_type_links(session: Session) -> list[ProductionHouseTypeLink]:
 
 
 def list_house_type_links(session: Session) -> list[dict[str, Any]]:
-    return [serialize_house_type_link(link) for link in load_house_type_links(session)]
+    links = load_house_type_links(session)
+    expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
+    return [serialize_house_type_link(link, expected_maps) for link in links]
 
 
 def replace_house_type_links(
@@ -107,10 +122,10 @@ def replace_house_type_links(
         if project is None:
             raise ValueError(f"Project {row['project_id']} not found")
         if row["project_subtype_id"] is not None:
-            subtype_ids = {subtype.id for subtype in project.subtypes}
+            subtype_ids = {subtype.id for subtype in selectable_subtypes(project)}
             if row["project_subtype_id"] not in subtype_ids:
                 raise ValueError(
-                    f"Subtype {row['project_subtype_id']} does not belong to project {project.name}"
+                    f"Subtype {row['project_subtype_id']} does not belong to project {project.name} or is only a group"
                 )
 
     for existing in session.scalars(select(ProductionHouseTypeLink)).all():
@@ -187,30 +202,29 @@ def get_project_expected_quantity_maps(
     projects = session.scalars(
         select(Project)
         .where(Project.id.in_(unique_ids))
-        .options(selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material))
+        .options(
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(Project.subtypes).selectinload(ProjectSubtype.parent),
+            selectinload(Project.material_occurrence_modes),
+        )
     ).all()
+    return {project.id: build_project_expected_quantity_map(project) for project in projects}
 
-    maps: dict[int, dict[str, Any]] = {}
-    for project in projects:
-        general: dict[str, float] = defaultdict(float)
-        by_subtype: dict[int, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        for entry in project.bom_entries:
-            if entry.quantity is None or entry.material is None:
-                continue
-            sku = entry.material.sku.strip().upper()
-            if not sku:
-                continue
-            if entry.subtype_id is None:
-                general[sku] += float(entry.quantity)
-            else:
-                by_subtype[entry.subtype_id][sku] += float(entry.quantity)
-        maps[project.id] = {
-            "project_id": project.id,
-            "project_name": project.name,
-            "general": dict(general),
-            "by_subtype": {subtype_id: dict(quantities) for subtype_id, quantities in by_subtype.items()},
-        }
-    return maps
+
+def linked_projects_bom_fingerprint(session: Session) -> str:
+    project_ids = set(session.scalars(select(ProductionHouseTypeLink.project_id)).all())
+    if not project_ids:
+        return "none"
+    projects = session.scalars(
+        select(Project)
+        .where(Project.id.in_(project_ids))
+        .options(
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(Project.subtypes).selectinload(ProjectSubtype.parent),
+            selectinload(Project.material_occurrence_modes),
+        )
+    ).all()
+    return project_bom_fingerprint(projects)
 
 
 def expected_quantities_for_link(
@@ -238,6 +252,16 @@ def expected_quantities_for_link(
         for sku, quantity in expected_map.get("by_subtype", {}).get(int(project_subtype_id), {}).items():
             quantities[sku] += quantity
     return dict(quantities)
+
+
+def link_missing_quantity_count(
+    link: ProductionHouseTypeLink | Mapping[str, Any],
+    expected_maps: Mapping[int, Mapping[str, Any]],
+) -> int:
+    project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
+    subtype_id = link.get("project_subtype_id") if isinstance(link, Mapping) else link.project_subtype_id
+    expected_map = expected_maps.get(project_id, {})
+    return int(expected_map.get("missing_by_subtype", {}).get(subtype_id, 0))
 
 
 def study_quantity_for_link(
@@ -300,7 +324,8 @@ def build_mapped_house_comparison(
         bucket["house_starts"] += count
 
         link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
-        if link is None:
+        missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
+        if link is None or missing_count > 0:
             key: LinkKey = (house_type_id, sub_type_id)
             summary = unmapped_by_key.setdefault(
                 key,
@@ -310,6 +335,8 @@ def build_mapped_house_comparison(
                     "sub_type_id": sub_type_id,
                     "sub_type_name": row.get("sub_type_name"),
                     "house_starts": 0,
+                    "reason": "incomplete_bom" if missing_count > 0 else "unmapped",
+                    "missing_quantity_count": missing_count,
                 },
             )
             summary["house_starts"] += count
@@ -471,16 +498,27 @@ def list_link_target_projects(session: Session) -> list[dict[str, Any]]:
         .options(selectinload(Project.subtypes).selectinload(ProjectSubtype.children))
         .order_by(Project.name)
     ).all()
+    expected_maps = get_project_expected_quantity_maps(session, {project.id for project in projects})
     payload = []
     for project in projects:
+        expected_map = expected_maps.get(project.id, {})
+        missing_by_subtype = expected_map.get("missing_by_subtype", {})
+        general_missing = int(missing_by_subtype.get(None, 0))
         payload.append(
             {
                 "id": project.id,
                 "name": project.name,
                 "status": project.status.value,
+                "general_is_complete": general_missing == 0,
+                "general_missing_quantity_count": general_missing,
                 "subtypes": [
-                    {"id": subtype.id, "name": subtype.name}
-                    for subtype in sorted(project.subtypes, key=lambda item: item.name.lower())
+                    {
+                        "id": subtype.id,
+                        "name": subtype_path(subtype),
+                        "is_complete": int(missing_by_subtype.get(subtype.id, 0)) == 0,
+                        "missing_quantity_count": int(missing_by_subtype.get(subtype.id, 0)),
+                    }
+                    for subtype in selectable_subtypes(project)
                 ],
             }
         )

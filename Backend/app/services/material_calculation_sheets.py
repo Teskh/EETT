@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import CatalogComponent, ComponentMaterialRule, Project, ProjectInstance, ProjectMaterialCalculationCell, ProjectMaterialCalculationSheet
+from app.models import CatalogComponent, ComponentMaterialRule, Project, ProjectInstance, ProjectMaterialCalculationCell, ProjectMaterialCalculationSheet, ProjectSubtype
 from app.models.entities import utcnow
+from app.services.effective_bom import SUBTYPE_KIND_VARIANT, subtype_kind, subtype_path
 
 
 @dataclass
@@ -21,18 +22,21 @@ def get_material_calculation_sheet(
     project: Project,
     instance_id: int,
     rule_id: int,
+    subtype_id: int | None = None,
 ) -> dict | None:
     context = _load_material_context(session, project_id=project.id, instance_id=instance_id, rule_id=rule_id)
     if context is None:
         return None
 
+    subtype = _validate_subtype(session, project=project, subtype_id=subtype_id)
     sheet = _load_sheet(
         session,
         project_id=project.id,
         instance_id=context.instance.id,
         material_id=context.rule.material_id,
+        subtype_id=subtype_id,
     )
-    return _serialize_sheet(sheet, context=context)
+    return _serialize_sheet(sheet, context=context, subtype=subtype)
 
 
 def replace_material_calculation_sheet(
@@ -42,30 +46,34 @@ def replace_material_calculation_sheet(
     instance_id: int,
     rule_id: int,
     cells: list[dict],
+    subtype_id: int | None = None,
 ) -> dict | None:
     context = _load_material_context(session, project_id=project.id, instance_id=instance_id, rule_id=rule_id)
     if context is None:
         return None
 
+    subtype = _validate_subtype(session, project=project, subtype_id=subtype_id)
     normalized_cells = _normalize_cells(cells)
     sheet = _load_sheet(
         session,
         project_id=project.id,
         instance_id=context.instance.id,
         material_id=context.rule.material_id,
+        subtype_id=subtype_id,
     )
 
     if not normalized_cells:
         if sheet is not None:
             session.delete(sheet)
             session.commit()
-        return _serialize_sheet(None, context=context)
+        return _serialize_sheet(None, context=context, subtype=subtype)
 
     if sheet is None:
         sheet = ProjectMaterialCalculationSheet(
             project=project,
             instance=context.instance,
             material=context.rule.material,
+            subtype=subtype,
         )
         session.add(sheet)
         session.flush()
@@ -82,7 +90,7 @@ def replace_material_calculation_sheet(
     ]
     session.commit()
     session.refresh(sheet)
-    return _serialize_sheet(sheet, context=context)
+    return _serialize_sheet(sheet, context=context, subtype=subtype)
 
 
 def _load_material_context(
@@ -117,16 +125,41 @@ def _load_sheet(
     project_id: int,
     instance_id: int,
     material_id: int,
+    subtype_id: int | None,
 ) -> ProjectMaterialCalculationSheet | None:
-    return session.scalar(
-        select(ProjectMaterialCalculationSheet)
-        .where(
+    query = select(ProjectMaterialCalculationSheet).where(
             ProjectMaterialCalculationSheet.project_id == project_id,
             ProjectMaterialCalculationSheet.instance_id == instance_id,
             ProjectMaterialCalculationSheet.material_id == material_id,
         )
-        .options(selectinload(ProjectMaterialCalculationSheet.cells), selectinload(ProjectMaterialCalculationSheet.material))
+    query = query.where(
+        ProjectMaterialCalculationSheet.subtype_id.is_(None)
+        if subtype_id is None
+        else ProjectMaterialCalculationSheet.subtype_id == subtype_id
     )
+    return session.scalar(
+        query.options(
+            selectinload(ProjectMaterialCalculationSheet.cells),
+            selectinload(ProjectMaterialCalculationSheet.material),
+            selectinload(ProjectMaterialCalculationSheet.subtype),
+        )
+    )
+
+
+def _validate_subtype(
+    session: Session,
+    *,
+    project: Project,
+    subtype_id: int | None,
+) -> ProjectSubtype | None:
+    if subtype_id is None:
+        return None
+    subtype = session.scalar(
+        select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
+    )
+    if subtype is None or subtype_kind(subtype) != SUBTYPE_KIND_VARIANT:
+        raise ValueError("Calculation sheet subtype was not found or is not selectable.")
+    return subtype
 
 
 def _normalize_cells(cells: list[dict]) -> list[dict]:
@@ -165,6 +198,7 @@ def _serialize_sheet(
     sheet: ProjectMaterialCalculationSheet | None,
     *,
     context: MaterialCalculationContext,
+    subtype: ProjectSubtype | None,
 ) -> dict:
     cells = sheet.cells if sheet is not None else []
     material = sheet.material if sheet is not None else context.rule.material
@@ -173,6 +207,8 @@ def _serialize_sheet(
         "instance_id": context.instance.id,
         "rule_id": context.rule.id,
         "material_id": material.id,
+        "subtype_id": subtype.id if subtype else None,
+        "subtype_name": subtype_path(subtype) if subtype else "General",
         "material_name": material.name,
         "sku": material.sku,
         "cell_count": len(cells),

@@ -38,12 +38,21 @@ from app.models import (
     CommentNotification,
     ProjectStatus,
     ProjectSubtype,
+    ProductionHouseTypeLink,
     SyncStatus,
     User,
 )
 from app.models.entities import BomCalculationMode, MaterialMode, MembershipRole, utcnow
 from app.services.audit import build_activity_change, build_activity_details, build_audit_context, record_project_activity
 from app.services.auth import can_view_project, is_guest_user
+from app.services.effective_bom import (
+    SUBTYPE_KIND_GROUP,
+    SUBTYPE_KIND_VARIANT,
+    VALID_SUBTYPE_KINDS,
+    inherited_entry_value,
+    subtype_kind,
+    subtype_path,
+)
 from app.services.media import serialize_media_link
 
 
@@ -464,7 +473,12 @@ def copy_project(
     subtype_map: dict[int, ProjectSubtype] = {}
 
     def copy_subtype(source_subtype: ProjectSubtype, parent: ProjectSubtype | None = None) -> None:
-        copied_subtype = ProjectSubtype(project=copied_project, parent=parent, name=source_subtype.name)
+        copied_subtype = ProjectSubtype(
+            project=copied_project,
+            parent=parent,
+            name=source_subtype.name,
+            kind=subtype_kind(source_subtype),
+        )
         session.add(copied_subtype)
         session.flush()
         subtype_map[source_subtype.id] = copied_subtype
@@ -591,6 +605,7 @@ def copy_project(
                 subtype=subtype_map.get(entry.subtype_id) if entry.subtype_id is not None else None,
                 quantity=entry.quantity,
                 assembly_quantity=entry.assembly_quantity,
+                inheritance_mode=entry.inheritance_mode,
                 unit=entry.unit,
                 calculation_mode=entry.calculation_mode,
                 calculation_formula=entry.calculation_formula,
@@ -641,6 +656,7 @@ def copy_project(
             project=copied_project,
             instance=copied_instance,
             material_id=sheet.material_id,
+            subtype=subtype_map.get(sheet.subtype_id) if sheet.subtype_id is not None else None,
         )
         session.add(copied_sheet)
         for cell in sheet.cells:
@@ -760,12 +776,16 @@ def create_project_subtype(
     project: Project,
     name: str,
     parent_id: int | None = None,
+    kind: str = SUBTYPE_KIND_VARIANT,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> ProjectSubtype:
     clean_name = name.strip()
     if not clean_name:
         raise ValueError("Subtype name is required.")
+    normalized_kind = str(kind or SUBTYPE_KIND_VARIANT).strip().lower()
+    if normalized_kind not in VALID_SUBTYPE_KINDS:
+        raise ValueError("Subtype kind must be 'group' or 'variant'.")
 
     parent: ProjectSubtype | None = None
     if parent_id is not None:
@@ -775,7 +795,17 @@ def create_project_subtype(
         if parent is None:
             raise ValueError("Parent subtype was not found in this project.")
 
-    subtype = ProjectSubtype(project=project, parent=parent, name=clean_name)
+    duplicate = session.scalar(
+        select(ProjectSubtype.id).where(
+            ProjectSubtype.project_id == project.id,
+            ProjectSubtype.parent_id == parent_id,
+            func.lower(ProjectSubtype.name) == clean_name.lower(),
+        )
+    )
+    if duplicate is not None:
+        raise ValueError("A subtype with this name already exists at the same level.")
+
+    subtype = ProjectSubtype(project=project, parent=parent, name=clean_name, kind=normalized_kind)
     session.add(subtype)
     session.flush()
     if actor_user is not None:
@@ -813,6 +843,7 @@ def update_project_subtype(
     project: Project,
     subtype_id: int,
     name: str,
+    kind: str | None = None,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> ProjectSubtype | None:
@@ -826,9 +857,54 @@ def update_project_subtype(
     if not clean_name:
         raise ValueError("Subtype name is required.")
 
+    next_kind = subtype_kind(subtype) if kind is None else str(kind).strip().lower()
+    if next_kind not in VALID_SUBTYPE_KINDS:
+        raise ValueError("Subtype kind must be 'group' or 'variant'.")
+    duplicate = session.scalar(
+        select(ProjectSubtype.id).where(
+            ProjectSubtype.project_id == project.id,
+            ProjectSubtype.parent_id == subtype.parent_id,
+            ProjectSubtype.id != subtype.id,
+            func.lower(ProjectSubtype.name) == clean_name.lower(),
+        )
+    )
+    if duplicate is not None:
+        raise ValueError("A subtype with this name already exists at the same level.")
+    if next_kind == SUBTYPE_KIND_GROUP and subtype_kind(subtype) != SUBTYPE_KIND_GROUP:
+        has_data = session.scalar(
+            select(ProjectBomEntry.id).where(ProjectBomEntry.subtype_id == subtype.id).limit(1)
+        )
+        has_data = has_data or session.scalar(
+            select(ProjectCostModelAdjustment.id).where(ProjectCostModelAdjustment.subtype_id == subtype.id).limit(1)
+        )
+        has_data = has_data or session.scalar(
+            select(ProjectMaterialCalculationSheet.id)
+            .where(ProjectMaterialCalculationSheet.subtype_id == subtype.id)
+            .limit(1)
+        )
+        has_data = has_data or session.scalar(
+            select(ProjectAuxiliaryMaterialSelection.id)
+            .where(ProjectAuxiliaryMaterialSelection.subtype_id == subtype.id)
+            .limit(1)
+        )
+        has_data = has_data or session.scalar(
+            select(ProductionHouseTypeLink.id)
+            .where(ProductionHouseTypeLink.project_subtype_id == subtype.id)
+            .limit(1)
+        )
+        if has_data:
+            raise ValueError("This variant has material or cost data and cannot become an organizational group.")
+
     previous_name = subtype.name
+    previous_kind = subtype_kind(subtype)
     subtype.name = clean_name
-    if actor_user is not None and previous_name != subtype.name:
+    subtype.kind = next_kind
+    if actor_user is not None and (previous_name != subtype.name or previous_kind != subtype.kind):
+        changes = []
+        if previous_name != subtype.name:
+            changes.append(build_activity_change("Subtype name", previous_name, subtype.name))
+        if previous_kind != subtype.kind:
+            changes.append(build_activity_change("Subtype kind", previous_kind, subtype.kind))
         record_project_activity(
             session,
             project=project,
@@ -848,7 +924,7 @@ def update_project_subtype(
             details=build_activity_details(
                 headline="Subtype renamed",
                 subject_name=subtype.name,
-                changes=[build_activity_change("Subtype name", previous_name, subtype.name)],
+                changes=changes,
                 kind="subtype",
             ),
         )
@@ -862,6 +938,7 @@ def delete_project_subtype(
     *,
     project: Project,
     subtype_id: int,
+    confirm_impact: bool = False,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
 ) -> bool:
@@ -870,6 +947,28 @@ def delete_project_subtype(
     )
     if subtype is None:
         return False
+    impact = get_project_subtype_deletion_impact(session, project=project, subtype_id=subtype_id)
+    affected_count = sum(
+        int(impact[key])
+        for key in (
+            "bom_rows",
+            "cost_adjustments",
+            "calculation_sheets",
+            "auxiliary_materials",
+            "production_links",
+        )
+    )
+    if affected_count and not confirm_impact:
+        raise ValueError("Subtype deletion has dependent data and requires explicit confirmation.")
+    subtree_ids = impact["subtype_ids"]
+    for link in session.scalars(
+        select(ProductionHouseTypeLink).where(ProductionHouseTypeLink.project_subtype_id.in_(subtree_ids))
+    ).all():
+        session.delete(link)
+    for selection in session.scalars(
+        select(ProjectAuxiliaryMaterialSelection).where(ProjectAuxiliaryMaterialSelection.subtype_id.in_(subtree_ids))
+    ).all():
+        session.delete(selection)
     details = {"name": subtype.name, "parent_id": subtype.parent_id}
     if actor_user is not None:
         record_project_activity(
@@ -900,6 +999,70 @@ def delete_project_subtype(
     session.delete(subtype)
     session.commit()
     return True
+
+
+def get_project_subtype_deletion_impact(
+    session: Session,
+    *,
+    project: Project,
+    subtype_id: int,
+) -> dict:
+    subtype = session.scalar(
+        select(ProjectSubtype).where(ProjectSubtype.id == subtype_id, ProjectSubtype.project_id == project.id)
+    )
+    if subtype is None:
+        raise ValueError("Project subtype not found.")
+
+    subtree: list[ProjectSubtype] = []
+
+    def collect(node: ProjectSubtype) -> None:
+        subtree.append(node)
+        for child in node.children:
+            collect(child)
+
+    collect(subtype)
+    subtype_ids = [node.id for node in subtree]
+    return {
+        "subtype_id": subtype.id,
+        "subtype_ids": subtype_ids,
+        "subtype_names": [subtype_path(node) for node in subtree],
+        "subtype_count": len(subtree),
+        "bom_rows": int(
+            session.scalar(select(func.count(ProjectBomEntry.id)).where(ProjectBomEntry.subtype_id.in_(subtype_ids))) or 0
+        ),
+        "cost_adjustments": int(
+            session.scalar(
+                select(func.count(ProjectCostModelAdjustment.id)).where(
+                    ProjectCostModelAdjustment.subtype_id.in_(subtype_ids)
+                )
+            )
+            or 0
+        ),
+        "calculation_sheets": int(
+            session.scalar(
+                select(func.count(ProjectMaterialCalculationSheet.id)).where(
+                    ProjectMaterialCalculationSheet.subtype_id.in_(subtype_ids)
+                )
+            )
+            or 0
+        ),
+        "auxiliary_materials": int(
+            session.scalar(
+                select(func.count(ProjectAuxiliaryMaterialSelection.id)).where(
+                    ProjectAuxiliaryMaterialSelection.subtype_id.in_(subtype_ids)
+                )
+            )
+            or 0
+        ),
+        "production_links": int(
+            session.scalar(
+                select(func.count(ProductionHouseTypeLink.id)).where(
+                    ProductionHouseTypeLink.project_subtype_id.in_(subtype_ids)
+                )
+            )
+            or 0
+        ),
+    }
 
 
 def _project_material_mode_value(project: Project) -> str:
@@ -1514,7 +1677,8 @@ def get_project_view_data(session: Session, project_id: int, user: User | None =
                 "name": selection.auxiliary_material.name,
                 "category": selection.auxiliary_material.category,
                 "price": selection.auxiliary_material.price,
-                "subtype": selection.subtype.name if selection.subtype else "General",
+                "subtype_id": selection.subtype_id,
+                "subtype": subtype_path(selection.subtype) if selection.subtype else "General",
             }
             for selection in sorted(project.auxiliary_materials, key=lambda item: item.auxiliary_material.code)
         ],
@@ -1717,11 +1881,17 @@ def replace_project_material_occurrence(
         if subtype_id in seen_subtype_ids:
             raise ValueError("Duplicate subtype rows are not allowed.")
         seen_subtype_ids.add(subtype_id)
+        inheritance_mode = str(row.get("inheritance_mode") or "override").strip().lower()
+        if inheritance_mode not in {"override", "add"}:
+            raise ValueError("Inheritance mode must be 'override' or 'add'.")
+        if subtype_id is None and inheritance_mode != "override":
+            raise ValueError("General material rows cannot use additive inheritance.")
         normalized_entries.append(
             {
                 "subtype_id": subtype_id,
                 "quantity": row.get("quantity"),
                 "assembly_quantity": row.get("assembly_quantity"),
+                "inheritance_mode": inheritance_mode,
             }
         )
 
@@ -1776,6 +1946,7 @@ def replace_project_material_occurrence(
                 subtype=subtype_map.get(row["subtype_id"]),
                 quantity=row["quantity"],
                 assembly_quantity=row["assembly_quantity"],
+                inheritance_mode=row["inheritance_mode"],
                 unit=(rule.unit if rule else None) or previous_unit or material.unit,
                 calculation_mode=BomCalculationMode.MANUAL,
                 calculation_formula=None,
@@ -2336,6 +2507,8 @@ def _serialize_subtype(subtype: ProjectSubtype) -> dict:
         "id": subtype.id,
         "parent_id": subtype.parent_id,
         "name": subtype.name,
+        "path": subtype_path(subtype),
+        "kind": subtype_kind(subtype),
         "children": [_serialize_subtype(child) for child in subtype.children],
     }
 
@@ -2711,6 +2884,7 @@ def _bom_entry_snapshot(entries: list[ProjectBomEntry]) -> list[dict]:
             "subtype_name": entry.subtype.name if entry.subtype else None,
             "quantity": entry.quantity,
             "assembly_quantity": entry.assembly_quantity,
+            "inheritance_mode": entry.inheritance_mode,
         }
         for entry in sorted(entries, key=lambda item: (item.subtype_id is None, item.subtype_id or -1))
     ]
@@ -2724,6 +2898,7 @@ def _normalized_bom_snapshot(entries: list[dict], project: Project) -> list[dict
             "subtype_name": subtype_names.get(entry["subtype_id"]),
             "quantity": entry["quantity"],
             "assembly_quantity": entry["assembly_quantity"],
+            "inheritance_mode": entry.get("inheritance_mode", "override"),
         }
         for entry in sorted(entries, key=lambda item: (item["subtype_id"] is None, item["subtype_id"] or -1))
     ]
@@ -2839,6 +3014,14 @@ def _describe_material_quantity_changes(before: list[dict], after: list[dict]) -
                     next_row.get("assembly_quantity"),
                 )
             )
+        if previous_row.get("inheritance_mode", "override") != next_row.get("inheritance_mode", "override"):
+            changes.append(
+                build_activity_change(
+                    f"{label_prefix} inheritance",
+                    previous_row.get("inheritance_mode", "override"),
+                    next_row.get("inheritance_mode", "override"),
+                )
+            )
     return changes
 
 
@@ -2877,13 +3060,16 @@ def _material_mode_label(value: str | None) -> str | None:
 def _flatten_subtypes(subtypes: list[ProjectSubtype], depth: int = 0) -> list[dict]:
     rows: list[dict] = []
     for subtype in subtypes:
-        rows.append(
-            {
-                "id": subtype.id,
-                "name": subtype.name,
-                "depth": depth,
-            }
-        )
+        if subtype_kind(subtype) == SUBTYPE_KIND_VARIANT:
+            rows.append(
+                {
+                    "id": subtype.id,
+                    "name": subtype.name,
+                    "path": subtype_path(subtype),
+                    "depth": depth,
+                    "model": subtype,
+                }
+            )
         rows.extend(_flatten_subtypes(subtype.children, depth + 1))
     return rows
 
@@ -2897,14 +3083,17 @@ def _visible_project_subtype_rows(project: Project) -> list[dict]:
 
 
 def _flatten_visible_project_subtypes(subtype: ProjectSubtype, depth: int = 0) -> list[dict]:
-    rows = [
-        {
-            "id": subtype.id,
-            "name": subtype.name,
-            "depth": depth,
-            "model": subtype,
-        }
-    ]
+    rows = []
+    if subtype_kind(subtype) == SUBTYPE_KIND_VARIANT:
+        rows.append(
+            {
+                "id": subtype.id,
+                "name": subtype.name,
+                "path": subtype_path(subtype),
+                "depth": depth,
+                "model": subtype,
+            }
+        )
     for child in subtype.children:
         rows.extend(_flatten_visible_project_subtypes(child, depth + 1))
     return rows
@@ -2965,17 +3154,33 @@ def _serialize_material_bom_entries(
         for subtype in flat_subtypes:
             entry = entries_by_subtype.get(subtype["id"])
             if entry is None:
-                rows.append(
-                    _serialize_empty_bom_entry(
+                row = _serialize_empty_bom_entry(
                         subtype_id=subtype["id"],
-                        subtype_name=subtype["name"],
+                        subtype_name=subtype.get("path") or subtype["name"],
                         subtype_depth=subtype["depth"],
                         unit=unit or material.unit,
                     )
-                )
-                continue
-            row = _serialize_bom_entry(entry)
+            else:
+                row = _serialize_bom_entry(entry)
+                row["subtype"] = subtype.get("path") or subtype["name"]
             row["subtype_depth"] = subtype["depth"]
+            quantity, quantity_source = inherited_entry_value(entries_by_subtype, subtype["model"], "quantity")
+            assembly_quantity, assembly_source = inherited_entry_value(
+                entries_by_subtype, subtype["model"], "assembly_quantity"
+            )
+            row["effective_quantity"] = quantity
+            row["effective_quantity_state"] = _quantity_state(quantity)
+            row["effective_assembly_quantity"] = assembly_quantity
+            row["effective_assembly_quantity_state"] = _quantity_state(assembly_quantity)
+            inherited_source = quantity_source or assembly_source
+            row["inherited_from_subtype_id"] = (
+                inherited_source.id if inherited_source is not None and inherited_source.id != subtype["id"] else None
+            )
+            row["inherited_from_subtype"] = (
+                subtype_path(inherited_source)
+                if inherited_source is not None and inherited_source.id != subtype["id"]
+                else None
+            )
             rows.append(row)
         return rows
 
@@ -3005,8 +3210,15 @@ def _serialize_empty_bom_entry(
         "subtype_depth": subtype_depth,
         "quantity": None,
         "quantity_state": "blank",
+        "effective_quantity": None,
+        "effective_quantity_state": "blank",
         "assembly_quantity": None,
         "assembly_quantity_state": "blank",
+        "effective_assembly_quantity": None,
+        "effective_assembly_quantity_state": "blank",
+        "inheritance_mode": "override",
+        "inherited_from_subtype_id": None,
+        "inherited_from_subtype": None,
         "unit": unit,
         "calculation_mode": "manual",
         "calculation_formula": None,
@@ -3088,14 +3300,29 @@ def _serialize_bom_entry(entry: ProjectBomEntry) -> dict:
         "subtype_depth": 0,
         "quantity": entry.quantity,
         "quantity_state": quantity_state,
+        "effective_quantity": entry.quantity,
+        "effective_quantity_state": quantity_state,
         "assembly_quantity": entry.assembly_quantity,
         "assembly_quantity_state": assembly_state,
+        "effective_assembly_quantity": entry.assembly_quantity,
+        "effective_assembly_quantity_state": assembly_state,
+        "inheritance_mode": entry.inheritance_mode,
+        "inherited_from_subtype_id": None,
+        "inherited_from_subtype": None,
         "unit": entry.unit or entry.material.unit,
         "calculation_mode": entry.calculation_mode.value,
         "calculation_formula": entry.calculation_formula,
         "calculation_explanation": _build_formula_explanation(entry),
         "is_persisted": True,
     }
+
+
+def _quantity_state(value: float | None) -> str:
+    if value is None:
+        return "blank"
+    if value == 0:
+        return "zero"
+    return "value"
 
 
 def _build_formula_explanation(entry: ProjectBomEntry) -> str | None:

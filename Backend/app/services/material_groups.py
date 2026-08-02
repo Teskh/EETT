@@ -27,6 +27,8 @@ from app.services.house_type_links import (
     expected_quantities_for_link,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
+    linked_projects_bom_fingerprint,
+    link_missing_quantity_count,
     load_house_type_links,
     resolve_house_type_link,
 )
@@ -459,6 +461,7 @@ def get_material_dashboard_group_economic_metrics(
             "groups": _group_economic_fingerprint(groups),
             "schema": "cost-breakdown-v1",
             "links": house_type_links_fingerprint(session),
+            "bom": linked_projects_bom_fingerprint(session),
             "movement_days": movement_window_days,
             "start_date": requested_start_day.isoformat(),
             "end_date": requested_end_day.isoformat(),
@@ -515,7 +518,7 @@ def get_material_dashboard_group_economic_metrics(
             "range_start": production.get("range_start"),
             "range_end": production.get("range_end"),
             "total_house_starts": sum(int(row.get("house_starts") or 0) for row in start_grid),
-            "total_mapped_house_starts": _count_mapped_house_starts(start_grid, links_by_key),
+            "total_mapped_house_starts": _count_mapped_house_starts(start_grid, links_by_key, expected_maps),
             "link_count": len(links_by_key),
             "metrics": metrics,
             "generated_at": datetime.utcnow().isoformat(),
@@ -784,13 +787,14 @@ def _group_normalized_price_delta(
     }
 
 
-def _count_mapped_house_starts(start_grid: list[dict], links_by_key: dict) -> int:
+def _count_mapped_house_starts(start_grid: list[dict], links_by_key: dict, expected_maps: dict) -> int:
     total = 0
     for row in start_grid:
         house_type_id = int(row.get("house_type_id") or 0)
         sub_type_raw = row.get("sub_type_id")
         sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
-        if resolve_house_type_link(links_by_key, house_type_id, sub_type_id) is not None:
+        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
+        if link is not None and link_missing_quantity_count(link, expected_maps) == 0:
             total += int(row.get("house_starts") or 0)
     return total
 

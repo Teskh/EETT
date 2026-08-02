@@ -88,13 +88,27 @@ function LinkTargetSelects({
         }
         className={SELECT_CLASSES}
       >
-        <option value="">General</option>
+        <option value="">
+          General
+          {selectedProject && !selectedProject.general_is_complete
+            ? ` — incompleto (${selectedProject.general_missing_quantity_count})`
+            : ""}
+        </option>
         {(selectedProject?.subtypes || []).map((subtype) => (
           <option key={subtype.id} value={subtype.id}>
             {subtype.name}
+            {subtype.is_complete === false ? ` — incompleto (${subtype.missing_quantity_count ?? 0})` : ""}
           </option>
         ))}
       </select>
+      {selectedProject &&
+      (target.projectSubtypeId === null
+        ? !selectedProject.general_is_complete
+        : selectedProject.subtypes.find((item) => item.id === target.projectSubtypeId)?.is_complete === false) ? (
+        <p className="sm:col-span-2 text-[10px] text-amber-700 dark:text-amber-300">
+          Este destino tiene cantidades sin definir. No se usará para pronósticos hasta completarlas.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -247,6 +261,10 @@ function ProductionStartsTable({ range }: { range: HouseRange }) {
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                       {house.mapped_project_name}
                       {house.mapped_project_subtype_name ? ` · ${house.mapped_project_subtype_name}` : ""}
+                    </span>
+                  ) : house.mapping_issue === "incomplete_bom" ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
+                      ⚠ BOM incompleta ({house.missing_quantity_count})
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">

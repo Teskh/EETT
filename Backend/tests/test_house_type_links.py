@@ -188,10 +188,23 @@ class MappedComparisonTests(unittest.TestCase):
                     "sub_type_id": None,
                     "sub_type_name": None,
                     "house_starts": 3,
+                    "reason": "unmapped",
+                    "missing_quantity_count": 0,
                 }
             ],
         )
         self.assertEqual(result["mapped_projects"], [{"project_id": 10, "project_name": "Casa 54"}])
+
+    def test_incomplete_bom_link_is_not_counted_as_a_confident_mapping(self) -> None:
+        expected_maps = {
+            **EXPECTED_MAPS,
+            10: {**EXPECTED_MAPS[10], "missing_by_subtype": {None: 0, 77: 2}},
+        }
+        result = self.build(expected_maps=expected_maps)
+        self.assertEqual(result["total_mapped_house_starts"], 1)
+        incomplete = next(row for row in result["unmapped_summary"] if row["house_type_id"] == 1)
+        self.assertEqual(incomplete["reason"], "incomplete_bom")
+        self.assertEqual(incomplete["missing_quantity_count"], 2)
 
     def test_points_cover_full_window_with_cumulatives(self) -> None:
         result = self.build()

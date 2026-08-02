@@ -72,6 +72,7 @@ export function MaterialProjectUsageModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
+  const [selectedSheetSubtypeId, setSelectedSheetSubtypeId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -89,6 +90,7 @@ export function MaterialProjectUsageModal({
         }
         setData(response);
         setSelectedItemKey(response.items[0] ? projectUsageItemKey(response.items[0]) : null);
+        setSelectedSheetSubtypeId(response.items[0]?.breakdown[0]?.subtype_id ?? null);
       } catch (err) {
         if (cancelled) {
           return;
@@ -96,6 +98,7 @@ export function MaterialProjectUsageModal({
         setError(err instanceof ApiError ? err.message : "No se pudo cargar el uso de proyecto para este material.");
         setData(null);
         setSelectedItemKey(null);
+        setSelectedSheetSubtypeId(null);
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -115,6 +118,9 @@ export function MaterialProjectUsageModal({
     }
     return data.items.find((item) => projectUsageItemKey(item) === selectedItemKey) || data.items[0];
   }, [data?.items, selectedItemKey]);
+  const selectedBreakdown = selectedItem?.breakdown.find((row) => row.subtype_id === selectedSheetSubtypeId)
+    ?? selectedItem?.breakdown[0]
+    ?? null;
 
   return (
     <Modal
@@ -140,7 +146,7 @@ export function MaterialProjectUsageModal({
                 {(data?.item_count ?? 0).toString()} ítems
               </span>
               <span className="rounded-full border border-black/10 px-3 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                {formatQuantity(data?.total_quantity ?? 0)} {data?.unit || material.unit || ""}
+                {data?.total_quantity === null ? "Por escenario" : formatQuantity(data?.total_quantity ?? 0)} {data?.unit || material.unit || ""}
               </span>
             </div>
           </div>
@@ -172,7 +178,10 @@ export function MaterialProjectUsageModal({
                 return (
                   <div
                     key={projectUsageItemKey(item)}
-                    onClick={() => setSelectedItemKey(projectUsageItemKey(item))}
+                    onClick={() => {
+                      setSelectedItemKey(projectUsageItemKey(item));
+                      setSelectedSheetSubtypeId(item.breakdown[0]?.subtype_id ?? null);
+                    }}
                     className={`cursor-pointer rounded-2xl border p-4 transition-colors ${
                       active
                         ? "border-accent-500/50 bg-accent-50/60 dark:border-accent-500/40 dark:bg-accent-500/10"
@@ -188,7 +197,7 @@ export function MaterialProjectUsageModal({
                       </div>
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
-                          <FactoryQuantityLabel /> {formatQuantity(item.total_quantity)} {item.unit || material.unit || ""}
+                          <FactoryQuantityLabel /> {item.total_quantity === null ? "Por escenario" : formatQuantity(item.total_quantity)} {item.unit || material.unit || ""}
                         </span>
                         <span className="rounded-full border border-black/10 px-2.5 py-1 text-[11px] font-mono text-zinc-600 dark:border-white/10 dark:text-zinc-300">
                           {item.has_calculation_sheet ? `${item.calculation_sheet_cell_count} celdas de planilla` : "Sin planilla guardada"}
@@ -223,8 +232,26 @@ export function MaterialProjectUsageModal({
                         </thead>
                         <tbody>
                           {item.breakdown.map((breakdown, index) => (
-                            <tr key={`${projectUsageItemKey(item)}-${breakdown.subtype_id ?? "general"}-${index}`} className="border-t border-black/5 dark:border-white/5">
-                              <td className="px-3 py-2 text-zinc-900 dark:text-white">{breakdown.subtype_name}</td>
+                            <tr
+                              key={`${projectUsageItemKey(item)}-${breakdown.subtype_id ?? "general"}-${index}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedItemKey(projectUsageItemKey(item));
+                                setSelectedSheetSubtypeId(breakdown.subtype_id);
+                              }}
+                              className={`border-t border-black/5 dark:border-white/5 ${
+                                active && selectedSheetSubtypeId === breakdown.subtype_id ? "bg-accent-50 dark:bg-accent-500/10" : ""
+                              }`}
+                            >
+                              <td className="px-3 py-2 text-zinc-900 dark:text-white">
+                                {breakdown.subtype_name}
+                                {breakdown.inherited_from_subtype_name ? (
+                                  <span className="ml-2 text-[10px] text-zinc-500">hereda de {breakdown.inherited_from_subtype_name}</span>
+                                ) : null}
+                                {breakdown.inheritance_mode === "add" ? (
+                                  <span className="ml-2 text-[10px] text-accent-700 dark:text-accent-300">suma al heredado</span>
+                                ) : null}
+                              </td>
                               <td className="px-3 py-2 text-right font-mono text-zinc-700 dark:text-zinc-200">
                                 {quantityStateLabel(breakdown.quantity, breakdown.quantity_state)}
                               </td>
@@ -255,6 +282,8 @@ export function MaterialProjectUsageModal({
                     material_name: data.material_name || material.material_name,
                     sku: data.sku,
                   }}
+                  subtypeId={selectedBreakdown?.subtype_id ?? null}
+                  subtypeName={selectedBreakdown?.subtype_name ?? "General"}
                 />
               ) : selectedItem ? (
                 <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-black/10 px-6 py-10 text-sm text-zinc-500 dark:border-white/10 dark:text-zinc-400">

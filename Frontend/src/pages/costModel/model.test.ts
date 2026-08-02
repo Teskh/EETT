@@ -28,7 +28,7 @@ function row(overrides: Partial<CostModelRow> = {}): CostModelRow {
 }
 
 describe("cost model review state", () => {
-  it("uses adjustments in the combined quantity", () => {
+  it("does not combine mutually exclusive subtype scenarios", () => {
     const adjusted = row({
       adjustments: [
         {
@@ -48,7 +48,7 @@ describe("cost model review state", () => {
       ],
     });
 
-    expect(computeRowQuantity(adjusted)).toBe(5.5);
+    expect(computeRowQuantity(adjusted)).toBeNull();
     expect(matchesCostModelReviewFilter(adjusted, "adjusted")).toBe(true);
   });
 

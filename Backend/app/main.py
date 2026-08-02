@@ -235,6 +235,7 @@ from app.services.projects import (
     delete_project_instance_material,
     delete_project,
     delete_project_subtype,
+    get_project_subtype_deletion_impact,
     delete_project_instance,
     get_project_instance_data,
     get_project_occurrence_data,
@@ -370,6 +371,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         comparison: dict,
         *,
         project_id: int | None,
+        project_subtype_id: int | None,
         sku_factors: dict[str, float],
         session: Session,
         current_user,
@@ -380,6 +382,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_comparison = get_material_dashboard_project_comparison(
             session,
             project_id=project_id,
+            project_subtype_id=project_subtype_id,
             sku_factors=sku_factors,
             total_house_starts=int(comparison.get("total_house_starts") or 0),
         )
@@ -1481,6 +1484,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 name=payload.name,
                 parent_id=payload.parent_id,
+                kind=payload.kind,
                 actor_user=current_user,
                 mutation_batch_id=mutation_batch_id,
             )
@@ -1507,6 +1511,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 subtype_id=subtype_id,
                 name=payload.name,
+                kind=payload.kind,
                 actor_user=current_user,
                 mutation_batch_id=mutation_batch_id,
             )
@@ -1520,6 +1525,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def delete_project_subtype_v1(
         project_id: int,
         subtype_id: int,
+        confirm_impact: bool = False,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
         mutation_batch_id: str | None = Depends(get_mutation_batch_id),
@@ -1528,16 +1534,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_edit(current_user, project)
-        deleted = delete_project_subtype(
-            session,
-            project=project,
-            subtype_id=subtype_id,
-            actor_user=current_user,
-            mutation_batch_id=mutation_batch_id,
-        )
+        try:
+            deleted = delete_project_subtype(
+                session,
+                project=project,
+                subtype_id=subtype_id,
+                confirm_impact=confirm_impact,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not deleted:
             raise HTTPException(status_code=404, detail="Project subtype not found")
         return {"ok": True, "project_id": project.id, "deleted_id": subtype_id}
+
+    @app.get("/api/v1/projects/{project_id}/subtypes/{subtype_id}/deletion-impact")
+    async def project_subtype_deletion_impact_v1(
+        project_id: int,
+        subtype_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            return get_project_subtype_deletion_impact(session, project=project, subtype_id=subtype_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/v1/projects/{project_id}/instances", response_model=ProjectInstanceMutationResultModel)
     async def create_project_instance_v1(
@@ -1799,6 +1825,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "subtype_id": row.subtype_id,
                         "quantity": row.quantity,
                         "assembly_quantity": row.assembly_quantity,
+                        "inheritance_mode": row.inheritance_mode,
                     }
                     for row in payload.entries
                 ],
@@ -1847,6 +1874,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         instance_id: int,
         rule_id: int,
+        subtype_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -1860,6 +1888,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 instance_id=instance_id,
                 rule_id=rule_id,
+                subtype_id=subtype_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1889,6 +1918,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 project=project,
                 instance_id=instance_id,
                 rule_id=rule_id,
+                subtype_id=payload.subtype_id,
                 cells=[
                     {
                         "row_index": row.row_index,
@@ -3032,6 +3062,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             comparison = attach_project_comparison(
                 comparison,
                 project_id=payload.project_id,
+                project_subtype_id=payload.project_subtype_id,
                 sku_factors={sku: 1.0},
                 session=session,
                 current_user=current_user,

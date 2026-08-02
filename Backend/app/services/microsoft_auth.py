@@ -79,6 +79,10 @@ def authorize_url(config: MicrosoftAuthConfig, *, state: str) -> str:
         "scope": " ".join(DEFAULT_SCOPES),
         "state": state,
         "prompt": "select_account",
+        # Keep account discovery on the Entra work/school path. Without this,
+        # Microsoft may select a personal (live.com) identity that happens to
+        # use the same email address and the tenant will correctly reject it.
+        "domain_hint": "organizations",
     }
     return f"{config.authorize_endpoint}?{urlencode(params)}"
 

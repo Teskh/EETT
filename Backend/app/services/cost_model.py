@@ -25,14 +25,15 @@ from app.services.projects import get_project_view_data, get_project_with_detail
 def _flatten_subtypes(nodes: list[dict[str, Any]], *, depth: int = 0) -> list[dict[str, Any]]:
     flat: list[dict[str, Any]] = []
     for node in nodes:
-        flat.append(
-            {
-                "id": node["id"],
-                "name": node["name"],
-                "parent_id": node.get("parent_id"),
-                "depth": depth,
-            }
-        )
+        if node.get("kind", "variant") == "variant":
+            flat.append(
+                {
+                    "id": node["id"],
+                    "name": node.get("path") or node["name"],
+                    "parent_id": node.get("parent_id"),
+                    "depth": depth,
+                }
+            )
         flat.extend(_flatten_subtypes(node.get("children", []), depth=depth + 1))
     return flat
 
@@ -173,7 +174,11 @@ def get_cost_model_view(
                 "material_name": entry["material_name"],
                 "unit": entry["unit"],
                 "price": entry["price"],
-                "estimated_total_quantity": round(estimated_sum, 6) if estimated_sum_is_numeric else None,
+                "estimated_total_quantity": (
+                    round(estimated_sum, 6)
+                    if estimated_sum_is_numeric and not any(item["subtype_id"] is not None for item in subtypes_payload)
+                    else None
+                ),
                 "subtypes": subtypes_payload,
                 "instances": entry["instances"],
                 "adjustments": adjustment_rows,
@@ -198,7 +203,7 @@ def get_cost_model_view(
                 "estimated_total_quantity": 1.0,
                 "subtypes": [
                     {
-                        "subtype_id": None,
+                        "subtype_id": auxiliary.get("subtype_id"),
                         "subtype_name": auxiliary.get("subtype") or "General",
                         "estimated_quantity": 1.0,
                     }

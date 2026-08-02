@@ -23,6 +23,24 @@ def build_materials_workbook(project_data: dict[str, Any], output_path: Any) -> 
     workbook.remove(workbook.active)
 
     context_rows = list(iter_material_context_rows(project_data))
+    context_rows.extend(
+        {
+            "category_label": auxiliary.get("category") or "Materiales auxiliares",
+            "category_depth": 0,
+            "instance_name": "Materiales auxiliares",
+            "instance_label": "Materiales auxiliares",
+            "material_name": auxiliary.get("name") or auxiliary.get("code") or "Material auxiliar",
+            "sku": auxiliary.get("code") or "",
+            "unit": "",
+            "subtype": auxiliary.get("subtype") or "General",
+            "quantity": 1.0,
+            "quantity_state": "value",
+            "assembly_quantity": None,
+            "assembly_quantity_state": "blank",
+        }
+        for auxiliary in project_data.get("auxiliary_materials", [])
+        if str(auxiliary.get("code") or "").strip()
+    )
 
     totals_sheet = workbook.create_sheet("Total Materiales")
     _populate_total_materials_sheet(totals_sheet, context_rows)
@@ -175,7 +193,7 @@ def _build_cost_model_rows(
                 "material_id": None,
                 "sku": code,
                 "unit": "",
-                "subtype_id": None,
+                "subtype_id": auxiliary.get("subtype_id"),
                 "quantity": 1.0,
                 "price": _coerce_optional_float(auxiliary.get("price")),
                 "is_auxiliary": True,
@@ -505,8 +523,8 @@ def _set_column_widths(ws, widths: dict[str, float]) -> None:
 def _flatten_subtype_names(nodes: list[dict[str, Any]]) -> list[str]:
     names: list[str] = []
     for node in nodes:
-        name = str(node.get("name") or "").strip()
-        if name:
+        name = str(node.get("path") or node.get("name") or "").strip()
+        if name and node.get("kind", "variant") == "variant":
             names.append(name)
         names.extend(_flatten_subtype_names(node.get("children", [])))
     return names

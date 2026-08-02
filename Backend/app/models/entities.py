@@ -566,11 +566,21 @@ class ProjectMembership(Base):
 
 class ProjectSubtype(Base):
     __tablename__ = "project_subtypes"
+    __table_args__ = (
+        Index(
+            "uq_project_subtypes_sibling_name",
+            "project_id",
+            text("COALESCE(parent_id, 0)"),
+            text("lower(name)"),
+            unique=True,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="variant", nullable=False)
 
     project: Mapped[Project] = relationship(back_populates="subtypes")
     parent: Mapped["ProjectSubtype | None"] = relationship(remote_side="ProjectSubtype.id", back_populates="children")
@@ -895,6 +905,7 @@ class ProjectBomEntry(Base):
     subtype_id: Mapped[int | None] = mapped_column(ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None)
     quantity: Mapped[float | None] = mapped_column(Float, default=None)
     assembly_quantity: Mapped[float | None] = mapped_column(Float, default=None)
+    inheritance_mode: Mapped[str] = mapped_column(String(20), default="override", nullable=False)
     unit: Mapped[str | None] = mapped_column(String(50), default=None)
     calculation_mode: Mapped[BomCalculationMode] = mapped_column(
         enum_column(BomCalculationMode, "bom_calculation_mode"),
@@ -915,18 +926,40 @@ class ProjectBomEntry(Base):
 
 class ProjectMaterialCalculationSheet(Base):
     __tablename__ = "project_material_calculation_sheets"
-    __table_args__ = (UniqueConstraint("project_id", "instance_id", "material_id"),)
+    __table_args__ = (
+        Index(
+            "uq_project_material_calculation_sheets_general",
+            "project_id",
+            "instance_id",
+            "material_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NULL"),
+        ),
+        Index(
+            "uq_project_material_calculation_sheets_subtype",
+            "project_id",
+            "instance_id",
+            "material_id",
+            "subtype_id",
+            unique=True,
+            postgresql_where=text("subtype_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("project_instances.id", ondelete="CASCADE"), nullable=False)
     material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), nullable=False)
+    subtype_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
     project: Mapped[Project] = relationship(back_populates="calculation_sheets")
     instance: Mapped[ProjectInstance] = relationship(back_populates="calculation_sheets")
     material: Mapped[Material] = relationship(back_populates="calculation_sheets")
+    subtype: Mapped[ProjectSubtype | None] = relationship()
     cells: Mapped[list["ProjectMaterialCalculationCell"]] = relationship(
         back_populates="sheet",
         cascade="all, delete-orphan",

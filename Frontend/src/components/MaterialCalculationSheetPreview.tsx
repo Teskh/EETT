@@ -30,6 +30,8 @@ type MaterialCalculationSheetPreviewProps = {
   instanceId: number;
   instanceName: string;
   material: MaterialCalculationSheetPreviewMaterial;
+  subtypeId?: number | null;
+  subtypeName?: string | null;
 };
 
 function firstSelectedCell(sheet: MaterialCalculationSheet): SelectedCell {
@@ -48,6 +50,8 @@ export function MaterialCalculationSheetPreview({
   instanceId,
   instanceName,
   material,
+  subtypeId = null,
+  subtypeName = null,
 }: MaterialCalculationSheetPreviewProps) {
   const [sheet, setSheet] = useState<MaterialCalculationSheet | null>(null);
   const [loading, setLoading] = useState(false);
@@ -64,7 +68,7 @@ export function MaterialCalculationSheetPreview({
       setLoading(true);
       setError(null);
       try {
-        const response = await api.getMaterialCalculationSheet(projectId, instanceId, material.rule_id);
+        const response = await api.getMaterialCalculationSheet(projectId, instanceId, material.rule_id, subtypeId);
         if (cancelled) {
           return;
         }
@@ -96,7 +100,7 @@ export function MaterialCalculationSheetPreview({
     return () => {
       cancelled = true;
     };
-  }, [instanceId, material.rule_id, projectId]);
+  }, [instanceId, material.rule_id, projectId, subtypeId]);
 
   const evaluation = evaluateCalculationSheet(cellMap);
   const selectedKey = calculationCellKey(selectedCell.rowIndex, selectedCell.columnIndex);
@@ -115,7 +119,7 @@ export function MaterialCalculationSheetPreview({
               {instanceName} | {material.sku}
             </p>
             <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-              Vista previa de solo lectura de la planilla de razonamiento de <FactoryQuantityLabel /> guardada para este par ítem/material.
+              Vista previa de solo lectura de la planilla de <FactoryQuantityLabel /> para {subtypeName || "General"}.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">

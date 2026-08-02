@@ -36,17 +36,10 @@ export function computeDisplayedQuantity(row: CostModelRow, subtypeId: number | 
 }
 
 export function computeRowQuantity(row: CostModelRow): number | null {
-  let total = 0;
-  let hasAny = false;
-  for (const subtype of row.subtypes) {
-    const value = computeDisplayedQuantity(row, subtype.subtype_id);
-    if (value === null || value === undefined || !Number.isFinite(value)) {
-      continue;
-    }
-    total += value;
-    hasAny = true;
+  if (row.subtypes.some((subtype) => subtype.subtype_id !== null)) {
+    return null;
   }
-  return hasAny ? total : null;
+  return computeDisplayedQuantity(row, null);
 }
 
 export function quantityCost(quantity: number | null, price: number | null): number | null {

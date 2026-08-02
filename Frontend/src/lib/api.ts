@@ -51,6 +51,7 @@ import type {
   InstanceSyncPreview,
   ProjectDetailData,
   ProjectComment,
+  ProjectSubtypeDeletionImpact,
   ProjectsBoardData,
   RolePageAccessUpdateRequest,
   SessionUser,
@@ -181,6 +182,7 @@ type MaterialDashboardRequestOptions = {
   startDate?: string;
   endDate?: string;
   projectId?: number | null;
+  projectSubtypeId?: number | null;
 };
 
 type MaterialDashboardFilterSelection = {
@@ -497,6 +499,7 @@ export const api = {
         ...buildMaterialDashboardFilterPayload(filters),
         house_type_id: houseTypeId,
         project_id: options.projectId ?? null,
+        project_subtype_id: options.projectSubtypeId ?? null,
         start_date: options.startDate ?? null,
         end_date: options.endDate ?? null,
         refresh: Boolean(options.refresh),
@@ -651,8 +654,12 @@ export const api = {
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  deleteProjectSubtype(projectId: number, subtypeId: number, mutationBatchId?: string) {
-    return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}`, {
+  getProjectSubtypeDeletionImpact(projectId: number, subtypeId: number) {
+    return request<ProjectSubtypeDeletionImpact>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}/deletion-impact`);
+  },
+  deleteProjectSubtype(projectId: number, subtypeId: number, confirmImpact = false, mutationBatchId?: string) {
+    const query = confirmImpact ? "?confirm_impact=true" : "";
+    return request<MutationResult>(`/api/v1/projects/${projectId}/subtypes/${subtypeId}${query}`, {
       method: "DELETE",
       headers: mutationHeaders(mutationBatchId),
     });
@@ -717,8 +724,9 @@ export const api = {
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  getMaterialCalculationSheet(projectId: number, instanceId: number, ruleId: number) {
-    return request<MaterialCalculationSheet>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}/calculation-sheet`);
+  getMaterialCalculationSheet(projectId: number, instanceId: number, ruleId: number, subtypeId: number | null = null) {
+    const query = subtypeId === null ? "" : `?subtype_id=${subtypeId}`;
+    return request<MaterialCalculationSheet>(`/api/v1/projects/${projectId}/instances/${instanceId}/materials/${ruleId}/calculation-sheet${query}`);
   },
   updateMaterialCalculationSheet(
     projectId: number,

@@ -121,13 +121,13 @@ function SubtypeNodeEditor({
   subtype,
   pendingSubtypeId,
   onCreateChild,
-  onRename,
+  onUpdate,
   onDelete,
 }: {
   subtype: ProjectSubtype;
   pendingSubtypeId: number | "root" | null;
   onCreateChild: (parentId: number) => Promise<void>;
-  onRename: (subtypeId: number, name: string) => Promise<void>;
+  onUpdate: (subtypeId: number, name: string, kind: "group" | "variant") => Promise<void>;
   onDelete: (subtypeId: number) => Promise<void>;
 }) {
   const [draftName, setDraftName] = useState(subtype.name);
@@ -142,7 +142,7 @@ function SubtypeNodeEditor({
       setDraftName(subtype.name);
       return;
     }
-    await onRename(subtype.id, nextName);
+    await onUpdate(subtype.id, nextName, subtype.kind);
   }
 
   return (
@@ -162,6 +162,18 @@ function SubtypeNodeEditor({
             }}
             className="min-w-0 flex-1 bg-white dark:bg-black/30 border border-black/10 dark:border-white/10 rounded px-2 py-1 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-accent-500/50"
           />
+          <select
+            value={subtype.kind}
+            disabled={pendingSubtypeId === subtype.id}
+            onChange={(event) =>
+              void onUpdate(subtype.id, draftName.trim() || subtype.name, event.target.value as "group" | "variant")
+            }
+            className="bg-white dark:bg-black/30 border border-black/10 dark:border-white/10 rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300"
+            title="Los grupos solo organizan; las variantes pueden tener cantidades y vínculos"
+          >
+            <option value="variant">Variante</option>
+            <option value="group">Grupo</option>
+          </select>
           <button
             type="button"
             disabled={pendingSubtypeId === subtype.id}
@@ -188,7 +200,7 @@ function SubtypeNodeEditor({
               subtype={child}
               pendingSubtypeId={pendingSubtypeId}
               onCreateChild={onCreateChild}
-              onRename={onRename}
+              onUpdate={onUpdate}
               onDelete={onDelete}
             />
           ))}
@@ -402,14 +414,14 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     }
   }
 
-  async function handleRenameSubtype(subtypeId: number, name: string) {
+  async function handleUpdateSubtype(subtypeId: number, name: string, kind: "group" | "variant") {
     if (!subtypeModal) {
       return;
     }
     setPendingSubtypeId(subtypeId);
     setError(null);
     try {
-      await api.updateProjectSubtype(subtypeModal.projectId, subtypeId, { name });
+      await api.updateProjectSubtype(subtypeModal.projectId, subtypeId, { name, kind });
       await refreshSubtypeProject(subtypeModal.projectId);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "No se pudo renombrar el subtipo.";
@@ -423,14 +435,24 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     if (!subtypeModal) {
       return;
     }
-    const confirmed = window.confirm("¿Eliminar este subtipo y todas sus filas anidadas?");
-    if (!confirmed) {
-      return;
-    }
     setPendingSubtypeId(subtypeId);
     setError(null);
     try {
-      await api.deleteProjectSubtype(subtypeModal.projectId, subtypeId);
+      const impact = await api.getProjectSubtypeDeletionImpact(subtypeModal.projectId, subtypeId);
+      const confirmed = window.confirm(
+        [
+          `¿Eliminar ${impact.subtype_count} subtipo(s)?`,
+          `${impact.bom_rows} filas BOM`,
+          `${impact.cost_adjustments} ajustes de costo`,
+          `${impact.calculation_sheets} planillas de cálculo`,
+          `${impact.auxiliary_materials} materiales auxiliares`,
+          `${impact.production_links} vínculos de producción quedarán sin vincular`,
+        ].join("\n"),
+      );
+      if (!confirmed) {
+        return;
+      }
+      await api.deleteProjectSubtype(subtypeModal.projectId, subtypeId, true);
       await refreshSubtypeProject(subtypeModal.projectId);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "No se pudo eliminar el subtipo.";
@@ -963,7 +985,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                   subtype={subtype}
                   pendingSubtypeId={pendingSubtypeId}
                   onCreateChild={handleCreateSubtype}
-                  onRename={handleRenameSubtype}
+                  onUpdate={handleUpdateSubtype}
                   onDelete={handleDeleteSubtype}
                 />
               ))

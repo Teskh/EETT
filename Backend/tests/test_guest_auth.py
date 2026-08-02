@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -16,6 +17,7 @@ from app.services.auth import (
     role_codes,
 )
 from app.services.projects import get_projects_page_data
+from app.services.microsoft_auth import MicrosoftAuthConfig, authorize_url
 from app.services.user_admin import update_user, validate_assignable_role_codes
 
 
@@ -104,6 +106,19 @@ class GuestAuthTests(unittest.TestCase):
         )
 
         self.assertEqual(role_codes(promoted), {"editor"})
+
+    def test_microsoft_login_is_restricted_to_organizational_account_discovery(self) -> None:
+        config = MicrosoftAuthConfig(
+            tenant_id="tenant",
+            client_id="client",
+            client_secret="secret",
+            redirect_uri="https://app.example.com/api/v1/auth/microsoft/callback",
+        )
+
+        query = parse_qs(urlsplit(authorize_url(config, state="state")).query)
+
+        self.assertEqual(query["domain_hint"], ["organizations"])
+        self.assertEqual(query["prompt"], ["select_account"])
 
 
 if __name__ == "__main__":

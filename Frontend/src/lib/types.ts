@@ -131,6 +131,8 @@ export type MaterialDashboardMovementData = {
 export type MaterialDashboardHouseSubType = {
   id: number;
   name: string;
+  is_complete?: boolean | null;
+  missing_quantity_count?: number;
 };
 
 export type MaterialDashboardHouseType = {
@@ -155,6 +157,8 @@ export type HouseTypeLink = {
   project_subtype_id: number | null;
   project_subtype_name: string | null;
   updated_at: string | null;
+  is_complete: boolean;
+  missing_quantity_count: number;
 };
 
 export type HouseTypeLinkPayload = {
@@ -170,6 +174,8 @@ export type LinkTargetProject = {
   id: number;
   name: string;
   status: string;
+  general_is_complete: boolean;
+  general_missing_quantity_count: number;
   subtypes: MaterialDashboardHouseSubType[];
 };
 
@@ -195,6 +201,8 @@ export type ProductionHouseStart = {
   mapped_project_subtype_id: number | null;
   mapped_project_subtype_name: string | null;
   mapped_via_sub_type: boolean;
+  mapping_issue: "incomplete_bom" | null;
+  missing_quantity_count: number;
 };
 
 export type ProductionHouseStartsData = {
@@ -342,6 +350,8 @@ export type MaterialDashboardUnmappedStarts = {
   sub_type_id: number | null;
   sub_type_name: string | null;
   house_starts: number;
+  reason: "unmapped" | "incomplete_bom";
+  missing_quantity_count: number;
 };
 
 export type MaterialDashboardExpectedBreakdown = {
@@ -388,6 +398,8 @@ export type MaterialDashboardMaterialStudyData = {
 export type MaterialDashboardProjectUsageBreakdownEntry = {
   subtype_id: number | null;
   subtype_name: string;
+  inheritance_mode: "override" | "add";
+  inherited_from_subtype_name: string | null;
   quantity: number | null;
   quantity_state: string;
   assembly_quantity: number | null;
@@ -396,6 +408,9 @@ export type MaterialDashboardProjectUsageBreakdownEntry = {
   calculation_mode: string;
   calculation_formula: string | null;
   calculation_explanation: string | null;
+  has_calculation_sheet: boolean;
+  calculation_sheet_cell_count: number;
+  calculation_sheet_updated_at: string | null;
 };
 
 export type MaterialDashboardProjectUsageItem = {
@@ -406,7 +421,7 @@ export type MaterialDashboardProjectUsageItem = {
   rule_id: number | null;
   material_id: number;
   unit_qty_per_unit: number | null;
-  total_quantity: number;
+  total_quantity: number | null;
   blank_quantity_count: number;
   zero_quantity_count: number;
   unit: string | null;
@@ -424,7 +439,7 @@ export type MaterialDashboardProjectUsageData = {
   sku: string;
   material_name: string | null;
   unit: string | null;
-  total_quantity: number;
+  total_quantity: number | null;
   item_count: number;
   items: MaterialDashboardProjectUsageItem[];
   generated_at: string;
@@ -771,6 +786,8 @@ export type ProjectSubtype = {
   id: number;
   parent_id: number | null;
   name: string;
+  path: string;
+  kind: "group" | "variant";
   children: ProjectSubtype[];
 };
 
@@ -820,10 +837,17 @@ export type BomEntry = {
   subtype_id: number | null;
   subtype: string;
   subtype_depth: number;
+  inheritance_mode: "override" | "add";
   quantity: number | null;
   quantity_state: string;
+  effective_quantity: number | null;
+  effective_quantity_state: string;
   assembly_quantity: number | null;
   assembly_quantity_state: string;
+  effective_assembly_quantity: number | null;
+  effective_assembly_quantity_state: string;
+  inherited_from_subtype_id: number | null;
+  inherited_from_subtype: string | null;
   unit: string | null;
   calculation_mode: string;
   calculation_formula: string | null;
@@ -869,6 +893,8 @@ export type MaterialCalculationSheet = {
   instance_id: number;
   rule_id: number;
   material_id: number;
+  subtype_id: number | null;
+  subtype_name: string;
   material_name: string;
   sku: string;
   cell_count: number;
@@ -985,6 +1011,7 @@ export type AuxiliaryMaterialSelection = {
   name: string;
   category: string | null;
   price: number;
+  subtype_id: number | null;
   subtype: string;
 };
 
@@ -1258,16 +1285,31 @@ export type CommentContext = {
 export type CreateProjectSubtypeRequest = {
   name: string;
   parent_id?: number | null;
+  kind?: "group" | "variant";
 };
 
 export type UpdateProjectSubtypeRequest = {
   name: string;
+  kind?: "group" | "variant";
+};
+
+export type ProjectSubtypeDeletionImpact = {
+  subtype_id: number;
+  subtype_ids: number[];
+  subtype_names: string[];
+  subtype_count: number;
+  bom_rows: number;
+  cost_adjustments: number;
+  calculation_sheets: number;
+  auxiliary_materials: number;
+  production_links: number;
 };
 
 export type MaterialOccurrenceEntryInput = {
   subtype_id?: number | null;
   quantity?: number | null;
   assembly_quantity?: number | null;
+  inheritance_mode?: "override" | "add";
 };
 
 export type UpdateMaterialOccurrenceRequest = {
@@ -1276,6 +1318,7 @@ export type UpdateMaterialOccurrenceRequest = {
 };
 
 export type UpdateMaterialCalculationSheetRequest = {
+  subtype_id?: number | null;
   cells: MaterialCalculationCell[];
 };
 

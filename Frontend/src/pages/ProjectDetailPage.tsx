@@ -73,6 +73,7 @@ type MaterialRowDraft = {
   subtype_id: number | null;
   quantity: string;
   assembly_quantity: string;
+  inheritance_mode: "override" | "add";
 };
 type TargetOption = {
   instance_id: number;
@@ -166,7 +167,7 @@ function ProjectCategoryTree({
 
 function flattenSubtypeTree(subtypes: ProjectSubtype[], depth = 0): FlatSubtype[] {
   return subtypes.flatMap((subtype) => [
-    { id: subtype.id, name: subtype.name, depth },
+    ...(subtype.kind === "variant" ? [{ id: subtype.id, name: subtype.path || subtype.name, depth }] : []),
     ...flattenSubtypeTree(subtype.children, depth + 1),
   ]);
 }
@@ -177,6 +178,7 @@ function serializeBomRows(rows: MaterialRowDraft[]) {
       subtype_id: row.subtype_id,
       quantity: row.quantity,
       assembly_quantity: row.assembly_quantity,
+      inheritance_mode: row.inheritance_mode,
     })),
   );
 }
@@ -186,6 +188,7 @@ function buildDraftRows(rows: BomEntry[]): MaterialRowDraft[] {
     subtype_id: row.subtype_id,
     quantity: row.quantity === null ? "" : String(row.quantity),
     assembly_quantity: row.assembly_quantity === null ? "" : String(row.assembly_quantity),
+    inheritance_mode: row.inheritance_mode || "override",
   }));
 }
 
@@ -217,7 +220,7 @@ function quantityStateForValue(value: number | null) {
 
 function buildLocalBomEntries(
   mode: string,
-  payloadEntries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }>,
+  payloadEntries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null; inheritance_mode?: "override" | "add" }>,
   material: InstanceMaterial,
   subtypeOptions: FlatSubtype[],
 ): BomEntry[] {
@@ -228,15 +231,23 @@ function buildLocalBomEntries(
         subtype_id: subtype.id,
         quantity: null,
         assembly_quantity: null,
+        inheritance_mode: "override" as const,
       };
       return {
         subtype_id: subtype.id,
         subtype: subtype.name,
         subtype_depth: subtype.depth,
+        inheritance_mode: entry.inheritance_mode || "override",
         quantity: entry.quantity,
         quantity_state: quantityStateForValue(entry.quantity),
+        effective_quantity: entry.quantity,
+        effective_quantity_state: quantityStateForValue(entry.quantity),
         assembly_quantity: entry.assembly_quantity,
         assembly_quantity_state: quantityStateForValue(entry.assembly_quantity),
+        effective_assembly_quantity: entry.assembly_quantity,
+        effective_assembly_quantity_state: quantityStateForValue(entry.assembly_quantity),
+        inherited_from_subtype_id: null,
+        inherited_from_subtype: null,
         unit: material.unit,
         calculation_mode: "manual",
         calculation_formula: null,
@@ -250,16 +261,24 @@ function buildLocalBomEntries(
     subtype_id: null,
     quantity: null,
     assembly_quantity: null,
+    inheritance_mode: "override" as const,
   };
   return [
     {
       subtype_id: null,
       subtype: "General",
       subtype_depth: 0,
+      inheritance_mode: "override",
       quantity: generalEntry.quantity,
       quantity_state: quantityStateForValue(generalEntry.quantity),
+      effective_quantity: generalEntry.quantity,
+      effective_quantity_state: quantityStateForValue(generalEntry.quantity),
       assembly_quantity: generalEntry.assembly_quantity,
       assembly_quantity_state: quantityStateForValue(generalEntry.assembly_quantity),
+      effective_assembly_quantity: generalEntry.assembly_quantity,
+      effective_assembly_quantity_state: quantityStateForValue(generalEntry.assembly_quantity),
+      inherited_from_subtype_id: null,
+      inherited_from_subtype: null,
       unit: material.unit,
       calculation_mode: "manual",
       calculation_formula: null,
@@ -292,6 +311,7 @@ function buildDraftDisplayRows(
         subtype_id: subtype.id,
         quantity: "",
         assembly_quantity: "",
+        inheritance_mode: "override" as const,
       };
       const persisted = bySubtypeId.get(subtype.id);
       const quantity = parseDisplayNumber(draftRow.quantity);
@@ -300,10 +320,18 @@ function buildDraftDisplayRows(
         subtype_id: subtype.id,
         subtype: subtype.name,
         subtype_depth: subtype.depth,
+        inheritance_mode: draftRow.inheritance_mode,
         quantity,
         quantity_state: quantityStateForValue(quantity),
+        effective_quantity: persisted?.effective_quantity ?? quantity,
+        effective_quantity_state: persisted?.effective_quantity_state ?? quantityStateForValue(quantity),
         assembly_quantity: assemblyQuantity,
         assembly_quantity_state: quantityStateForValue(assemblyQuantity),
+        effective_assembly_quantity: persisted?.effective_assembly_quantity ?? assemblyQuantity,
+        effective_assembly_quantity_state:
+          persisted?.effective_assembly_quantity_state ?? quantityStateForValue(assemblyQuantity),
+        inherited_from_subtype_id: persisted?.inherited_from_subtype_id ?? null,
+        inherited_from_subtype: persisted?.inherited_from_subtype ?? null,
         unit: material.unit,
         calculation_mode: persisted?.calculation_mode || "manual",
         calculation_formula: persisted?.calculation_formula || null,
@@ -317,6 +345,7 @@ function buildDraftDisplayRows(
     subtype_id: null,
     quantity: "",
     assembly_quantity: "",
+    inheritance_mode: "override" as const,
   };
   const persisted = bySubtypeId.get(null) || null;
   const quantity = parseDisplayNumber(generalDraft.quantity);
@@ -326,10 +355,18 @@ function buildDraftDisplayRows(
       subtype_id: null,
       subtype: "General",
       subtype_depth: 0,
+      inheritance_mode: "override",
       quantity,
       quantity_state: quantityStateForValue(quantity),
+      effective_quantity: persisted?.effective_quantity ?? quantity,
+      effective_quantity_state: persisted?.effective_quantity_state ?? quantityStateForValue(quantity),
       assembly_quantity: assemblyQuantity,
       assembly_quantity_state: quantityStateForValue(assemblyQuantity),
+      effective_assembly_quantity: persisted?.effective_assembly_quantity ?? assemblyQuantity,
+      effective_assembly_quantity_state:
+        persisted?.effective_assembly_quantity_state ?? quantityStateForValue(assemblyQuantity),
+      inherited_from_subtype_id: persisted?.inherited_from_subtype_id ?? null,
+      inherited_from_subtype: persisted?.inherited_from_subtype ?? null,
       unit: material.unit,
       calculation_mode: persisted?.calculation_mode || "manual",
       calculation_formula: persisted?.calculation_formula || null,
@@ -1551,7 +1588,7 @@ function MaterialOccurrenceEditor({
   material: InstanceMaterial;
   subtypeOptions: FlatSubtype[];
   onOpenCalculationSheet: () => void;
-  onUpdateMaterial: (materialKey: string, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null }> }) => Promise<void>;
+  onUpdateMaterial: (materialKey: string, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null; inheritance_mode: "override" | "add" }> }) => Promise<void>;
   onDeleteMaterial: (materialKey: string) => Promise<void>;
 }) {
   const [draftRows, setDraftRows] = useState<MaterialRowDraft[]>(() => buildDraftRows(material.bom_entries));
@@ -1600,6 +1637,7 @@ function MaterialOccurrenceEditor({
             subtype_id: row.subtype_id,
             quantity: parseNullableNumber(row.quantity),
             assembly_quantity: parseNullableNumber(row.assembly_quantity),
+            inheritance_mode: row.subtype_id === null ? "override" : row.inheritance_mode,
           })),
         });
         serverSignatureRef.current = buildMaterialDraftSignature(nextPayload.mode, nextPayload.rows);
@@ -1635,8 +1673,9 @@ function MaterialOccurrenceEditor({
           subtype_id: subtype.id,
           quantity: "",
           assembly_quantity: "",
+          inheritance_mode: "override" as const,
         }))
-      : [{ subtype_id: null, quantity: "", assembly_quantity: "" }];
+      : [{ subtype_id: null, quantity: "", assembly_quantity: "", inheritance_mode: "override" as const }];
     setDraftMode(nextMode);
     setDraftRows(nextRows);
     persistIfChanged(nextRows, nextMode);
@@ -1749,7 +1788,8 @@ function MaterialOccurrenceEditor({
               <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtipo</th>
               <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><FactoryQuantityLabel /></th>
               <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><WorkQuantityLabel /></th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Unidad</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Comportamiento</th>
+              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Unidad</th>
               <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Fuente</th>
               <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Fórmula</th>
             </tr>
@@ -1759,12 +1799,19 @@ function MaterialOccurrenceEditor({
               <tr key={`${material.material_key}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
                 <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">
                   <div style={{ paddingLeft: `${row.subtype_depth * 14}px` }}>{row.subtype}</div>
+                  {row.inherited_from_subtype ? (
+                    <div className="mt-0.5 text-[10px] font-normal text-zinc-500">
+                      Hereda de {row.inherited_from_subtype}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-sm w-1/6">
                   <input
                     value={draftRows[index]?.quantity ?? ""}
                     type="number"
                     step="any"
+                    placeholder={row.quantity === null && row.effective_quantity !== null ? String(row.effective_quantity) : undefined}
+                    title={row.inherited_from_subtype ? `Valor efectivo heredado: ${row.effective_quantity ?? "en blanco"}` : undefined}
                     onChange={(event) =>
                       setDraftRows((current) =>
                         current.map((item, itemIndex) =>
@@ -1792,6 +1839,11 @@ function MaterialOccurrenceEditor({
                     value={draftRows[index]?.assembly_quantity ?? ""}
                     type="number"
                     step="any"
+                    placeholder={
+                      row.assembly_quantity === null && row.effective_assembly_quantity !== null
+                        ? String(row.effective_assembly_quantity)
+                        : undefined
+                    }
                     onChange={(event) =>
                       setDraftRows((current) =>
                         current.map((item, itemIndex) =>
@@ -1814,7 +1866,30 @@ function MaterialOccurrenceEditor({
                     className="w-24 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-right"
                   />
                 </td>
-                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/6">{row.unit || "-"}</td>
+                <td className="px-3 py-2 w-1/6">
+                  {row.subtype_id === null ? (
+                    <span className="text-xs text-zinc-500">Base</span>
+                  ) : (
+                    <select
+                      value={draftRows[index]?.inheritance_mode ?? "override"}
+                      aria-label={`Comportamiento de ${row.subtype}`}
+                      title="Reemplazar fija el total de este subtipo; Sumar agrega la cifra al valor heredado. Deja las cantidades en blanco para heredar sin cambios."
+                      onChange={(event) => {
+                        const inheritanceMode = event.target.value as "override" | "add";
+                        const nextRows = draftRows.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, inheritance_mode: inheritanceMode } : item,
+                        );
+                        setDraftRows(nextRows);
+                        persistIfChanged(nextRows, draftMode);
+                      }}
+                      className="rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-xs"
+                    >
+                      <option value="override">Reemplazar</option>
+                      <option value="add">Sumar</option>
+                    </select>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/12">{row.unit || "-"}</td>
                 <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{translateCalculationMode(row.calculation_mode)}</td>
                 <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
                   {row.calculation_formula || "-"}
@@ -3388,6 +3463,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
           instanceId={calculationSheetState.instanceId}
           instanceName={calculationSheetState.instanceName}
           material={calculationSheetState.material}
+          subtypes={flatSubtypeOptions}
           onClose={() => setCalculationSheetState(null)}
         />
       ) : null}

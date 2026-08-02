@@ -31,12 +31,15 @@ from app.services.erp import (
     get_purchase_order_price_stats_for_products,
     get_recent_movement_materials,
 )
+from app.services.effective_bom import build_project_expected_quantity_map, effective_occurrence_rows
 from app.services.house_type_links import (
     expected_quantities_for_link,
     build_links_by_key,
     build_mapped_house_comparison,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
+    linked_projects_bom_fingerprint,
+    link_missing_quantity_count,
     load_house_type_links,
     resolve_house_type_link,
 )
@@ -68,7 +71,10 @@ def get_project_material_dashboard(session: Session, project_id: int) -> dict | 
         .where(Project.id == project_id)
         .options(
             selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.subtype),
             selectinload(Project.instances).selectinload(ProjectInstance.category),
+            selectinload(Project.subtypes),
+            selectinload(Project.material_occurrence_modes),
         )
     )
     if project is None:
@@ -86,36 +92,58 @@ def get_project_material_dashboard(session: Session, project_id: int) -> dict | 
             "material_name": None,
             "unit": None,
             "project_quantity": 0.0,
+            "scenario_quantities": {},
             "blank_quantity_count": 0,
             "instance_contexts": [],
         }
     )
 
-    for entry in project.bom_entries:
+    for effective_row in effective_occurrence_rows(project):
+        entry = effective_row["entry"]
         row = rows_by_sku[entry.material.sku]
         row["sku"] = entry.material.sku
         row["material_name"] = entry.material.name
         row["unit"] = entry.unit or entry.material.unit
-        if entry.quantity is None:
+        quantity = effective_row["quantity"]
+        if quantity is None:
             row["blank_quantity_count"] += 1
-        else:
-            row["project_quantity"] += entry.quantity
         instance = instance_by_id.get(entry.instance_id)
         row["instance_contexts"].append(
             {
                 "instance_name": instance.name if instance else None,
                 "category": instance.category.name if instance and instance.category else None,
-                "subtype": entry.subtype.name if entry.subtype else "General",
-                "quantity": entry.quantity,
+                "subtype": effective_row["subtype_name"],
+                "quantity": quantity,
             }
         )
+
+    expected = build_project_expected_quantity_map(project)
+    for sku, row in rows_by_sku.items():
+        general_quantity = float(expected["general"].get(sku, 0.0))
+        subtype_quantities = {
+            subtype_id: float(quantities.get(sku, 0.0))
+            for subtype_id, quantities in expected["by_subtype"].items()
+            if sku in quantities
+        }
+        if subtype_quantities:
+            row["project_quantity"] = None
+            row["scenario_quantities"] = {
+                expected["subtype_paths"].get(subtype_id, str(subtype_id)): round(general_quantity + quantity, 4)
+                for subtype_id, quantity in subtype_quantities.items()
+            }
+        else:
+            row["project_quantity"] = round(general_quantity, 4)
 
     rows = []
     for sku, row in sorted(rows_by_sku.items()):
         cache = cache_by_sku.get(sku)
         stock_on_hand = cache.stock_on_hand if cache and cache.stock_on_hand is not None else 0.0
         pending_po = cache.pending_purchase_quantity if cache and cache.pending_purchase_quantity is not None else 0.0
-        shortage = max(row["project_quantity"] - (stock_on_hand + pending_po), 0.0)
+        shortage = (
+            max(row["project_quantity"] - (stock_on_hand + pending_po), 0.0)
+            if row["project_quantity"] is not None
+            else None
+        )
         rows.append(
             {
                 **row,
@@ -138,23 +166,18 @@ def get_material_dashboard_project_quantity_map(
     session: Session,
     *,
     project_id: int,
+    project_subtype_id: int | None = None,
 ) -> tuple[Project | None, dict[str, float]]:
-    project = session.scalar(
-        select(Project)
-        .where(Project.id == project_id)
-        .options(selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material))
-    )
+    project = session.get(Project, project_id)
     if project is None:
         return None, {}
-
-    quantity_by_sku: dict[str, float] = defaultdict(float)
-    for entry in project.bom_entries:
-        if entry.quantity is None or entry.material is None:
-            continue
-        sku = entry.material.sku.strip().upper()
-        if not sku:
-            continue
-        quantity_by_sku[sku] += float(entry.quantity)
+    expected_maps = get_project_expected_quantity_maps(session, {project_id})
+    if project_subtype_id is not None and project_subtype_id not in expected_maps.get(project_id, {}).get("subtype_paths", {}):
+        raise ValueError("Project subtype was not found or is an organizational group.")
+    quantity_by_sku = expected_quantities_for_link(
+        {"project_id": project_id, "project_subtype_id": project_subtype_id},
+        expected_maps,
+    )
     return project, {sku: round(quantity, 4) for sku, quantity in quantity_by_sku.items()}
 
 
@@ -162,6 +185,7 @@ def get_material_dashboard_project_comparison(
     session: Session,
     *,
     project_id: int,
+    project_subtype_id: int | None,
     sku_factors: dict[str, float],
     total_house_starts: int,
 ) -> dict | None:
@@ -170,7 +194,11 @@ def get_material_dashboard_project_comparison(
         for sku, factor in sku_factors.items()
         if str(sku).strip() and float(factor or 0.0) != 0.0
     }
-    project, project_quantity_by_sku = get_material_dashboard_project_quantity_map(session, project_id=project_id)
+    project, project_quantity_by_sku = get_material_dashboard_project_quantity_map(
+        session,
+        project_id=project_id,
+        project_subtype_id=project_subtype_id,
+    )
     if project is None:
         return None
 
@@ -258,13 +286,16 @@ def get_production_house_starts_with_links(
         end_date=end_date.isoformat() if end_date else None,
         history_days=history_days,
     )
-    links_by_key = build_links_by_key(load_house_type_links(session))
+    links = load_house_type_links(session)
+    links_by_key = build_links_by_key(links)
+    expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
 
     houses = []
     mapped_count = 0
     for house in production["houses"]:
         link = resolve_house_type_link(links_by_key, house["house_type_id"], house.get("sub_type_id"))
-        mapped = link is not None
+        missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
+        mapped = link is not None and missing_count == 0
         if mapped:
             mapped_count += 1
         houses.append(
@@ -278,6 +309,8 @@ def get_production_house_starts_with_links(
                 if link and link.project_subtype
                 else None,
                 "mapped_via_sub_type": bool(link and link.production_sub_type_id is not None),
+                "mapping_issue": "incomplete_bom" if link is not None and missing_count > 0 else None,
+                "missing_quantity_count": missing_count,
             }
         )
 
@@ -312,20 +345,23 @@ def get_material_dashboard_project_usage(
             selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.category),
             selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.component),
             selectinload(Project.calculation_sheets).selectinload(ProjectMaterialCalculationSheet.cells),
+            selectinload(Project.subtypes),
+            selectinload(Project.material_occurrence_modes),
         )
     )
     if project is None:
         return None
 
     calculation_sheet_by_key = {
-        (sheet.instance_id, sheet.material_id): sheet
+        (sheet.instance_id, sheet.material_id, sheet.subtype_id): sheet
         for sheet in project.calculation_sheets
     }
     items_by_key: dict[tuple[int, int], dict] = {}
     material_name: str | None = None
     material_unit: str | None = None
 
-    for entry in project.bom_entries:
+    for effective_row in effective_occurrence_rows(project):
+        entry = effective_row["entry"]
         if entry.material is None or entry.material.sku.strip().upper() != normalized_sku:
             continue
         if entry.instance is None:
@@ -337,7 +373,9 @@ def get_material_dashboard_project_usage(
             material_unit = entry.unit or (entry.material_rule.unit if entry.material_rule else None) or entry.material.unit
 
         item_key = (entry.instance_id, entry.material_rule_id or -entry.material_id)
-        sheet = calculation_sheet_by_key.get((entry.instance_id, entry.material_id))
+        subtype = effective_row["subtype"]
+        subtype_id = subtype.id if subtype is not None else None
+        sheet = calculation_sheet_by_key.get((entry.instance_id, entry.material_id, subtype_id))
         item = items_by_key.get(item_key)
         if item is None:
             rule = entry.material_rule
@@ -352,45 +390,70 @@ def get_material_dashboard_project_usage(
                 if rule is not None and rule.unit_qty_per_unit is not None
                 else None,
                 "total_quantity": 0.0,
+                "has_subtype_scenarios": False,
                 "blank_quantity_count": 0,
                 "zero_quantity_count": 0,
                 "unit": entry.unit or (rule.unit if rule else None) or entry.material.unit,
-                "has_calculation_sheet": sheet is not None,
-                "calculation_sheet_cell_count": len(sheet.cells) if sheet is not None else 0,
-                "calculation_sheet_updated_at": sheet.updated_at.isoformat() if sheet is not None else None,
+                "has_calculation_sheet": False,
+                "calculation_sheet_cell_count": 0,
+                "calculation_sheet_updated_at": None,
                 "breakdown": [],
             }
             items_by_key[item_key] = item
 
-        quantity = round(float(entry.quantity), 4) if entry.quantity is not None else None
-        assembly_quantity = round(float(entry.assembly_quantity), 4) if entry.assembly_quantity is not None else None
-        quantity_state = _dashboard_bom_value_state(entry.quantity)
-        assembly_quantity_state = _dashboard_bom_value_state(entry.assembly_quantity)
+        raw_quantity = effective_row["quantity"]
+        raw_assembly_quantity = effective_row["assembly_quantity"]
+        quantity = round(float(raw_quantity), 4) if raw_quantity is not None else None
+        assembly_quantity = round(float(raw_assembly_quantity), 4) if raw_assembly_quantity is not None else None
+        quantity_state = _dashboard_bom_value_state(raw_quantity)
+        assembly_quantity_state = _dashboard_bom_value_state(raw_assembly_quantity)
+
+        if subtype_id is not None:
+            item["has_subtype_scenarios"] = True
+        if sheet is not None:
+            item["has_calculation_sheet"] = True
+            item["calculation_sheet_cell_count"] += len(sheet.cells)
+            updated_at = sheet.updated_at.isoformat() if sheet.updated_at is not None else None
+            if updated_at and (item["calculation_sheet_updated_at"] is None or updated_at > item["calculation_sheet_updated_at"]):
+                item["calculation_sheet_updated_at"] = updated_at
 
         if quantity is None:
             item["blank_quantity_count"] += 1
         else:
-            item["total_quantity"] = round(float(item["total_quantity"]) + quantity, 4)
+            if not item["has_subtype_scenarios"]:
+                item["total_quantity"] = round(float(item["total_quantity"]) + quantity, 4)
             if quantity == 0:
                 item["zero_quantity_count"] += 1
 
         item["breakdown"].append(
             {
-                "subtype_id": entry.subtype_id,
-                "subtype_name": entry.subtype.name if entry.subtype else "General",
+                "subtype_id": subtype_id,
+                "subtype_name": effective_row["subtype_name"],
+                "inheritance_mode": getattr(entry, "inheritance_mode", "override") or "override",
+                "inherited_from_subtype_name": (
+                    effective_row["quantity_source_entry"].subtype.name
+                    if effective_row["quantity_source_entry"] is not None
+                    and effective_row["quantity_source_entry"].subtype_id != subtype_id
+                    else None
+                ),
                 "quantity": quantity,
                 "quantity_state": quantity_state,
                 "assembly_quantity": assembly_quantity,
                 "assembly_quantity_state": assembly_quantity_state,
                 "unit": entry.unit or (entry.material_rule.unit if entry.material_rule else None) or entry.material.unit,
-                "calculation_mode": entry.calculation_mode.value,
-                "calculation_formula": entry.calculation_formula,
-                "calculation_explanation": _dashboard_bom_calculation_explanation(entry),
+                "calculation_mode": (effective_row["quantity_source_entry"] or entry).calculation_mode.value,
+                "calculation_formula": (effective_row["quantity_source_entry"] or entry).calculation_formula,
+                "calculation_explanation": _dashboard_bom_calculation_explanation(effective_row["quantity_source_entry"] or entry),
+                "has_calculation_sheet": sheet is not None,
+                "calculation_sheet_cell_count": len(sheet.cells) if sheet is not None else 0,
+                "calculation_sheet_updated_at": sheet.updated_at.isoformat() if sheet is not None else None,
             }
         )
 
     items = list(items_by_key.values())
     for item in items:
+        if item.pop("has_subtype_scenarios"):
+            item["total_quantity"] = None
         item["breakdown"].sort(
             key=lambda row: (
                 row["subtype_id"] is not None,
@@ -414,7 +477,11 @@ def get_material_dashboard_project_usage(
         "sku": normalized_sku,
         "material_name": material_name,
         "unit": material_unit,
-        "total_quantity": round(sum(float(item["total_quantity"]) for item in items), 4),
+        "total_quantity": (
+            None
+            if any(item["total_quantity"] is None for item in items)
+            else round(sum(float(item["total_quantity"]) for item in items), 4)
+        ),
         "item_count": len(items),
         "items": items,
         "generated_at": datetime.utcnow().isoformat(),
@@ -694,11 +761,13 @@ def get_material_dashboard_economic_metrics(
     normalized_cost_centers = _normalize_dashboard_cost_centers(cost_centers)
     normalized_excluded_cost_centers = _normalize_dashboard_cost_centers(excluded_cost_centers)
     links_fingerprint = house_type_links_fingerprint(session)
+    bom_fingerprint = linked_projects_bom_fingerprint(session)
     cache_key = _dashboard_cache_key(
         {
             "cecos": normalized_cost_centers,
             "excluded_cecos": normalized_excluded_cost_centers,
             "links": links_fingerprint,
+            "bom": bom_fingerprint,
             "movement_days": movement_window_days,
             "start_date": requested_start_day.isoformat(),
             "end_date": requested_end_day.isoformat(),
@@ -739,6 +808,8 @@ def get_material_dashboard_economic_metrics(
             total_house_starts += count
             link = resolve_house_type_link(links_by_key, grid_row["house_type_id"], grid_row.get("sub_type_id"))
             if link is None:
+                continue
+            if link_missing_quantity_count(link, expected_maps) > 0:
                 continue
             total_mapped_house_starts += count
             link_key = (link.production_house_type_id, link.production_sub_type_id)

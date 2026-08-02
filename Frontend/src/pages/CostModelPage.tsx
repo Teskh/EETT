@@ -415,8 +415,14 @@ function metricKeyForSku(sku: string) {
   return sku.trim().toUpperCase();
 }
 
-function studyComparisonCacheKey(sku: string, houseTypeId: number, range: HouseRange, projectId: number | null) {
-  return `study-houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}`;
+function studyComparisonCacheKey(
+  sku: string,
+  houseTypeId: number,
+  range: HouseRange,
+  projectId: number | null,
+  subtypeId: number | null,
+) {
+  return `study-houses::${sku}::${houseTypeId}::${range.startDate}::${range.endDate}::project:${projectId ?? "none"}:subtype:${subtypeId ?? "general"}`;
 }
 
 function flattenProjects(board: ProjectsBoardData | null) {
@@ -887,6 +893,7 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
     }
     setLoading(true);
     setError(null);
+    setView((currentView) => (currentView?.project.id === selectedProjectId ? currentView : null));
     try {
       const data = await api.getCostModel(selectedProjectId);
       setView(data);
@@ -1295,9 +1302,13 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
       <section className="absolute inset-0 top-16 flex items-center justify-center bg-white dark:bg-zinc-950">
         <div className="max-w-md text-center">
           <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Modelo de Costos</p>
-          <h2 className="text-xl font-medium text-zinc-900 dark:text-white">No hay proyectos disponibles</h2>
+          <h2 className="text-xl font-medium text-zinc-900 dark:text-white">
+            {error ? "No se pudieron cargar los proyectos" : "No hay proyectos disponibles"}
+          </h2>
           <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-            Crea primero un proyecto para cargar totales de costo, ajustes por subtipo y estudios de consumo.
+            {error
+              ? error
+              : "Crea primero un proyecto para cargar totales de costo, ajustes por subtipo y estudios de consumo."}
           </p>
         </div>
       </section>
@@ -1309,12 +1320,23 @@ export function CostModelPage({ projectId, onNavigate, onTitleChange, currentUse
         <div className="flex w-full max-w-lg flex-col items-center gap-5 px-6 text-center">
           <div>
             <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.35em] text-zinc-500">Modelo de Costos</p>
-            <h2 className="text-xl font-medium text-zinc-900 dark:text-white">Selecciona un proyecto</h2>
+            <h2 className="text-xl font-medium text-zinc-900 dark:text-white">
+              {error ? "No se pudo cargar el modelo de costos" : "Selecciona un proyecto"}
+            </h2>
             <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              El modelo de costos se cargará cuando elijas un proyecto.
+              {error ?? "El modelo de costos se cargará cuando elijas un proyecto."}
             </p>
           </div>
           {projectSelect}
+          {error && selectedProjectId !== null ? (
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="border border-zinc-300 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-700 transition-colors hover:border-red-600 hover:text-red-700 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-500 dark:hover:text-red-400"
+            >
+              Reintentar
+            </button>
+          ) : null}
         </div>
       </section>
     );
@@ -1855,7 +1877,7 @@ function ConsumptionStudyWrapper({
   const detailKey = useMemo(() => (target ? detailCacheKey(target.row.sku, []) : null), [target?.row.sku]);
   const historyKey = useMemo(() => (target ? historyCacheKey(target.row.sku, [], houseRange) : null), [houseRange, target?.row.sku]);
   const comparisonKey = useMemo(
-    () => (target && selectedHouseTypeId ? studyComparisonCacheKey(target.row.sku, selectedHouseTypeId, houseRange, projectId) : null),
+    () => (target && selectedHouseTypeId ? studyComparisonCacheKey(target.row.sku, selectedHouseTypeId, houseRange, projectId, target.subtypeId) : null),
     [houseRange, projectId, selectedHouseTypeId, target?.row.sku],
   );
   const selectedHouseType = useMemo(
@@ -1963,6 +1985,7 @@ function ConsumptionStudyWrapper({
       try {
         const studyData = await api.getMaterialDashboardMaterialStudy(target.row.sku, selectedHouseTypeId, {}, {
           projectId,
+          projectSubtypeId: target.subtypeId,
           startDate: houseRange.startDate,
           endDate: houseRange.endDate,
         });
@@ -2017,7 +2040,13 @@ function ConsumptionStudyWrapper({
     }
     const prefetchDetailKey = detailCacheKey(prefetchTarget.row.sku, []);
     const prefetchHistoryKey = historyCacheKey(prefetchTarget.row.sku, [], houseRange);
-    const prefetchComparisonKey = studyComparisonCacheKey(prefetchTarget.row.sku, selectedHouseTypeId, houseRange, projectId);
+    const prefetchComparisonKey = studyComparisonCacheKey(
+      prefetchTarget.row.sku,
+      selectedHouseTypeId,
+      houseRange,
+      projectId,
+      prefetchTarget.subtypeId,
+    );
     const prefetchKey = `${prefetchDetailKey}::${prefetchHistoryKey}::${prefetchComparisonKey}`;
     if (prefetchedStudyKeysRef.current.has(prefetchKey)) {
       return;
@@ -2048,6 +2077,7 @@ function ConsumptionStudyWrapper({
         try {
           const studyData = await api.getMaterialDashboardMaterialStudy(prefetchTarget.row.sku, selectedHouseTypeId, {}, {
             projectId,
+            projectSubtypeId: prefetchTarget.subtypeId,
             startDate: houseRange.startDate,
             endDate: houseRange.endDate,
           });
@@ -2886,6 +2916,7 @@ function CostModelRowView({
   onDelete,
 }: CostModelRowViewProps) {
   const rowQuantity = computeRowQuantity(row);
+  const hasScenarioQuantities = row.subtypes.some((entry) => entry.subtype_id !== null);
   const rowCost = quantityCost(rowQuantity, row.price);
   const rowSelected = selectedConsumption?.sku === row.sku;
   const rowHasOverrides = row.adjustments.length > 0;
@@ -2992,7 +3023,9 @@ function CostModelRowView({
         )}
       </td>
       <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-900 dark:text-white whitespace-nowrap">
-        {rowQuantity === null ? (
+        {hasScenarioQuantities ? (
+          <span className="font-sans text-[9px] font-semibold uppercase tracking-wider text-zinc-500">Por escenario</span>
+        ) : rowQuantity === null ? (
           <span className="font-sans text-[9px] font-semibold uppercase tracking-wider text-red-700 dark:text-red-300">Sin cantidad</span>
         ) : (
           formatNumber(rowQuantity)
@@ -3038,7 +3071,7 @@ function CostModelRowView({
           })
         : null}
       <td className="px-4 py-3 text-right font-mono text-[11px] text-zinc-900 dark:text-white whitespace-nowrap">
-        {formatCurrency(rowCost)}
+        {hasScenarioQuantities ? "Por escenario" : formatCurrency(rowCost)}
       </td>
     </tr>
   );

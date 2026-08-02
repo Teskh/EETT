@@ -37,10 +37,14 @@ def iter_material_context_rows(project_data: dict[str, Any]):
                         "sku": material["sku"],
                         "unit": material.get("unit") or "",
                         "subtype": bom_entry.get("subtype") or "General",
-                        "quantity": bom_entry.get("quantity"),
-                        "quantity_state": bom_entry.get("quantity_state"),
-                        "assembly_quantity": bom_entry.get("assembly_quantity"),
-                        "assembly_quantity_state": bom_entry.get("assembly_quantity_state"),
+                        "quantity": bom_entry.get("effective_quantity", bom_entry.get("quantity")),
+                        "quantity_state": bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state")),
+                        "assembly_quantity": bom_entry.get(
+                            "effective_assembly_quantity", bom_entry.get("assembly_quantity")
+                        ),
+                        "assembly_quantity_state": bom_entry.get(
+                            "effective_assembly_quantity_state", bom_entry.get("assembly_quantity_state")
+                        ),
                     }
 
 
@@ -62,8 +66,8 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
                         "unit": material.get("unit") or "",
                         "subtype": bom_entry.get("subtype") or "General",
                         "subtype_id": bom_entry.get("subtype_id"),
-                        "quantity": bom_entry.get("quantity"),
-                        "quantity_state": bom_entry.get("quantity_state"),
+                        "quantity": bom_entry.get("effective_quantity", bom_entry.get("quantity")),
+                        "quantity_state": bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state")),
                     }
 
 
@@ -73,6 +77,10 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
 
     quantity_key = "quantity" if quantity_basis == "factory" else "assembly_quantity"
     quantity_state_key = "quantity_state" if quantity_basis == "factory" else "assembly_quantity_state"
+    effective_quantity_key = "effective_quantity" if quantity_basis == "factory" else "effective_assembly_quantity"
+    effective_state_key = (
+        "effective_quantity_state" if quantity_basis == "factory" else "effective_assembly_quantity_state"
+    )
     materials_by_sku: dict[str, dict[str, Any]] = {}
 
     for section in number_category_sections(project_data.get("categories", [])):
@@ -105,18 +113,63 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
                     )
 
                     if quantity_basis == "total":
-                        factory_quantity = _numeric_bom_quantity(bom_entry, "quantity", "quantity_state")
-                        work_quantity = _numeric_bom_quantity(bom_entry, "assembly_quantity", "assembly_quantity_state")
+                        factory_quantity = _numeric_bom_quantity(
+                            bom_entry, "effective_quantity", "effective_quantity_state", "quantity", "quantity_state"
+                        )
+                        work_quantity = _numeric_bom_quantity(
+                            bom_entry,
+                            "effective_assembly_quantity",
+                            "effective_assembly_quantity_state",
+                            "assembly_quantity",
+                            "assembly_quantity_state",
+                        )
                         if factory_quantity is not None or work_quantity is not None:
                             subtype_entry["quantity_total"] += (factory_quantity or 0.0) + (work_quantity or 0.0)
                             subtype_entry["has_numeric_quantity"] = True
-                        elif bom_entry.get("quantity_state") == "blank" or bom_entry.get("assembly_quantity_state") == "blank":
+                        elif (
+                            bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state")) == "blank"
+                            or bom_entry.get(
+                                "effective_assembly_quantity_state", bom_entry.get("assembly_quantity_state")
+                            )
+                            == "blank"
+                        ):
                             subtype_entry["has_blank_quantity"] = True
-                    elif bom_entry.get(quantity_state_key) == "value" and bom_entry.get(quantity_key) is not None:
-                        subtype_entry["quantity_total"] += float(bom_entry[quantity_key])
+                    elif bom_entry.get(effective_state_key, bom_entry.get(quantity_state_key)) == "value" and bom_entry.get(
+                        effective_quantity_key, bom_entry.get(quantity_key)
+                    ) is not None:
+                        subtype_entry["quantity_total"] += float(
+                            bom_entry.get(effective_quantity_key, bom_entry.get(quantity_key))
+                        )
                         subtype_entry["has_numeric_quantity"] = True
-                    elif bom_entry.get(quantity_state_key) == "blank":
+                    elif bom_entry.get(effective_state_key, bom_entry.get(quantity_state_key)) == "blank":
                         subtype_entry["has_blank_quantity"] = True
+
+    if quantity_basis in {"factory", "total"}:
+        for auxiliary in project_data.get("auxiliary_materials", []):
+            sku = str(auxiliary.get("code") or "").strip().upper()
+            if not sku:
+                continue
+            material_entry = materials_by_sku.setdefault(
+                sku,
+                {
+                    "material_name": auxiliary.get("name") or sku,
+                    "sku": sku,
+                    "unit": "",
+                    "subtypes": {},
+                },
+            )
+            subtype_name = auxiliary.get("subtype") or "General"
+            subtype_entry = material_entry["subtypes"].setdefault(
+                subtype_name,
+                {
+                    "subtype": subtype_name,
+                    "quantity_total": 0.0,
+                    "has_numeric_quantity": False,
+                    "has_blank_quantity": False,
+                },
+            )
+            subtype_entry["quantity_total"] += 1.0
+            subtype_entry["has_numeric_quantity"] = True
 
     aggregated_materials: list[dict[str, Any]] = []
     for material_entry in materials_by_sku.values():
@@ -160,10 +213,18 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
     ]
 
 
-def _numeric_bom_quantity(bom_entry: dict[str, Any], quantity_key: str, quantity_state_key: str) -> float | None:
-    if bom_entry.get(quantity_state_key) != "value" or bom_entry.get(quantity_key) is None:
+def _numeric_bom_quantity(
+    bom_entry: dict[str, Any],
+    quantity_key: str,
+    quantity_state_key: str,
+    fallback_quantity_key: str,
+    fallback_state_key: str,
+) -> float | None:
+    state = bom_entry.get(quantity_state_key, bom_entry.get(fallback_state_key))
+    value = bom_entry.get(quantity_key, bom_entry.get(fallback_quantity_key))
+    if state != "value" or value is None:
         return None
-    return float(bom_entry[quantity_key])
+    return float(value)
 
 
 def build_commercial_export_sections(
@@ -624,8 +685,8 @@ def _technical_materials(instance: dict[str, Any], settings: dict[str, Any]) -> 
     for material in instance.get("materials", []):
         display_rows = []
         for bom_entry in material.get("bom_entries", []):
-            state = bom_entry.get("quantity_state")
-            value = bom_entry.get("quantity")
+            state = bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state"))
+            value = bom_entry.get("effective_quantity", bom_entry.get("quantity"))
             if state == "zero":
                 continue
             display_rows.append(

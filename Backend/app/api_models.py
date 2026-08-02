@@ -282,16 +282,19 @@ class ProjectInstanceUpdateRequest(BaseModel):
 class ProjectSubtypeCreateRequest(BaseModel):
     name: str
     parent_id: int | None = None
+    kind: str = "variant"
 
 
 class ProjectSubtypeUpdateRequest(BaseModel):
     name: str
+    kind: str | None = None
 
 
 class MaterialOccurrenceEntryInputModel(BaseModel):
     subtype_id: int | None = None
     quantity: float | None = None
     assembly_quantity: float | None = None
+    inheritance_mode: str = "override"
 
 
 class MaterialOccurrenceUpdateRequest(BaseModel):
@@ -310,6 +313,7 @@ class MaterialCalculationCellInputModel(BaseModel):
 
 
 class MaterialCalculationSheetUpdateRequest(BaseModel):
+    subtype_id: int | None = None
     cells: list[MaterialCalculationCellInputModel] = Field(default_factory=list)
 
 
@@ -403,8 +407,15 @@ class BomEntryModel(BaseModel):
     subtype_depth: int
     quantity: float | None
     quantity_state: str
+    effective_quantity: float | None = None
+    effective_quantity_state: str = "blank"
     assembly_quantity: float | None
     assembly_quantity_state: str
+    inheritance_mode: str = "override"
+    effective_assembly_quantity: float | None = None
+    effective_assembly_quantity_state: str = "blank"
+    inherited_from_subtype_id: int | None = None
+    inherited_from_subtype: str | None = None
     unit: str | None
     calculation_mode: str
     calculation_formula: str | None
@@ -438,6 +449,8 @@ class MaterialCalculationSheetResponse(BaseModel):
     instance_id: int
     rule_id: int
     material_id: int
+    subtype_id: int | None = None
+    subtype_name: str = "General"
     material_name: str
     sku: str
     cell_count: int
@@ -557,6 +570,8 @@ class ProjectSubtypeModel(BaseModel):
     id: int
     parent_id: int | None = None
     name: str
+    path: str
+    kind: str
     children: list["ProjectSubtypeModel"] = Field(default_factory=list)
 
 
@@ -565,6 +580,7 @@ class AuxiliaryMaterialSelectionModel(BaseModel):
     name: str
     category: str | None
     price: float
+    subtype_id: int | None = None
     subtype: str
 
 
@@ -762,7 +778,8 @@ class DashboardRowModel(BaseModel):
     sku: str
     material_name: str
     unit: str | None
-    project_quantity: float
+    project_quantity: float | None
+    scenario_quantities: dict[str, float] = Field(default_factory=dict)
     blank_quantity_count: int
     instance_contexts: list[dict[str, Any]]
     stock_on_hand: float | None
@@ -770,7 +787,7 @@ class DashboardRowModel(BaseModel):
     average_price: float | None
     average_lead_time_days: float | None
     recent_monthly_consumption: float | None
-    shortage: float
+    shortage: float | None
 
 
 class DashboardProjectModel(BaseModel):
@@ -863,6 +880,7 @@ class MaterialDashboardListRequest(MaterialDashboardDateRangeRequest):
 class MaterialDashboardHouseComparisonRequest(MaterialDashboardDateRangeRequest):
     house_type_id: int = Field(ge=1)
     project_id: int | None = Field(default=None, ge=1)
+    project_subtype_id: int | None = Field(default=None, ge=1)
 
 
 class MaterialDashboardDetailResponse(MaterialDashboardDetailModel):
@@ -907,6 +925,8 @@ class MaterialDashboardMovementResponse(BaseModel):
 class MaterialDashboardHouseSubTypeModel(BaseModel):
     id: int
     name: str
+    is_complete: bool | None = None
+    missing_quantity_count: int = 0
 
 
 class MaterialDashboardHouseTypeModel(BaseModel):
@@ -931,6 +951,8 @@ class HouseTypeLinkModel(BaseModel):
     project_subtype_id: int | None = None
     project_subtype_name: str | None = None
     updated_at: str | None = None
+    is_complete: bool = True
+    missing_quantity_count: int = 0
 
 
 class HouseTypeLinkPayloadModel(BaseModel):
@@ -950,6 +972,8 @@ class LinkTargetProjectModel(BaseModel):
     id: int
     name: str
     status: str
+    general_is_complete: bool = True
+    general_missing_quantity_count: int = 0
     subtypes: list[MaterialDashboardHouseSubTypeModel] = Field(default_factory=list)
 
 
@@ -975,6 +999,8 @@ class ProductionHouseStartModel(BaseModel):
     mapped_project_subtype_id: int | None = None
     mapped_project_subtype_name: str | None = None
     mapped_via_sub_type: bool = False
+    mapping_issue: str | None = None
+    missing_quantity_count: int = 0
 
 
 class ProductionHouseStartsResponse(BaseModel):
@@ -1115,6 +1141,8 @@ class MaterialDashboardUnmappedStartsModel(BaseModel):
     sub_type_id: int | None = None
     sub_type_name: str | None = None
     house_starts: int
+    reason: str = "unmapped"
+    missing_quantity_count: int = 0
 
 
 class MaterialDashboardMappedHouseComparisonResponse(BaseModel):
@@ -1147,6 +1175,8 @@ class MaterialDashboardProjectUsageProjectModel(BaseModel):
 class MaterialDashboardProjectUsageBreakdownEntryModel(BaseModel):
     subtype_id: int | None
     subtype_name: str
+    inheritance_mode: str = "override"
+    inherited_from_subtype_name: str | None = None
     quantity: float | None
     quantity_state: str
     assembly_quantity: float | None
@@ -1155,6 +1185,9 @@ class MaterialDashboardProjectUsageBreakdownEntryModel(BaseModel):
     calculation_mode: str
     calculation_formula: str | None
     calculation_explanation: str | None
+    has_calculation_sheet: bool = False
+    calculation_sheet_cell_count: int = 0
+    calculation_sheet_updated_at: str | None = None
 
 
 class MaterialDashboardProjectUsageItemModel(BaseModel):
@@ -1165,7 +1198,7 @@ class MaterialDashboardProjectUsageItemModel(BaseModel):
     rule_id: int | None
     material_id: int
     unit_qty_per_unit: float | None
-    total_quantity: float
+    total_quantity: float | None
     blank_quantity_count: int
     zero_quantity_count: int
     unit: str | None
@@ -1180,7 +1213,7 @@ class MaterialDashboardProjectUsageResponse(BaseModel):
     sku: str
     material_name: str | None
     unit: str | None
-    total_quantity: float
+    total_quantity: float | None
     item_count: int
     items: list[MaterialDashboardProjectUsageItemModel] = Field(default_factory=list)
     generated_at: str
