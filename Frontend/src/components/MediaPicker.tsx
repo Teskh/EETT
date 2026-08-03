@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
+import { toAppPath } from "../lib/basePath";
 import type { MediaAsset } from "../lib/types";
 
 type MediaPickerProps = {
@@ -69,7 +70,7 @@ export function MediaPicker({ value, onChange, compact = false }: MediaPickerPro
       <div className={compact ? "flex gap-3" : "grid grid-cols-[112px_1fr] gap-3"}>
         <div className="w-28 aspect-[4/3] rounded bg-zinc-100 dark:bg-white/5 border border-black/10 dark:border-white/10 overflow-hidden flex items-center justify-center text-zinc-400">
           {selectedAsset ? (
-            <img src={selectedAsset.uri} alt={selectedAsset.original_filename || "Imagen"} className="w-full h-full object-contain" />
+            <img src={toAppPath(selectedAsset.uri)} alt={selectedAsset.original_filename || "Imagen"} className="w-full h-full object-contain" />
           ) : (
             <i className="ph-bold ph-image text-2xl" />
           )}

@@ -1,0 +1,47 @@
+{
+	auto_https disable_redirects
+	default_sni 10.0.10.236
+}
+
+http://:8091 {
+	redir https://aplicacionph.dyndns.org/gantt/ 302
+	log {
+		output file C:\caddy\access.log
+	}
+}
+
+https://10.0.10.236:8092 {
+	tls internal
+	reverse_proxy 127.0.0.1:5151
+	log {
+		output file C:\caddy\access.log
+	}
+}
+
+http://:5000 {
+	redir https://aplicacionph.dyndns.org/eett/ 302
+	log {
+		output file C:\caddy\access.log
+	}
+}
+
+http://10.0.10.236:5173 {
+	root * "C:\Users\Thomas\Downloads\2026.01.15 GIT PRODUCTION\production\deployment\legacy-tablet-redirect"
+	try_files {path} /index.html
+	file_server
+	log {
+		output file C:\caddy\access.log
+	}
+}
+
+https://127.0.0.1:8093 {
+	bind 127.0.0.1
+	tls internal
+	reverse_proxy 127.0.0.1:5174 {
+		header_up Host {hostport}
+		header_up X-IIS-Client-IP {http.request.header.IIS-Client-Address}
+	}
+	log {
+		output file C:\caddy\access.log
+	}
+}

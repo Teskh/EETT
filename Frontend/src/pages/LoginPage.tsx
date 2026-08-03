@@ -1,10 +1,12 @@
 import { FormEvent, useState } from "react";
 
+import { toAppPath } from "../lib/basePath";
+
 // Microsoft is the only sign-in method for regular users. The reserved
 // sysadmin account retains a local-password escape hatch.
 const PASSWORD_LOGIN_ENABLED = false;
 
-const MICROSOFT_LOGIN_URL = "/api/v1/auth/microsoft/login";
+const MICROSOFT_LOGIN_URL = "/api/auth/microsoft/login";
 
 type LoginPageProps = {
   onLogin: (username: string, password: string) => Promise<void>;
@@ -32,7 +34,7 @@ export function LoginPage({ onLogin, loading, error }: LoginPageProps) {
   }
 
   function handleMicrosoftLogin() {
-    window.location.href = MICROSOFT_LOGIN_URL;
+    window.location.href = toAppPath(MICROSOFT_LOGIN_URL);
   }
 
   function openAdminMode() {

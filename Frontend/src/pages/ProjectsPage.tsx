@@ -3,6 +3,7 @@ import { DragEvent, FormEvent, useEffect, useState } from "react";
 import { Modal } from "../components/Modal";
 import { FactoryQuantityLabel, WorkQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
+import { toAppPath } from "../lib/basePath";
 import type { CreateProjectRequest, ExportJob, ProjectDetailData, ProjectsBoardData, ProjectSubtype, SessionUser } from "../lib/types";
 
 type ProjectsPageProps = {
@@ -250,7 +251,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       throw new Error("La exportación terminó sin archivo.");
     }
 
-    const response = await fetch(job.artifact_uri, { credentials: "same-origin" });
+    const response = await fetch(toAppPath(job.artifact_uri), { credentials: "same-origin" });
     if (!response.ok) {
       throw new Error("No se pudo descargar el archivo exportado.");
     }
@@ -272,7 +273,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       throw new Error("La exportación terminó sin archivo.");
     }
     if (INLINE_EXPORT_KINDS.has(job.kind)) {
-      window.open(job.artifact_uri, "_blank", "noopener,noreferrer");
+      window.open(toAppPath(job.artifact_uri), "_blank", "noopener,noreferrer");
       return;
     }
     await downloadExportArtifact(job);

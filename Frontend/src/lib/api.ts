@@ -65,6 +65,7 @@ import type {
   UpdateProjectInstanceRequest,
   UserDirectory,
 } from "./types";
+import { toAppPath } from "./basePath";
 
 class ApiError extends Error {
   status: number;
@@ -99,7 +100,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     },
     init?.headers,
   );
-  const response = await fetch(input, {
+  const response = await fetch(toAppPath(input), {
     credentials: "same-origin",
     ...init,
     headers,

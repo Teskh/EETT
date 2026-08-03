@@ -319,6 +319,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_cookie=settings.session_cookie_name,
         same_site="lax",
         https_only=settings.environment == "production",
+        path=settings.public_base_path or "/",
     )
 
     static_dir = Path(__file__).resolve().parent / "static"
@@ -880,10 +881,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
 
+    def _public_path(path: str) -> str:
+        return f"{settings.public_base_path}{path}"
+
     def _login_redirect_error(message: str) -> RedirectResponse:
         # Microsoft sends the browser to our callback via a top-level GET, so on
         # failure we bounce back to the SPA login page with a readable message.
-        return RedirectResponse(url=f"/login?auth_error={quote(message)}", status_code=303)
+        return RedirectResponse(url=f"{_public_path('/login')}?auth_error={quote(message)}", status_code=303)
 
     def _microsoft_redirect_uri(request: Request) -> str:
         # Reconstruct the public-facing origin, honoring a reverse proxy's
@@ -893,8 +897,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         scheme = (forwarded_proto or request.url.scheme).split(",")[0].strip()
         host = (forwarded_host or request.headers.get("host") or request.url.netloc).split(",")[0].strip()
         base = urlunsplit((scheme, host, "", "", ""))
-        return f"{base}/api/v1/auth/microsoft/callback"
+        return f"{base}{_public_path('/api/auth/microsoft/callback')}"
 
+    @app.get("/api/auth/microsoft/login")
     @app.get("/api/v1/auth/microsoft/login")
     async def microsoft_login_api(request: Request):
         settings = request.app.state.settings
@@ -907,6 +912,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.session["ms_oauth_state"] = state
         return RedirectResponse(url=microsoft_auth.authorize_url(config, state=state), status_code=303)
 
+    @app.get("/api/auth/microsoft/callback")
     @app.get("/api/v1/auth/microsoft/callback")
     async def microsoft_callback_api(request: Request, session: Session = Depends(get_session)):
         settings = request.app.state.settings
@@ -968,7 +974,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         request.session.clear()
         request.session["username"] = user.username
-        return RedirectResponse(url="/", status_code=303)
+        return RedirectResponse(url=_public_path("/") or "/", status_code=303)
 
     @app.post("/api/v1/login", response_model=SessionUserResponse)
     async def login_api(

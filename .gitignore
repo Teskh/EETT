@@ -4,6 +4,7 @@
 #*.md
 .env
 .env.*
+!Frontend/.env.eett
 venv/
 .venv/
 __pycache__/
@@ -24,3 +25,8 @@ dist/
 build/
 output/
 *.txt
+Frontend/vite.config.ts
+deployment/*.log
+deployment/*.pid
+deployment/*.live-backup-*
+deployment/erp-probe.json

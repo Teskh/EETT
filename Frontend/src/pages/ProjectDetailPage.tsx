@@ -5,6 +5,7 @@ import { MediaPicker } from "../components/MediaPicker";
 import { Modal } from "../components/Modal";
 import { FactoryQuantityLabel, WorkQuantityLabel } from "../components/QuantityLabels";
 import { ApiError, api } from "../lib/api";
+import { toAppPath } from "../lib/basePath";
 import type {
   AttributeValueInput,
   AvailableComponent,
@@ -2432,7 +2433,7 @@ function InstanceCard({
         <div className="min-w-0 flex items-center gap-3">
           {primaryMedia ? (
             <img
-              src={primaryMedia.uri}
+              src={toAppPath(primaryMedia.uri)}
               alt={primaryMedia.original_filename || instance.name}
               className="w-14 h-10 object-contain rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 shrink-0"
             />

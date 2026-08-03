@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 
 import { AppShell } from "./components/AppShell";
 import { ApiError, api } from "./lib/api";
+import { stripAppBasePath, toAppPath } from "./lib/basePath";
 import { canEditPage, canReadPage } from "./lib/pageAccess";
 import { applyTheme, getPreferredThemeForUser, persistThemeForUser, rememberThemeUser, type ThemeMode } from "./lib/theme";
 import type { SessionUser } from "./lib/types";
@@ -32,7 +33,8 @@ type Route =
   | { name: "not-found" };
 
 function parseCurrentRoute(): Route {
-  const { pathname, search } = window.location;
+  const { search } = window.location;
+  const pathname = stripAppBasePath(window.location.pathname);
   if (pathname === "/") {
     return { name: "home" };
   }
@@ -74,7 +76,7 @@ function parseCurrentRoute(): Route {
 }
 
 function currentPath() {
-  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  return `${stripAppBasePath(window.location.pathname)}${window.location.search}${window.location.hash}`;
 }
 
 function AccessDenied({ message }: { message: string }) {
@@ -101,10 +103,11 @@ export function App() {
   }, []);
 
   function navigate(to: string, replace = false) {
+    const destination = toAppPath(to);
     if (replace) {
-      window.history.replaceState({}, "", to);
+      window.history.replaceState({}, "", destination);
     } else {
-      window.history.pushState({}, "", to);
+      window.history.pushState({}, "", destination);
     }
     setRoute(parseCurrentRoute());
   }

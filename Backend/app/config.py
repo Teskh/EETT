@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     backup_scheduler_poll_seconds: int = 60
     session_secret: str = "spec-sheets-internal-session-secret"
     session_cookie_name: str = "spec_sheets_session"
+    public_base_path: str = ""
     allow_trusted_user_header: bool = False
     # --- Microsoft Entra ID (Azure AD) login ---
     # Values come from the App Registration in the Microsoft Entra admin center.
@@ -72,6 +73,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def apply_softland_password_fallback(self) -> "Settings":
+        normalized_base_path = self.public_base_path.strip()
+        if normalized_base_path and not normalized_base_path.startswith("/"):
+            normalized_base_path = f"/{normalized_base_path}"
+        self.public_base_path = normalized_base_path.rstrip("/")
         if not self.softland_password:
             self.softland_password = os.getenv("SOFTLAND_PASSWORD")
         if not self.production_database_url:
