@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { ApiError, api } from "../lib/api";
-import type { ActivityChange, ActivityEntry, ActivityGroup } from "../lib/types";
+import type { ActivityChange, ActivityEntry, ActivityGroup, SessionUser } from "../lib/types";
 import { renderQuantityText } from "../components/QuantityLabels";
 
 function formatTimestamp(value: string) {
@@ -601,13 +601,14 @@ function ActivityGroupRow({ group, showProject }: { group: ActivityGroup; showPr
   );
 }
 
-export function ChangeHistoryPage() {
+export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser }) {
+  const isGuest = Boolean(currentUser.is_guest);
   const [groups, setGroups] = useState<ActivityGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(() => (isGuest ? "execution" : "all"));
   const [projectFilter, setProjectFilter] = useState("");
   const [changeTypeFilters, setChangeTypeFilters] = useState<Set<ChangeTypeFilter>>(
     () => new Set(DEFAULT_CHANGE_TYPE_FILTERS),
@@ -705,20 +706,22 @@ export function ChangeHistoryPage() {
               </div>
 
               <div className="flex items-center gap-2 w-full sm:w-auto">
-                <div className="relative w-full sm:w-36">
-                    <select
-                      value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                      className="appearance-none w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded pl-7 pr-6 py-1.5 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 cursor-pointer font-mono"
-                  >
-                    <option value="all">TODOS LOS ESTADOS</option>
-                    <option value="template">PLANTILLA</option>
-                    <option value="execution">EJECUCIÓN</option>
-                    <option value="finished">TERMINADO</option>
-                  </select>
-                  <Funnel className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
-                  <CaretDown className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
-                </div>
+                {!isGuest ? (
+                  <div className="relative w-full sm:w-36">
+                      <select
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value)}
+                        className="appearance-none w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded pl-7 pr-6 py-1.5 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 cursor-pointer font-mono"
+                    >
+                      <option value="all">TODOS LOS ESTADOS</option>
+                      <option value="template">PLANTILLA</option>
+                      <option value="execution">EJECUCIÓN</option>
+                      <option value="finished">TERMINADO</option>
+                    </select>
+                    <Funnel className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
+                    <CaretDown className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
+                  </div>
+                ) : null}
 
                 <div className="relative w-full sm:w-48">
                   <select
@@ -727,7 +730,7 @@ export function ChangeHistoryPage() {
                     className="appearance-none w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded pl-7 pr-6 py-1.5 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 cursor-pointer font-mono"
                   >
                     <option value="">SELECCIONAR PROYECTO</option>
-                    <option value="all">TODOS LOS PROYECTOS</option>
+                    {!isGuest ? <option value="all">TODOS LOS PROYECTOS</option> : null}
                     {projectOptions.map(p => (
                       <option key={p.id} value={p.id}>{p.name.toUpperCase()}</option>
                     ))}
@@ -783,7 +786,7 @@ export function ChangeHistoryPage() {
         ) : filteredGroups.length > 0 ? (
           <div className="flex flex-col border-t border-zinc-200 dark:border-white/[0.05]">
             {filteredGroups.map(group => (
-              <ActivityGroupRow key={group.id} group={group} showProject={projectFilter === "all"} />
+              <ActivityGroupRow key={group.id} group={group} showProject={!isGuest && projectFilter === "all"} />
             ))}
           </div>
         ) : (

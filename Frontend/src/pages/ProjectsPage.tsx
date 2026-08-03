@@ -233,6 +233,12 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const canChangeProjectStatus = currentUser.permissions.project_change_status;
   const isGuest = Boolean(currentUser.is_guest);
 
+  function openExportModal(projectId: number, projectName: string) {
+    setDetailedMaterialQuantityBasis("factory");
+    setIncludeFullTechnicalMaterialTables(true);
+    setExportModal({ projectId, projectName });
+  }
+
   function resolveDownloadFilename(job: ExportJob, contentDisposition: string | null) {
     const utf8Match = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i);
     if (utf8Match?.[1]) {
@@ -605,7 +611,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       {loading ? (
         <div className="liquid-glass rounded-2xl p-8 text-sm text-zinc-500">Cargando tablero de proyectos...</div>
       ) : data ? (
-        <div className={isGuest ? "grid grid-cols-1 gap-6 max-w-3xl" : "grid grid-cols-1 md:grid-cols-3 gap-6"}>
+        <div className={isGuest ? "mx-auto grid w-full max-w-3xl grid-cols-1 gap-6" : "grid grid-cols-1 gap-6 md:grid-cols-3"}>
           {(isGuest ? ["execution"] : orderedStatuses).map((status) => {
             const projects = data.grouped_projects[status] || [];
             return (
@@ -649,6 +655,16 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                       <div
                         key={project.id}
                         draggable={canChangeProjectStatus}
+                        role={isGuest ? "button" : undefined}
+                        tabIndex={isGuest ? 0 : undefined}
+                        aria-label={isGuest ? `Exportar PDFs de ${project.name}` : undefined}
+                        onClick={isGuest ? () => openExportModal(project.id, project.name) : undefined}
+                        onKeyDown={isGuest ? (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            openExportModal(project.id, project.name);
+                          }
+                        } : undefined}
                         onDragStart={(event) => handleProjectDragStart(event, project.id, status)}
                         onDragEnd={() => {
                           setDraggingProject(null);
@@ -656,6 +672,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                         }}
                         className={[
                           "bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3",
+                          isGuest ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60" : "",
                           canChangeProjectStatus ? "cursor-grab active:cursor-grabbing" : "",
                           draggingProject?.projectId === project.id || updatingProjectId === project.id ? "opacity-60" : "",
                         ]
@@ -664,19 +681,31 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                       >
                         <div>
                           <h3 className="mb-1">
-                            <button
-                              type="button"
-                              onClick={() => onNavigate(`/projects/${project.id}`)}
-                              className="text-left text-sm font-bold text-zinc-900 dark:text-white group-hover:text-accent-600 dark:text-accent-500 dark:group-hover:text-accent-700 dark:text-accent-400 transition-colors"
-                            >
-                              {project.name}
-                            </button>
+                            {isGuest ? (
+                              <span className="text-left text-sm font-bold text-zinc-900 transition-colors group-hover:text-accent-600 dark:text-white dark:group-hover:text-accent-400">
+                                {project.name}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => onNavigate(`/projects/${project.id}`)}
+                                className="text-left text-sm font-bold text-zinc-900 transition-colors group-hover:text-accent-600 dark:text-white dark:group-hover:text-accent-400"
+                              >
+                                {project.name}
+                              </button>
+                            )}
                           </h3>
                         </div>
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
                             <i className="ph-bold ph-stack" /> {project.instance_count} instancias
                           </div>
+                          {isGuest ? (
+                            <span className="flex items-center gap-1.5 text-[10px] font-semibold text-accent-600 dark:text-accent-400">
+                              <i className="ph-bold ph-file-pdf" />
+                              Exportar PDFs
+                            </span>
+                          ) : null}
                           {!isGuest ? <div className="flex items-center gap-2">
                             {currentUser.permissions.project_create && !isGuest ? (
                               <button
@@ -708,11 +737,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             <button
                               type="button"
                               className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 flex items-center gap-1.5"
-                              onClick={() => {
-                                setDetailedMaterialQuantityBasis("factory");
-                                setIncludeFullTechnicalMaterialTables(true);
-                                setExportModal({ projectId: project.id, projectName: project.name });
-                              }}
+                              onClick={() => openExportModal(project.id, project.name)}
                               aria-label={`Exportar ${project.name}`}
                             >
                               <i className="ph-bold ph-file-arrow-down" />
@@ -882,7 +907,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
             </div>
           </div>
 
-          <div>
+          {!isGuest ? <div>
             <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-zinc-500">Hojas de Cálculo</div>
             <div className="overflow-hidden rounded-xl border border-black/10 bg-white dark:border-white/10 dark:bg-white/[0.02]">
               <ExportRow
@@ -904,7 +929,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                 />
               ) : null}
             </div>
-          </div>
+          </div> : null}
         </div>
       </Modal>
 

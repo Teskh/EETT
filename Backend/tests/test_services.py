@@ -980,7 +980,7 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(guest_session.json()["roles"], ["guest"])
         self.assertTrue(guest_session.json()["is_guest"])
         self.assertTrue(guest_session.json()["page_access"]["projects"]["can_read"])
-        self.assertFalse(guest_session.json()["page_access"]["history"]["can_read"])
+        self.assertTrue(guest_session.json()["page_access"]["history"]["can_read"])
 
         guest_projects = self.client.get("/api/v1/projects", headers=guest_headers)
         self.assertEqual(guest_projects.status_code, 200)
@@ -1003,7 +1003,8 @@ class ServiceLayerTests(unittest.TestCase):
         guest_cost_model = self.client.get("/api/v1/projects/2/cost-model", headers=guest_headers)
         self.assertEqual(guest_cost_model.status_code, 403)
         guest_history = self.client.get("/api/v1/activity", headers=guest_headers)
-        self.assertEqual(guest_history.status_code, 403)
+        self.assertEqual(guest_history.status_code, 200)
+        self.assertTrue(all(group["project"]["status"] == "execution" for group in guest_history.json()))
         guest_comment = self.client.post(
             "/api/v1/projects/2/comments",
             headers=guest_headers,
