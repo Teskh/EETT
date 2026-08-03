@@ -1,6 +1,8 @@
 import { APP_PAGES, canReadPage } from "../lib/pageAccess";
 import type { SessionUser } from "../lib/types";
 
+const PATAGUAL_LOGO_URL = `${import.meta.env.BASE_URL}patagual-logo-white.png`;
+
 type HomePageProps = {
   onNavigate: (to: string) => void;
   currentUser: SessionUser;
@@ -17,8 +19,8 @@ export function HomePage({ onNavigate, currentUser }: HomePageProps) {
           <div 
             className="h-12 w-12 bg-accent-500" 
             style={{ 
-              WebkitMask: "url('/patagual-logo-white.png') no-repeat center / contain",
-              mask: "url('/patagual-logo-white.png') no-repeat center / contain" 
+              WebkitMask: `url('${PATAGUAL_LOGO_URL}') no-repeat center / contain`,
+              mask: `url('${PATAGUAL_LOGO_URL}') no-repeat center / contain`
             }} 
           />
         </div>

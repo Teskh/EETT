@@ -7,6 +7,8 @@ import type { ThemeMode } from "../lib/theme";
 import { APP_PAGES, canReadPage } from "../lib/pageAccess";
 import { UnitChangeAlertsButton } from "./UnitChangeAlerts";
 
+const PATAGUAL_LOGO_URL = `${import.meta.env.BASE_URL}patagual-logo-white.png`;
+
 type NavKey = "home" | "catalog" | "dashboard" | "cost-model" | "history" | "projects" | "settings";
 
 type AppShellProps = {
@@ -187,8 +189,8 @@ export function AppShell({ title, activeNav, currentUser, themeMode, onThemeMode
             <div 
               className="h-full w-full bg-accent-500" 
               style={{ 
-                WebkitMask: "url('/patagual-logo-white.png') no-repeat center / contain",
-                mask: "url('/patagual-logo-white.png') no-repeat center / contain" 
+                WebkitMask: `url('${PATAGUAL_LOGO_URL}') no-repeat center / contain`,
+                mask: `url('${PATAGUAL_LOGO_URL}') no-repeat center / contain`
               }} 
             />
           </button>

@@ -57,7 +57,7 @@ try {
         -Trigger $trigger `
         -Principal $principal `
         -Settings $settings `
-        -Description "EETT FastAPI service on 127.0.0.1:5000" `
+        -Description "EETT FastAPI service on 127.0.0.1:5002" `
         -Force | Out-Null
     Start-ScheduledTask -TaskName "EETT"
     Start-Sleep -Seconds 5
