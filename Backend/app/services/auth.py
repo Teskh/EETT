@@ -340,7 +340,7 @@ def default_role_page_access(role_code: str, page_key: str) -> tuple[bool, bool]
             return False, False
         return True, True
     if role_code == "guest":
-        return (True, False) if page_key == "projects" else (False, False)
+        return (True, False) if page_key in {"history", "projects"} else (False, False)
     if role_code in {"editor", "ot"}:
         if page_key in {"catalog", "projects", "cost_model"}:
             return True, True
@@ -559,7 +559,7 @@ def require_guest_request_access(user: User, *, method: str, path: str) -> None:
         return
     if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
         raise HTTPException(status_code=403, detail="Guest access is read-only")
-    if path in {"/api/v1/session", "/api/v1/projects"}:
+    if path in {"/api/v1/session", "/api/v1/projects", "/api/v1/activity"}:
         return
     if re.fullmatch(r"/api/v1/projects/\d+", path):
         return

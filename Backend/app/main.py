@@ -2309,7 +2309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
     async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
-        return get_activity_history(session, current_user)
+        return get_activity_history(session, current_user, execution_only=is_guest_user(current_user))
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
     async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

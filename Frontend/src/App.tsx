@@ -326,7 +326,7 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {canReadPage(session, "history") ? <ChangeHistoryPage /> : <AccessDenied message="Este rol no puede abrir el historial de cambios." />}
+        {canReadPage(session, "history") ? <ChangeHistoryPage currentUser={session} /> : <AccessDenied message="Este rol no puede abrir el historial de cambios." />}
       </AppShell>
     );
   }
