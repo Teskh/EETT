@@ -557,11 +557,14 @@ def build_permission_payload(user: User, project: Project | None = None) -> dict
 def require_guest_request_access(user: User, *, method: str, path: str) -> None:
     if not is_guest_user(user):
         return
-    if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
-        raise HTTPException(status_code=403, detail="Guest access is read-only")
+    normalized_method = method.upper()
+    if normalized_method == "POST" and re.fullmatch(r"/api/v1/projects/\d+/exports", path):
+        return
+    if normalized_method not in {"GET", "HEAD", "OPTIONS"}:
+        raise HTTPException(status_code=403, detail="Guest access is read-only except for PDF exports")
     if path in {"/api/v1/session", "/api/v1/projects", "/api/v1/activity"}:
         return
-    if re.fullmatch(r"/api/v1/projects/\d+", path):
+    if re.fullmatch(r"/exports/[^/]+", path):
         return
     if re.fullmatch(r"/api/v1/media/assets/\d+/content", path):
         return

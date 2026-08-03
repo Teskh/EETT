@@ -362,10 +362,10 @@ export function App() {
         onNavigate={navigate}
         onLogout={handleLogout}
       >
-        {canReadPage(session, "projects") ? (
+        {canReadPage(session, "projects") && !session.is_guest ? (
           <ProjectDetailPage projectId={route.projectId} onNavigate={navigate} onTitleChange={setProjectDetailTitle} readOnly={Boolean(session.is_guest)} />
         ) : (
-          <AccessDenied message="Este rol no puede abrir el proyecto." />
+          <AccessDenied message={session.is_guest ? "Los invitados pueden exportar PDFs desde la página de Proyectos, pero no abrir el contenido interno del proyecto." : "Este rol no puede abrir el proyecto."} />
         )}
       </AppShell>
     );

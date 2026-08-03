@@ -41,7 +41,7 @@ class GuestAuthTests(unittest.TestCase):
         self.session.close()
         self.engine.dispose()
 
-    def test_provisioned_guest_is_individual_read_only_and_execution_scoped(self) -> None:
+    def test_provisioned_guest_is_execution_scoped_with_pdf_export_access(self) -> None:
         user = provision_microsoft_guest_user(
             self.session,
             tenant_id="tenant",
@@ -65,8 +65,11 @@ class GuestAuthTests(unittest.TestCase):
         self.assertEqual(board["grouped_projects"]["template"], [])
         self.assertEqual(board["grouped_projects"]["finished"], [])
 
-        require_guest_request_access(user, method="GET", path="/api/v1/projects/2")
         require_guest_request_access(user, method="GET", path="/api/v1/activity")
+        require_guest_request_access(user, method="POST", path="/api/v1/projects/2/exports")
+        require_guest_request_access(user, method="GET", path="/exports/12-execution-commercial.pdf")
+        with self.assertRaises(HTTPException):
+            require_guest_request_access(user, method="GET", path="/api/v1/projects/2")
         with self.assertRaises(HTTPException):
             require_guest_request_access(user, method="POST", path="/api/v1/projects/2/comments")
 
