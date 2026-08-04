@@ -235,7 +235,9 @@ def get_material_dashboard_mapped_house_comparison(
     """Compare actual movements against the consumption expected from every
     house started in the window, resolved through the global house type →
     project mapping. Houses without a mapping contribute to house-start counts
-    but not to expected consumption; they are surfaced in unmapped_summary."""
+    but not to expected consumption; they are surfaced in unmapped_summary.
+    Houses mapped to a project whose BOM is still incomplete do contribute the
+    quantities defined so far and are surfaced in partial_summary."""
 
     normalized_sku = sku.strip().upper()
     production = get_production_house_starts(
@@ -292,12 +294,17 @@ def get_production_house_starts_with_links(
 
     houses = []
     mapped_count = 0
+    partial_count = 0
     for house in production["houses"]:
         link = resolve_house_type_link(links_by_key, house["house_type_id"], house.get("sub_type_id"))
         missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
-        mapped = link is not None and missing_count == 0
+        # An incomplete BOM still contributes the quantities defined so far, so
+        # the house counts as mapped and is flagged rather than dropped.
+        mapped = link is not None
         if mapped:
             mapped_count += 1
+            if missing_count > 0:
+                partial_count += 1
         houses.append(
             {
                 **house,
@@ -320,6 +327,7 @@ def get_production_house_starts_with_links(
         "total_house_starts": len(houses),
         "mapped_house_starts": mapped_count,
         "unmapped_house_starts": len(houses) - mapped_count,
+        "partial_house_starts": partial_count,
         "houses": houses,
         "generated_at": datetime.utcnow().isoformat(),
     }
@@ -768,6 +776,7 @@ def get_material_dashboard_economic_metrics(
             "excluded_cecos": normalized_excluded_cost_centers,
             "links": links_fingerprint,
             "bom": bom_fingerprint,
+            "schema": "economics-v2",
             "movement_days": movement_window_days,
             "start_date": requested_start_day.isoformat(),
             "end_date": requested_end_day.isoformat(),
@@ -798,20 +807,23 @@ def get_material_dashboard_economic_metrics(
         )
 
         # Expected consumption per SKU across every mapped house started in
-        # the window (general + sub-type quantities per house).
+        # the window (general + sub-type quantities per house). Links whose BOM
+        # still has undefined quantities contribute what is defined so far and
+        # are counted separately so the UI can flag the figure as a lower bound.
         expected_total_by_sku: dict[str, float] = defaultdict(float)
         per_link_quantities: dict[tuple[int, int | None], dict[str, float]] = {}
         total_house_starts = 0
         total_mapped_house_starts = 0
+        total_partial_house_starts = 0
         for grid_row in start_grid:
             count = int(grid_row.get("house_starts") or 0)
             total_house_starts += count
             link = resolve_house_type_link(links_by_key, grid_row["house_type_id"], grid_row.get("sub_type_id"))
             if link is None:
                 continue
-            if link_missing_quantity_count(link, expected_maps) > 0:
-                continue
             total_mapped_house_starts += count
+            if link_missing_quantity_count(link, expected_maps) > 0:
+                total_partial_house_starts += count
             link_key = (link.production_house_type_id, link.production_sub_type_id)
             if link_key not in per_link_quantities:
                 per_link_quantities[link_key] = expected_quantities_for_link(link, expected_maps)
@@ -900,6 +912,7 @@ def get_material_dashboard_economic_metrics(
             "range_end": production.get("range_end"),
             "total_house_starts": total_house_starts,
             "total_mapped_house_starts": total_mapped_house_starts,
+            "total_partial_house_starts": total_partial_house_starts,
             "link_count": len(links_by_key),
             "metrics": metrics,
             "generated_at": datetime.utcnow().isoformat(),

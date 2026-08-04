@@ -106,7 +106,8 @@ function LinkTargetSelects({
         ? !selectedProject.general_is_complete
         : selectedProject.subtypes.find((item) => item.id === target.projectSubtypeId)?.is_complete === false) ? (
         <p className="sm:col-span-2 text-[10px] text-amber-700 dark:text-amber-300">
-          Este destino tiene cantidades sin definir. No se usará para pronósticos hasta completarlas.
+          Este destino tiene cantidades sin definir. El pronóstico suma solo las cantidades ya definidas, así que quedará por debajo
+          del consumo real hasta completarlas.
         </p>
       ) : null}
     </div>
@@ -227,11 +228,22 @@ function ProductionStartsTable({ range }: { range: HouseRange }) {
             ⚠ {data.unmapped_house_starts} sin vincular
           </span>
         ) : null}
+        {data.partial_house_starts > 0 ? (
+          <span className="rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 font-medium text-amber-700 dark:text-amber-300">
+            ⚠ {data.partial_house_starts} con BOM incompleta
+          </span>
+        ) : null}
       </div>
       {data.unmapped_house_starts > 0 ? (
         <p className="text-[11px] leading-4 text-amber-700 dark:text-amber-400">
           Las viviendas sin vincular cuentan como inicios pero no aportan consumo estimado, por lo que la comparación contra el
           consumo real queda incompleta hasta vincularlas.
+        </p>
+      ) : null}
+      {data.partial_house_starts > 0 ? (
+        <p className="text-[11px] leading-4 text-amber-700 dark:text-amber-400">
+          Las viviendas con BOM incompleta sí aportan consumo estimado, sumando solo las cantidades ya definidas en su proyecto
+          vinculado. El estimado es un piso: completar esas cantidades solo puede subirlo.
         </p>
       ) : null}
       <div className="overflow-x-auto rounded-xl border border-black/10 dark:border-white/10">
@@ -257,14 +269,19 @@ function ProductionStartsTable({ range }: { range: HouseRange }) {
                   {house.sub_type_name ? <span className="text-zinc-500"> · {house.sub_type_name}</span> : null}
                 </td>
                 <td className="px-3 py-2">
-                  {house.mapped ? (
+                  {house.mapped && house.mapping_issue === "incomplete_bom" ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+                      title={`Cuenta con las cantidades definidas hasta ahora; faltan ${house.missing_quantity_count} por definir.`}
+                    >
+                      ⚠ {house.mapped_project_name}
+                      {house.mapped_project_subtype_name ? ` · ${house.mapped_project_subtype_name}` : ""} — BOM incompleta (
+                      {house.missing_quantity_count})
+                    </span>
+                  ) : house.mapped ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
                       {house.mapped_project_name}
                       {house.mapped_project_subtype_name ? ` · ${house.mapped_project_subtype_name}` : ""}
-                    </span>
-                  ) : house.mapping_issue === "incomplete_bom" ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
-                      ⚠ BOM incompleta ({house.missing_quantity_count})
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">

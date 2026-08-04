@@ -21,6 +21,9 @@ __pycache__/
 !Backend/app/static/app/logo_green.png
 *.jpg
 Frontend/node_modules/
+/Backend/app/static/app/assets/
+/Backend/app/static/app/index.html
+Frontend/vite.config.ts.timestamp-*.mjs
 dist/
 build/
 output/

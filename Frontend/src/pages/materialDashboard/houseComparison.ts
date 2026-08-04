@@ -190,6 +190,7 @@ export function getHouseComparisonForRange(
   let cumulativeMaterialQuantity = 0;
   let cumulativeHouseStarts = 0;
   let cumulativeMappedHouseStarts = 0;
+  let cumulativePartialHouseStarts = 0;
   let cumulativeExpectedQuantity = 0;
   let latestHouseStartDate: string | null = null;
   const points = houseComparison.points
@@ -201,10 +202,12 @@ export function getHouseComparisonForRange(
       const materialQuantity = Number(point.material_quantity) || 0;
       const houseStarts = Number(point.house_starts) || 0;
       const mappedHouseStarts = Number(point.mapped_house_starts) || 0;
+      const partialHouseStarts = Number(point.partial_house_starts) || 0;
       const expectedQuantity = Number(point.expected_material_quantity) || 0;
       cumulativeMaterialQuantity += materialQuantity;
       cumulativeHouseStarts += houseStarts;
       cumulativeMappedHouseStarts += mappedHouseStarts;
+      cumulativePartialHouseStarts += partialHouseStarts;
       cumulativeExpectedQuantity += expectedQuantity;
       if (houseStarts > 0) {
         latestHouseStartDate = point.date;
@@ -214,10 +217,12 @@ export function getHouseComparisonForRange(
         material_quantity: materialQuantity,
         house_starts: houseStarts,
         mapped_house_starts: mappedHouseStarts,
+        partial_house_starts: partialHouseStarts,
         expected_material_quantity: expectedQuantity,
         cumulative_material_quantity: roundTo4(cumulativeMaterialQuantity),
         cumulative_house_starts: cumulativeHouseStarts,
         cumulative_mapped_house_starts: cumulativeMappedHouseStarts,
+        cumulative_partial_house_starts: cumulativePartialHouseStarts,
         cumulative_expected_material_quantity: roundTo4(cumulativeExpectedQuantity),
         material_per_house: cumulativeHouseStarts > 0 ? roundTo4(cumulativeMaterialQuantity / cumulativeHouseStarts) : null,
       };
@@ -232,6 +237,7 @@ export function getHouseComparisonForRange(
     total_house_starts: cumulativeHouseStarts,
     total_mapped_house_starts: cumulativeMappedHouseStarts,
     total_unmapped_house_starts: cumulativeHouseStarts - cumulativeMappedHouseStarts,
+    total_partial_house_starts: cumulativePartialHouseStarts,
     total_expected_material_quantity: roundTo4(cumulativeExpectedQuantity),
     material_per_house: cumulativeHouseStarts > 0 ? roundTo4(cumulativeMaterialQuantity / cumulativeHouseStarts) : null,
     expected_material_per_mapped_house:
@@ -257,6 +263,9 @@ export function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?
   const housesProduced = end.cumulative_house_starts - (start.cumulative_house_starts - start.house_starts);
   const mappedHousesProduced =
     end.cumulative_mapped_house_starts - (start.cumulative_mapped_house_starts - start.mapped_house_starts);
+  const partialHousesProduced =
+    (end.cumulative_partial_house_starts || 0) -
+    ((start.cumulative_partial_house_starts || 0) - (start.partial_house_starts || 0));
   const projectedMaterialConsumed =
     end.cumulative_expected_material_quantity - (start.cumulative_expected_material_quantity - start.expected_material_quantity);
   const selectedPoints = points.slice(bounds.startIndex, bounds.endIndex + 1);
@@ -270,6 +279,7 @@ export function getHouseSeriesSummary(points: HouseTrendChartPoint[], selection?
     projectedMaterialConsumed,
     housesProduced,
     mappedHousesProduced,
+    partialHousesProduced,
     averageConsumptionPerHouse: housesProduced > 0 ? materialConsumed / housesProduced : null,
     expectedConsumptionPerMappedHouse: mappedHousesProduced > 0 ? projectedMaterialConsumed / mappedHousesProduced : null,
     expectedBreakdown: aggregateExpectedBreakdown(selectedPoints),

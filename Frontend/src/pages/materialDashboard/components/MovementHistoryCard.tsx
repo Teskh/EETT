@@ -114,6 +114,7 @@ function ExpectedBreakdownTooltip({
   }
   const visibleRows = breakdown.slice(0, 8);
   const hiddenCount = breakdown.length - visibleRows.length;
+  const incompleteRows = breakdown.filter((row) => (row.missing_quantity_count || 0) > 0);
 
   return (
     <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-80 translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/estimate:translate-y-0 group-hover/estimate:opacity-100 group-focus-within/estimate:translate-y-0 group-focus-within/estimate:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
@@ -128,6 +129,7 @@ function ExpectedBreakdownTooltip({
             className="grid grid-cols-[1fr_auto_auto] items-baseline gap-3 text-xs"
           >
             <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-100" title={getExpectedBreakdownLabel(row)}>
+              {(row.missing_quantity_count || 0) > 0 ? <span className="mr-1 text-amber-600 dark:text-amber-400">⚠</span> : null}
               {getExpectedBreakdownLabel(row)}
             </span>
             <span className="font-mono text-zinc-500 dark:text-zinc-400">{formatNumber(row.house_starts, 0)} viv.</span>
@@ -136,6 +138,12 @@ function ExpectedBreakdownTooltip({
         ))}
       </div>
       {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} tipos mas</div> : null}
+      {incompleteRows.length ? (
+        <div className="mt-2 border-t border-black/5 pt-2 text-[11px] leading-4 text-amber-700 dark:border-white/10 dark:text-amber-400">
+          ⚠ {incompleteRows.length === 1 ? "Un tipo tiene" : `${incompleteRows.length} tipos tienen`} cantidades sin definir: suman
+          solo lo ya definido, por lo que el estimado es un piso.
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -382,6 +390,15 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     : null;
   const housesProducedInRange = houseSummary?.housesProduced ?? houseComparisonInRange?.total_house_starts ?? null;
   const unmappedStartsInRange = houseComparisonInRange?.total_unmapped_house_starts ?? 0;
+  // Houses linked to a project whose BOM still has undefined quantities: their
+  // consumption is counted with what is defined so far, so the estimate is a
+  // lower bound rather than a gap in the analysis.
+  const partialStartsInRange =
+    houseSummary?.partialHousesProduced ?? houseComparisonInRange?.total_partial_house_starts ?? 0;
+  const partialMissingQuantityCount = (houseComparisonInRange?.partial_summary || []).reduce(
+    (total, row) => total + (row.missing_quantity_count || 0),
+    0,
+  );
   const purchaseOrders = detail && "purchase_orders" in detail ? detail.purchase_orders : [];
   const purchasePriceStats = groupSelection ? null : getPurchaseOrderPriceStats(purchaseOrders);
   // Stock-out risk uses the same consumption rates as the purchase order
@@ -842,6 +859,18 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                   title="Estas viviendas cuentan como inicios pero no aportan consumo estimado"
                 >
                   ⚠ {unmappedStartsInRange} {unmappedStartsInRange === 1 ? "inicio sin vincular" : "inicios sin vincular"}
+                </button>
+              ) : null}
+              {partialStartsInRange > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenLinksModal("starts")}
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                  title={`Estas viviendas sí aportan consumo estimado, pero su proyecto vinculado aún tiene ${
+                    partialMissingQuantityCount || "algunas"
+                  } cantidades sin definir: el consumo estimado es un piso, no el total.`}
+                >
+                  ⚠ {partialStartsInRange} {partialStartsInRange === 1 ? "inicio con BOM incompleta" : "inicios con BOM incompleta"}
                 </button>
               ) : null}
             </div>

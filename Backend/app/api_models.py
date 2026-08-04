@@ -1009,6 +1009,7 @@ class ProductionHouseStartsResponse(BaseModel):
     total_house_starts: int
     mapped_house_starts: int
     unmapped_house_starts: int
+    partial_house_starts: int = 0
     houses: list[ProductionHouseStartModel] = Field(default_factory=list)
     generated_at: str
 
@@ -1051,6 +1052,7 @@ class MaterialDashboardEconomicMetricsResponse(BaseModel):
     range_end: str | None
     total_house_starts: int
     total_mapped_house_starts: int = 0
+    total_partial_house_starts: int = 0
     link_count: int = 0
     metrics: list[MaterialDashboardEconomicMetricModel] = Field(default_factory=list)
     generated_at: str
@@ -1098,6 +1100,7 @@ class MaterialDashboardGroupEconomicMetricsResponse(BaseModel):
     range_end: str | None
     total_house_starts: int
     total_mapped_house_starts: int = 0
+    total_partial_house_starts: int = 0
     link_count: int = 0
     metrics: list[MaterialDashboardGroupEconomicMetricModel] = Field(default_factory=list)
     generated_at: str
@@ -1114,6 +1117,7 @@ class MaterialDashboardExpectedBreakdownModel(BaseModel):
     mapped_project_id: int
     mapped_project_name: str
     mapped_project_subtype_id: int | None = None
+    missing_quantity_count: int = 0
 
 
 class MaterialDashboardMappedHouseComparisonPointModel(BaseModel):
@@ -1121,10 +1125,12 @@ class MaterialDashboardMappedHouseComparisonPointModel(BaseModel):
     material_quantity: float
     house_starts: int
     mapped_house_starts: int
+    partial_house_starts: int = 0
     expected_material_quantity: float
     cumulative_material_quantity: float
     cumulative_house_starts: int
     cumulative_mapped_house_starts: int
+    cumulative_partial_house_starts: int = 0
     cumulative_expected_material_quantity: float
     material_per_house: float | None
     expected_breakdown: list["MaterialDashboardExpectedBreakdownModel"] = Field(default_factory=list)
@@ -1155,6 +1161,7 @@ class MaterialDashboardMappedHouseComparisonResponse(BaseModel):
     total_house_starts: int
     total_mapped_house_starts: int
     total_unmapped_house_starts: int
+    total_partial_house_starts: int = 0
     total_expected_material_quantity: float
     material_per_house: float | None
     expected_material_per_mapped_house: float | None
@@ -1163,6 +1170,7 @@ class MaterialDashboardMappedHouseComparisonResponse(BaseModel):
     link_count: int = 0
     mapped_projects: list[MaterialDashboardMappedProjectModel] = Field(default_factory=list)
     unmapped_summary: list[MaterialDashboardUnmappedStartsModel] = Field(default_factory=list)
+    partial_summary: list[MaterialDashboardUnmappedStartsModel] = Field(default_factory=list)
     points: list[MaterialDashboardMappedHouseComparisonPointModel] = Field(default_factory=list)
     generated_at: str
 

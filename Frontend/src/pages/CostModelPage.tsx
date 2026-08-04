@@ -3415,6 +3415,15 @@ function GroupOverconsumptionModal({
 
               <p className="text-[10px] leading-4 text-zinc-500">
                 La variación compara el consumo total real del grupo con el presupuesto de las viviendas vinculadas. Viviendas iniciadas: {formatNumber(metrics?.total_house_starts, 0)} · vinculadas: {formatNumber(metrics?.total_mapped_house_starts, 0)}.
+                {metrics?.total_partial_house_starts ? (
+                  <>
+                    {" "}
+                    <span className="text-amber-700 dark:text-amber-400">
+                      ⚠ {formatNumber(metrics.total_partial_house_starts, 0)} de ellas tienen cantidades sin definir: aportan solo lo
+                      ya definido, así que el presupuesto es un piso.
+                    </span>
+                  </>
+                ) : null}
               </p>
             </>
           ) : (

@@ -211,6 +211,7 @@ export type ProductionHouseStartsData = {
   total_house_starts: number;
   mapped_house_starts: number;
   unmapped_house_starts: number;
+  partial_house_starts: number;
   houses: ProductionHouseStart[];
   generated_at: string;
 };
@@ -253,6 +254,7 @@ export type MaterialDashboardEconomicMetricsResponse = {
   range_end: string | null;
   total_house_starts: number;
   total_mapped_house_starts: number;
+  total_partial_house_starts: number;
   link_count: number;
   metrics: MaterialDashboardEconomicMetric[];
   generated_at: string;
@@ -300,6 +302,7 @@ export type MaterialDashboardGroupEconomicMetricsResponse = {
   range_end: string | null;
   total_house_starts: number;
   total_mapped_house_starts: number;
+  total_partial_house_starts: number;
   link_count: number;
   metrics: MaterialDashboardGroupEconomicMetric[];
   generated_at: string;
@@ -330,10 +333,13 @@ export type MaterialDashboardMappedHouseComparisonPoint = {
   material_quantity: number;
   house_starts: number;
   mapped_house_starts: number;
+  /** Mapped houses whose project BOM still has undefined quantities. */
+  partial_house_starts: number;
   expected_material_quantity: number;
   cumulative_material_quantity: number;
   cumulative_house_starts: number;
   cumulative_mapped_house_starts: number;
+  cumulative_partial_house_starts: number;
   cumulative_expected_material_quantity: number;
   material_per_house: number | null;
   expected_breakdown: MaterialDashboardExpectedBreakdown[];
@@ -365,6 +371,8 @@ export type MaterialDashboardExpectedBreakdown = {
   mapped_project_id: number;
   mapped_project_name: string;
   mapped_project_subtype_id: number | null;
+  /** Undefined quantities left in the linked BOM; > 0 makes the row a lower bound. */
+  missing_quantity_count: number;
 };
 
 export type MaterialDashboardMappedHouseComparisonData = {
@@ -377,6 +385,7 @@ export type MaterialDashboardMappedHouseComparisonData = {
   total_house_starts: number;
   total_mapped_house_starts: number;
   total_unmapped_house_starts: number;
+  total_partial_house_starts: number;
   total_expected_material_quantity: number;
   material_per_house: number | null;
   expected_material_per_mapped_house: number | null;
@@ -385,6 +394,8 @@ export type MaterialDashboardMappedHouseComparisonData = {
   link_count: number;
   mapped_projects: MaterialDashboardMappedProject[];
   unmapped_summary: MaterialDashboardUnmappedStarts[];
+  /** Mapped house types whose linked BOM is incomplete; counted, but a lower bound. */
+  partial_summary: MaterialDashboardUnmappedStarts[];
   points: MaterialDashboardMappedHouseComparisonPoint[];
   generated_at: string;
 };

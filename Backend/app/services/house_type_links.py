@@ -294,9 +294,12 @@ def build_mapped_house_comparison(
 
     ``start_grid`` rows look like {"date": iso_str, "house_type_id": int,
     "sub_type_id": int | None, "house_type_name": str, "sub_type_name":
-    str | None, "house_starts": int}. Expected consumption counts only houses
-    that resolve to a link; unmapped houses are reported separately so the UI
-    can warn about them."""
+    str | None, "house_starts": int}. Expected consumption counts every house
+    that resolves to a link, including links whose BOM still has undefined
+    quantities: those contribute the quantities defined so far and are reported
+    in ``partial_summary`` so the UI can warn that the figure is a lower bound.
+    Houses with no link at all contribute nothing and land in
+    ``unmapped_summary``."""
 
     normalized_factors = {
         str(sku).strip().upper(): float(factor)
@@ -306,10 +309,16 @@ def build_mapped_house_comparison(
 
     per_house_quantity_cache: dict[LinkKey, float] = {}
     starts_by_day: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"house_starts": 0, "mapped_house_starts": 0, "expected_quantity": 0.0}
+        lambda: {
+            "house_starts": 0,
+            "mapped_house_starts": 0,
+            "partial_house_starts": 0,
+            "expected_quantity": 0.0,
+        }
     )
     expected_breakdown_by_day: dict[str, dict[LinkKey, dict[str, Any]]] = defaultdict(dict)
     unmapped_by_key: dict[LinkKey, dict[str, Any]] = {}
+    partial_by_key: dict[LinkKey, dict[str, Any]] = {}
     mapped_projects: dict[int, str] = {}
 
     for row in start_grid:
@@ -324,23 +333,40 @@ def build_mapped_house_comparison(
         bucket["house_starts"] += count
 
         link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
-        missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
-        if link is None or missing_count > 0:
-            key: LinkKey = (house_type_id, sub_type_id)
+        actual_key: LinkKey = (house_type_id, sub_type_id)
+        if link is None:
             summary = unmapped_by_key.setdefault(
-                key,
+                actual_key,
                 {
                     "house_type_id": house_type_id,
                     "house_type_name": str(row.get("house_type_name") or ""),
                     "sub_type_id": sub_type_id,
                     "sub_type_name": row.get("sub_type_name"),
                     "house_starts": 0,
-                    "reason": "incomplete_bom" if missing_count > 0 else "unmapped",
-                    "missing_quantity_count": missing_count,
+                    "reason": "unmapped",
+                    "missing_quantity_count": 0,
                 },
             )
             summary["house_starts"] += count
             continue
+
+        # A link with undefined quantities still describes part of the house:
+        # sum what is defined and flag the gap instead of dropping the house.
+        missing_count = link_missing_quantity_count(link, expected_maps)
+        if missing_count > 0:
+            partial = partial_by_key.setdefault(
+                actual_key,
+                {
+                    "house_type_id": house_type_id,
+                    "house_type_name": str(row.get("house_type_name") or ""),
+                    "sub_type_id": sub_type_id,
+                    "sub_type_name": row.get("sub_type_name"),
+                    "house_starts": 0,
+                    "reason": "incomplete_bom",
+                    "missing_quantity_count": missing_count,
+                },
+            )
+            partial["house_starts"] += count
 
         resolved_key: LinkKey = (
             link["production_house_type_id"] if isinstance(link, Mapping) else link.production_house_type_id,
@@ -358,10 +384,11 @@ def build_mapped_house_comparison(
             project_name = str(expected_map.get("project_name") or "")
             mapped_projects[project_id] = project_name
         bucket["mapped_house_starts"] += count
+        if missing_count > 0:
+            bucket["partial_house_starts"] += count
         expected_quantity = expected_per_house * count
         bucket["expected_quantity"] += expected_quantity
 
-        actual_key: LinkKey = (house_type_id, sub_type_id)
         breakdown = expected_breakdown_by_day[day_key].setdefault(
             actual_key,
             {
@@ -377,6 +404,7 @@ def build_mapped_house_comparison(
                 "mapped_project_subtype_id": (
                     link["project_subtype_id"] if isinstance(link, Mapping) else link.project_subtype_id
                 ),
+                "missing_quantity_count": missing_count,
             },
         )
         breakdown["house_starts"] += count
@@ -391,6 +419,7 @@ def build_mapped_house_comparison(
     cumulative_material = 0.0
     cumulative_house_starts = 0
     cumulative_mapped_house_starts = 0
+    cumulative_partial_house_starts = 0
     cumulative_expected = 0.0
     total_expected_breakdown: dict[LinkKey, dict[str, Any]] = {}
     latest_house_start_date: str | None = None
@@ -398,7 +427,10 @@ def build_mapped_house_comparison(
         current_day = start_day + timedelta(days=offset)
         day_key = current_day.isoformat()
         material_quantity = movement_by_day.get(day_key, 0.0)
-        bucket = starts_by_day.get(day_key, {"house_starts": 0, "mapped_house_starts": 0, "expected_quantity": 0.0})
+        bucket = starts_by_day.get(
+            day_key,
+            {"house_starts": 0, "mapped_house_starts": 0, "partial_house_starts": 0, "expected_quantity": 0.0},
+        )
         day_breakdown = []
         for actual_key, row in expected_breakdown_by_day.get(day_key, {}).items():
             rounded_row = {
@@ -425,6 +457,7 @@ def build_mapped_house_comparison(
         cumulative_material += material_quantity
         cumulative_house_starts += house_starts
         cumulative_mapped_house_starts += int(bucket["mapped_house_starts"])
+        cumulative_partial_house_starts += int(bucket["partial_house_starts"])
         cumulative_expected += float(bucket["expected_quantity"])
         points.append(
             {
@@ -432,10 +465,12 @@ def build_mapped_house_comparison(
                 "material_quantity": round(material_quantity, 4),
                 "house_starts": house_starts,
                 "mapped_house_starts": int(bucket["mapped_house_starts"]),
+                "partial_house_starts": int(bucket["partial_house_starts"]),
                 "expected_material_quantity": round(float(bucket["expected_quantity"]), 4),
                 "cumulative_material_quantity": round(cumulative_material, 4),
                 "cumulative_house_starts": cumulative_house_starts,
                 "cumulative_mapped_house_starts": cumulative_mapped_house_starts,
+                "cumulative_partial_house_starts": cumulative_partial_house_starts,
                 "cumulative_expected_material_quantity": round(cumulative_expected, 4),
                 "material_per_house": round(cumulative_material / cumulative_house_starts, 4)
                 if cumulative_house_starts > 0
@@ -447,9 +482,14 @@ def build_mapped_house_comparison(
     total_material_quantity = round(cumulative_material, 4)
     total_house_starts = cumulative_house_starts
     total_mapped_house_starts = cumulative_mapped_house_starts
+    total_partial_house_starts = cumulative_partial_house_starts
     total_expected = round(cumulative_expected, 4)
     unmapped_summary = sorted(
         unmapped_by_key.values(),
+        key=lambda row: (-int(row["house_starts"]), row["house_type_name"], row["sub_type_name"] or ""),
+    )
+    partial_summary = sorted(
+        partial_by_key.values(),
         key=lambda row: (-int(row["house_starts"]), row["house_type_name"], row["sub_type_name"] or ""),
     )
     expected_breakdown = sorted(
@@ -472,6 +512,7 @@ def build_mapped_house_comparison(
         "total_house_starts": total_house_starts,
         "total_mapped_house_starts": total_mapped_house_starts,
         "total_unmapped_house_starts": total_house_starts - total_mapped_house_starts,
+        "total_partial_house_starts": total_partial_house_starts,
         "total_expected_material_quantity": total_expected,
         "material_per_house": round(total_material_quantity / total_house_starts, 4)
         if total_house_starts > 0
@@ -486,6 +527,7 @@ def build_mapped_house_comparison(
             for project_id, name in sorted(mapped_projects.items(), key=lambda item: item[1].lower())
         ],
         "unmapped_summary": unmapped_summary,
+        "partial_summary": partial_summary,
         "points": points,
     }
 

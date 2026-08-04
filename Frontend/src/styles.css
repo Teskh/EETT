@@ -43,6 +43,41 @@ body.modal-open {
   overflow: hidden;
 }
 
+/* The scrim dims the app without draining it: a light tint plus a blur reads
+   as depth, where the old near-opaque dark sheet flattened the sidebar and
+   header into gray. `saturate` keeps accent colours alive behind the glass. */
+.modal-scrim {
+  background: rgba(24, 24, 27, 0.32);
+  backdrop-filter: blur(6px) saturate(115%);
+  -webkit-backdrop-filter: blur(6px) saturate(115%);
+  animation: modal-scrim-in 160ms ease-out;
+}
+
+html.dark .modal-scrim {
+  background: rgba(9, 9, 11, 0.6);
+}
+
+.modal-panel {
+  animation: modal-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-scrim,
+  .modal-panel {
+    animation: none;
+  }
+}
+
 a {
   color: inherit;
   text-decoration: none;

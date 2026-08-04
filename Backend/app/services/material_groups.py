@@ -459,7 +459,7 @@ def get_material_dashboard_group_economic_metrics(
             "cecos": normalized_cost_centers,
             "excluded_cecos": normalized_excluded_cost_centers,
             "groups": _group_economic_fingerprint(groups),
-            "schema": "cost-breakdown-v1",
+            "schema": "cost-breakdown-v2",
             "links": house_type_links_fingerprint(session),
             "bom": linked_projects_bom_fingerprint(session),
             "movement_days": movement_window_days,
@@ -519,6 +519,7 @@ def get_material_dashboard_group_economic_metrics(
             "range_end": production.get("range_end"),
             "total_house_starts": sum(int(row.get("house_starts") or 0) for row in start_grid),
             "total_mapped_house_starts": _count_mapped_house_starts(start_grid, links_by_key, expected_maps),
+            "total_partial_house_starts": _count_partial_house_starts(start_grid, links_by_key, expected_maps),
             "link_count": len(links_by_key),
             "metrics": metrics,
             "generated_at": datetime.utcnow().isoformat(),
@@ -788,13 +789,28 @@ def _group_normalized_price_delta(
 
 
 def _count_mapped_house_starts(start_grid: list[dict], links_by_key: dict, expected_maps: dict) -> int:
+    """Houses that resolve to a link, including links whose BOM is still
+    incomplete — those contribute the quantities defined so far."""
     total = 0
     for row in start_grid:
         house_type_id = int(row.get("house_type_id") or 0)
         sub_type_raw = row.get("sub_type_id")
         sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
         link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
-        if link is not None and link_missing_quantity_count(link, expected_maps) == 0:
+        if link is not None:
+            total += int(row.get("house_starts") or 0)
+    return total
+
+
+def _count_partial_house_starts(start_grid: list[dict], links_by_key: dict, expected_maps: dict) -> int:
+    """Subset of the mapped houses whose link still has undefined quantities."""
+    total = 0
+    for row in start_grid:
+        house_type_id = int(row.get("house_type_id") or 0)
+        sub_type_raw = row.get("sub_type_id")
+        sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
+        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
+        if link is not None and link_missing_quantity_count(link, expected_maps) > 0:
             total += int(row.get("house_starts") or 0)
     return total
 
