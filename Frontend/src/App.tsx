@@ -93,6 +93,7 @@ export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => (
     document.documentElement.classList.contains("dark") ? "dark" : "light"
   ));
+  const titledProjectId = "projectId" in route ? route.projectId : null;
 
   useEffect(() => {
     const handlePopstate = () => {
@@ -150,7 +151,7 @@ export function App() {
 
   useEffect(() => {
     setProjectDetailTitle("Proyecto");
-  }, [route]);
+  }, [route.name, titledProjectId]);
 
   useEffect(() => {
     if (route.name === "home") {

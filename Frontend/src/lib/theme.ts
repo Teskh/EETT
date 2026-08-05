@@ -2,7 +2,7 @@ export type ThemeMode = "light" | "dark";
 
 const LAST_THEME_USER_KEY = "spec-sheets.theme.last-user";
 const USER_THEME_KEY_PREFIX = "spec-sheets.theme.user.";
-const DEFAULT_THEME_MODE: ThemeMode = "dark";
+const DEFAULT_THEME_MODE: ThemeMode = "light";
 
 function isThemeMode(value: string | null): value is ThemeMode {
   return value === "light" || value === "dark";
