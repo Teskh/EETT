@@ -62,7 +62,12 @@ from app.services.erp import (
     _get_purchase_order_summaries_for_products_batch,
     _get_purchase_order_lines_for_products_batch,
 )
-from app.services.export_projection import build_detailed_material_export_sections
+from app.services.export_projection import (
+    _technical_materials,
+    build_detailed_material_export_sections,
+    iter_cost_model_rows,
+    iter_material_context_rows,
+)
 from app.services.export_workbooks import build_materials_workbook
 from app.services.material_groups import (
     _build_group_economic_metric,
@@ -84,6 +89,56 @@ from app.ui import render_catalog_page, render_project_detail_page, render_proje
 
 
 class ExportProjectionTests(unittest.TestCase):
+    def test_unselected_instance_material_is_excluded_from_every_material_projection(self) -> None:
+        selected = {
+            "material_id": 1,
+            "material_name": "Selected material",
+            "sku": "MAT-SELECTED",
+            "unit": "UN",
+            "source_status": "catalog",
+            "bom_entries": [{"subtype": None, "quantity": 2, "quantity_state": "value"}],
+        }
+        unselected = {
+            "material_id": 2,
+            "material_name": "Unselected material",
+            "sku": "MAT-UNSELECTED",
+            "unit": "UN",
+            "source_status": "missing",
+            # Missing catalog candidates carry placeholder rows for the editor.
+            "bom_entries": [{"subtype": None, "quantity": None, "quantity_state": "blank"}],
+        }
+        instance = {
+            "id": 10,
+            "name": "Instance",
+            "short_name": None,
+            "materials": [selected, unselected],
+        }
+        project_data = {
+            "project": {"name": "Projection contract"},
+            "categories": [{"name": "Category", "depth": 0, "instances": [instance]}],
+        }
+
+        self.assertEqual([row["sku"] for row in iter_material_context_rows(project_data)], ["MAT-SELECTED"])
+        self.assertEqual([row["sku"] for row in iter_cost_model_rows(project_data)], ["MAT-SELECTED"])
+        self.assertEqual(
+            [material["sku"] for material in build_detailed_material_export_sections(project_data)[0]["materials"]],
+            ["MAT-SELECTED"],
+        )
+        self.assertEqual(
+            [material["sku"] for material in _technical_materials(instance, {"include_materials": True})],
+            ["MAT-SELECTED"],
+        )
+
+        output = BytesIO()
+        build_materials_workbook(project_data, output)
+        output.seek(0)
+        workbook = load_workbook(filename=output)
+        exported_skus = {
+            workbook["Total Materiales"].cell(row=row_index, column=2).value
+            for row_index in range(2, workbook["Total Materiales"].max_row + 1)
+        }
+        self.assertEqual(exported_skus, {"MAT-SELECTED"})
+
     def test_detailed_material_export_sorts_materials_by_sku(self) -> None:
         project_data = {
             "categories": [
@@ -278,6 +333,8 @@ class ServiceLayerTests(unittest.TestCase):
         child_names = {child["name"] for child in data["selected"]["child_categories"]}
         self.assertIn("Doors", child_names)
         self.assertIn("Windows", child_names)
+        windows_node = next(child for child in data["tree"][0]["children"] if child["name"] == "Windows")
+        self.assertTrue(any(component["name"] == "Sliding Window" for component in windows_node["components"]))
 
     def test_catalog_create_helpers_persist_new_records(self) -> None:
         with self.session_factory() as session:
@@ -306,6 +363,127 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(refreshed["selected"]["name"], "Bathrooms")
         self.assertEqual(len(refreshed["selected"]["components"]), 1)
         self.assertEqual(refreshed["selected"]["components"][0]["short_description"], "Client-facing mirror cabinet")
+
+    def test_reconcile_new_catalog_attribute_saves_a_predefined_value(self) -> None:
+        with self.session_factory() as session:
+            instance = session.scalar(
+                select(ProjectInstance).where(ProjectInstance.component.has(CatalogComponent.name == "Entry Door"))
+            )
+            self.assertIsNotNone(instance)
+            assert instance is not None
+            instance_id = instance.id
+            project_id = instance.project_id
+            definition = create_attribute_definition(
+                session,
+                component_id=instance.component_id,
+                name="Recently Added Finish",
+                value_type="select",
+                options_text="Mate\nBrillante",
+            )
+            self.assertIsNotNone(definition)
+
+        response = self.client.post(
+            f"/api/v1/projects/{project_id}/instances/{instance_id}/sync-attributes/reconcile",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "add_attribute_names": ["Recently Added Finish"],
+                "attribute_values": [{"name": "Recently Added Finish", "value": "Brillante"}],
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["attribute_schema"]["status"], "in_sync")
+
+        with self.session_factory() as session:
+            refreshed = get_project_view_data(session, project_id)
+        assert refreshed is not None
+        serialized = next(
+            item
+            for category in refreshed["categories"]
+            for item in category["instances"]
+            if item["id"] == instance_id
+        )
+        base_attributes = next(group for group in serialized["attributes"] if group["application_label"] is None)
+        values = {item["name"]: item["value"] for item in base_attributes["values"]}
+        self.assertEqual(values["Recently Added Finish"], "Brillante")
+
+    def test_category_rename_and_cascade_delete_are_impact_guarded(self) -> None:
+        with self.session_factory() as session:
+            root = create_category(session, name="Temporary Root", description=None, scope="mixed", parent_id=None)
+            child = create_category(session, name="Temporary Child", description=None, scope="item", parent_id=root.id)
+            component = create_component(
+                session,
+                category_id=child.id,
+                component_type="item",
+                name="Temporary Panel",
+                short_name=None,
+                description=None,
+                short_description=None,
+                installation=None,
+                unit_type=None,
+            )
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+            self.assertIsNotNone(project)
+            assert project is not None
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=child.id,
+                component_id=component.id,
+                name="Temporary Project Panel",
+                short_name=None,
+                description=None,
+                short_description=None,
+                installation=None,
+                unit_amount=1,
+            )
+            root_id = root.id
+            child_id = child.id
+            instance_id = instance.id
+
+        rename_response = self.client.put(
+            f"/api/v1/catalog/categories/{root_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Renamed Temporary Root"},
+        )
+        self.assertEqual(rename_response.status_code, 200)
+
+        impact_response = self.client.get(
+            f"/api/v1/catalog/categories/{root_id}/deletion-impact",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(impact_response.status_code, 200)
+        impact = impact_response.json()
+        self.assertEqual(impact["descendant_count"], 1)
+        self.assertEqual(impact["component_count"], 1)
+        self.assertEqual(impact["instance_count"], 1)
+        self.assertTrue(impact["requires_confirmation"])
+
+        blocked_response = self.client.delete(
+            f"/api/v1/catalog/categories/{root_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(blocked_response.status_code, 409)
+
+        delete_response = self.client.delete(
+            f"/api/v1/catalog/categories/{root_id}?confirm_cascade=true",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(delete_response.status_code, 200)
+
+        with self.session_factory() as session:
+            self.assertIsNone(session.get(CatalogCategory, root_id))
+            self.assertIsNone(session.get(CatalogCategory, child_id))
+            self.assertIsNone(session.get(ProjectInstance, instance_id))
+
+        with self.session_factory() as session:
+            empty = create_category(session, name="Empty Category", description=None, scope="item", parent_id=None)
+            empty_id = empty.id
+
+        empty_delete_response = self.client.delete(
+            f"/api/v1/catalog/categories/{empty_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(empty_delete_response.status_code, 200)
 
     def test_catalog_attribute_helpers_support_create_update_delete_and_bump_sync_timestamp(self) -> None:
         with self.session_factory() as session:
@@ -829,6 +1007,51 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(trim_material["bom_entries"][0]["quantity_state"], "zero")
         self.assertEqual(trim_instance["sync_state"]["status"], "out_of_sync")
 
+    def test_deselected_initial_material_rules_remain_editor_candidates_but_not_project_outputs(self) -> None:
+        with self.session_factory() as session:
+            component = session.scalar(select(CatalogComponent).where(CatalogComponent.name == "Entry Door"))
+            project = session.scalar(select(Project).where(Project.name == "Casa Robles - Block A"))
+            self.assertIsNotNone(component)
+            self.assertIsNotNone(project)
+            assert component is not None
+            assert project is not None
+
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=component.category_id,
+                component_id=component.id,
+                name="Door without predefined materials",
+                short_name=None,
+                description=None,
+                short_description=None,
+                installation=None,
+                unit_amount=1,
+                selected_material_rule_ids=[],
+            )
+            self.assertEqual(instance.bom_entries, [])
+
+            detail = get_project_view_data(session, project.id)
+            assert detail is not None
+            serialized_instance = next(
+                item
+                for section in detail["categories"]
+                for item in section["instances"]
+                if item["id"] == instance.id
+            )
+
+        # Applicable catalog choices stay visible only so the editor can add
+        # them later; operational projections must treat them as non-existing.
+        self.assertTrue(serialized_instance["materials"])
+        self.assertTrue(all(material["source_status"] == "missing" for material in serialized_instance["materials"]))
+        isolated_project_data = {
+            "project": detail["project"],
+            "categories": [{"name": "Doors", "depth": 0, "instances": [serialized_instance]}],
+        }
+        self.assertEqual(list(iter_material_context_rows(isolated_project_data)), [])
+        self.assertEqual(list(iter_cost_model_rows(isolated_project_data)), [])
+        self.assertEqual(build_detailed_material_export_sections(isolated_project_data), [])
+
     def test_project_view_includes_explicit_usage_occurrences_for_linked_accessories(self) -> None:
         with self.session_factory() as session:
             detail = get_project_view_data(session, 2)
@@ -1062,6 +1285,44 @@ class ServiceLayerTests(unittest.TestCase):
             self.assertEqual(user.microsoft_tenant_id, "tenant-id")
             self.assertEqual(user.microsoft_object_id, profile.object_id)
             self.assertEqual(role_codes(user), {"guest"})
+
+    def test_project_rename_requires_edit_permission_and_rejects_duplicate_names(self) -> None:
+        viewer_response = self.client.put(
+            "/api/v1/projects/2",
+            headers={"X-Spec-Sheets-User": "viewer"},
+            json={"name": "Viewer rename"},
+        )
+        self.assertEqual(viewer_response.status_code, 403)
+
+        rename_response = self.client.put(
+            "/api/v1/projects/2",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "  Casa Robles Renovada  "},
+        )
+        self.assertEqual(rename_response.status_code, 200)
+        self.assertEqual(rename_response.json()["project_id"], 2)
+
+        detail_response = self.client.get("/api/v1/projects/2", headers={"X-Spec-Sheets-User": "editor"})
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["project"]["name"], "Casa Robles Renovada")
+
+        with self.session_factory() as session:
+            other_name = session.scalar(select(Project.name).where(Project.id != 2).limit(1))
+        self.assertIsNotNone(other_name)
+        duplicate_response = self.client.put(
+            "/api/v1/projects/2",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": other_name},
+        )
+        self.assertEqual(duplicate_response.status_code, 422)
+        self.assertIn("already exists", duplicate_response.json()["detail"])
+
+        activity_response = self.client.get(
+            "/api/v1/projects/2/activity",
+            headers={"X-Spec-Sheets-User": "viewer"},
+        )
+        self.assertEqual(activity_response.status_code, 200)
+        self.assertTrue(any(group["title"] == "Project renamed" for group in activity_response.json()))
 
     def test_microsoft_login_preserves_existing_user_roles(self) -> None:
         start = self.client.get("/api/v1/auth/microsoft/login", follow_redirects=False)

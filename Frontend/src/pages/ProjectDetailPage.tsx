@@ -4,8 +4,10 @@ import { MaterialCalculationSheetModal } from "../components/MaterialCalculation
 import { MediaPicker } from "../components/MediaPicker";
 import { Modal } from "../components/Modal";
 import { FactoryQuantityLabel, WorkQuantityLabel } from "../components/QuantityLabels";
+import { SearchField } from "../components/SearchField";
 import { ApiError, api } from "../lib/api";
 import { toAppPath } from "../lib/basePath";
+import { matchesSearchText, normalizeSearchText, searchTreeBranchMatches } from "../lib/search";
 import type {
   AttributeValueInput,
   AvailableComponent,
@@ -14,6 +16,8 @@ import type {
   CatalogMaterialRule,
   EditableAttribute,
   InstanceSyncPreview,
+  SyncAttributeDifference,
+  SyncAttributeReconcileRequest,
   InstanceMaterial,
   MediaAsset,
   ProjectCategorySection,
@@ -39,6 +43,13 @@ type ModalState =
   | { kind: "edit"; categoryId: number; instanceId: number }
   | null;
 
+type LinkedAccessoryState = {
+  targetInstanceId: number;
+  targetInstanceName: string;
+  categoryIds: number[];
+  selectedCategoryId: number | null;
+} | null;
+
 type CalculationSheetState = {
   instanceId: number;
   instanceName: string;
@@ -53,19 +64,21 @@ type InstanceFormModalProps = {
   initialInstance?: ProjectInstance;
   submitting: boolean;
   onClose: () => void;
-  onSubmit: (payload: {
-    component_id?: number;
-    name: string;
-    short_name: string | null;
-    description: string | null;
-    short_description: string | null;
-    installation: string | null;
-    unit_amount: number | null;
-    attribute_values: AttributeValueInput[];
-    selected_material_rule_ids?: number[];
-    media_asset_id?: number | null;
-    clear_media?: boolean;
-  }) => Promise<void>;
+  onSubmit: (payload: InstanceFormPayload) => Promise<void>;
+};
+
+type InstanceFormPayload = {
+  component_id?: number;
+  name: string;
+  short_name: string | null;
+  description: string | null;
+  short_description: string | null;
+  installation: string | null;
+  unit_amount: number | null;
+  attribute_values: AttributeValueInput[];
+  selected_material_rule_ids?: number[];
+  media_asset_id?: number | null;
+  clear_media?: boolean;
 };
 
 type CategoryNode = ProjectCategorySection & { children: CategoryNode[] };
@@ -112,26 +125,36 @@ function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNo
   return rootNodes;
 }
 
+function getLinkedAccessoryCategories(data: ProjectDetailData, itemCategory: ProjectCategorySection): ProjectCategorySection[] {
+  const linkedCategoryIds = new Set(itemCategory.linked_category_ids);
+  const candidates = linkedCategoryIds.size
+    ? data.categories.filter((category) => linkedCategoryIds.has(category.id))
+    : data.categories;
+
+  return candidates
+    .filter((category) => category.available_components.some((component) => component.type === "accessory"))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function ProjectCategoryTree({
   nodes,
   filterTerm,
+  onSelectInstance,
   depth = 0,
 }: {
   nodes: CategoryNode[];
   filterTerm: string;
+  onSelectInstance: (instanceId: number) => void;
   depth?: number;
 }) {
   return (
     <ul className={depth === 0 ? "space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
       {nodes
-        .filter((node) => {
-          const matches = (n: CategoryNode): boolean => {
-            if (n.name.toLowerCase().includes(filterTerm.toLowerCase())) return true;
-            return n.children.some(matches);
-          };
-          return matches(node);
-        })
+        .filter((node) => projectTreeMatches(node, filterTerm))
         .map((node) => {
+          const matchingInstances = normalizeSearchText(filterTerm)
+            ? node.instances.filter((instance) => matchesSearchText(filterTerm, instance.name, instance.short_name))
+            : [];
           return (
             <li key={node.id}>
               {depth === 0 ? (
@@ -152,10 +175,33 @@ function ProjectCategoryTree({
                   {node.name}
                 </a>
               )}
+              {matchingInstances.length ? (
+                <ul className="ml-5 mt-1 space-y-1 border-l border-black/10 pl-3 dark:border-white/10">
+                  {matchingInstances.map((instance) => {
+                    const isAccessory = instance.type === "accessory";
+                    return (
+                      <li key={instance.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectInstance(instance.id)}
+                          className="relative flex w-full items-center gap-2 px-2 py-1 text-left text-sm text-zinc-600 transition-colors before:absolute before:-left-3 before:top-1/2 before:h-px before:w-2 before:bg-black/10 hover:text-zinc-900 dark:text-zinc-400 dark:before:bg-white/10 dark:hover:text-zinc-200"
+                        >
+                          <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"} text-zinc-400 dark:text-zinc-500`} />
+                          <span className="min-w-0 flex-1 truncate">{instance.name}</span>
+                          <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-zinc-500">
+                            {isAccessory ? "Accesorio" : "Ítem"}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
               {node.children.length ? (
                 <ProjectCategoryTree
                   nodes={node.children}
                   filterTerm={filterTerm}
+                  onSelectInstance={onSelectInstance}
                   depth={depth + 1}
                 />
               ) : null}
@@ -164,6 +210,13 @@ function ProjectCategoryTree({
         })}
     </ul>
   );
+}
+
+export function projectTreeMatches(node: CategoryNode, term: string): boolean {
+  return searchTreeBranchMatches(node, term, (current) => [
+    current.name,
+    ...current.instances.flatMap((instance) => [instance.name, instance.short_name]),
+  ]);
 }
 
 function flattenSubtypeTree(subtypes: ProjectSubtype[], depth = 0): FlatSubtype[] {
@@ -840,7 +893,7 @@ function InstanceFormModal({
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             rows={3}
-            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
@@ -850,7 +903,7 @@ function InstanceFormModal({
             value={shortDescription}
             onChange={(event) => setShortDescription(event.target.value)}
             rows={3}
-            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
@@ -860,7 +913,7 @@ function InstanceFormModal({
             value={installation}
             onChange={(event) => setInstallation(event.target.value)}
             rows={3}
-            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+            className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
           />
         </div>
 
@@ -980,6 +1033,49 @@ function InstanceFormModal({
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function LinkedAccessoryCategoryModal({
+  open,
+  itemName,
+  categories,
+  onClose,
+  onSelect,
+}: {
+  open: boolean;
+  itemName: string;
+  categories: ProjectCategorySection[];
+  onClose: () => void;
+  onSelect: (categoryId: number) => void;
+}) {
+  return (
+    <Modal open={open} title="Crear accesorio vinculado" kicker="Seleccionar categoría de accesorio" onClose={onClose} panelClassName="max-w-lg">
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+          Selecciona la categoría del accesorio que se aplicará a <strong className="text-zinc-900 dark:text-zinc-100">{itemName}</strong>.
+        </p>
+        <div className="grid gap-2">
+          {categories.map((category) => {
+            const accessoryCount = category.available_components.filter((component) => component.type === "accessory").length;
+            return (
+              <button
+                key={category.id}
+                type="button"
+                onClick={() => onSelect(category.id)}
+                className="flex items-center justify-between gap-3 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-left transition-colors hover:border-accent-500/50 hover:bg-accent-500/5"
+              >
+                <span className="min-w-0">
+                  <span className="block font-semibold text-zinc-900 dark:text-zinc-100">{category.name}</span>
+                  <span className="block text-[11px] font-mono text-zinc-500">{accessoryCount} componente{accessoryCount === 1 ? "" : "s"} disponible{accessoryCount === 1 ? "" : "s"}</span>
+                </span>
+                <i className="ph-bold ph-arrow-right text-zinc-500" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </Modal>
   );
 }
@@ -1150,6 +1246,96 @@ function SyncValuePanel({
   );
 }
 
+function MissingAttributeReconcilePanel({
+  attributes,
+  syncing,
+  onAdd,
+}: {
+  attributes: SyncAttributeDifference[];
+  syncing: boolean;
+  onAdd: (values: AttributeValueInput[]) => Promise<void>;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const attributeSignature = JSON.stringify(
+    attributes.map((attribute) => [
+      attribute.name,
+      attribute.catalog_definition?.value_type,
+      attribute.catalog_definition?.options,
+    ]),
+  );
+
+  useEffect(() => {
+    setDrafts(Object.fromEntries(attributes.map((attribute) => [attribute.name, ""])));
+  }, [attributeSignature]);
+
+  const requiresValue = (attribute: SyncAttributeDifference) =>
+    attribute.catalog_definition?.value_type === "select" && Boolean(attribute.catalog_definition.options.length);
+  const missingRequiredValue = attributes.some((attribute) => requiresValue(attribute) && !drafts[attribute.name]?.trim());
+  const valuesFor = (selected: SyncAttributeDifference[]) =>
+    selected.map((attribute) => ({ name: attribute.name, value: drafts[attribute.name]?.trim() || null }));
+
+  return (
+    <div className="rounded-lg border border-black/10 p-4 space-y-3 dark:border-white/10">
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Faltante en Instancia</div>
+        <button
+          type="button"
+          disabled={syncing || missingRequiredValue}
+          onClick={() => void onAdd(valuesFor(attributes))}
+          className="rounded border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+        >
+          Agregar todos
+        </button>
+      </div>
+      <div className="space-y-2">
+        {attributes.map((attribute) => {
+          const definition = attribute.catalog_definition;
+          const options = definition?.options || [];
+          const selectValueRequired = requiresValue(attribute);
+          return (
+            <div key={`missing-${attribute.name}`} className="grid gap-3 rounded-lg bg-zinc-50 p-3 dark:bg-white/5 md:grid-cols-[minmax(0,1fr)_minmax(12rem,1fr)_auto] md:items-center">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{attribute.name}</div>
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {translateProjectDetailLabel(definition?.value_type || "text")}
+                </div>
+              </div>
+              {definition?.value_type === "select" && options.length ? (
+                <select
+                  value={drafts[attribute.name] || ""}
+                  onChange={(event) => setDrafts((current) => ({ ...current, [attribute.name]: event.target.value }))}
+                  className="w-full rounded-lg border border-black/10 bg-white p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/40 dark:text-zinc-200"
+                >
+                  <option value="">Seleccionar valor</option>
+                  {options.map((option) => (
+                    <option key={`${attribute.name}-${option}`} value={option}>{option}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type={definition?.value_type === "number" ? "number" : "text"}
+                  value={drafts[attribute.name] || ""}
+                  onChange={(event) => setDrafts((current) => ({ ...current, [attribute.name]: event.target.value }))}
+                  placeholder="Valor inicial (opcional)"
+                  className="w-full rounded-lg border border-black/10 bg-white p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/40 dark:text-zinc-200"
+                />
+              )}
+              <button
+                type="button"
+                disabled={syncing || (selectValueRequired && !drafts[attribute.name]?.trim())}
+                onClick={() => void onAdd(valuesFor([attribute]))}
+                className="rounded bg-accent-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-accent-400 disabled:opacity-50"
+              >
+                Agregar
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function InstanceSyncModal({
   open,
   instance,
@@ -1174,7 +1360,7 @@ function InstanceSyncModal({
   onRefreshAll: () => Promise<void>;
   onApplyCatalogField: (field: Exclude<SyncFieldKey, "attributes">) => Promise<void>;
   onApplyInstanceField: (field: Exclude<SyncFieldKey, "attributes">) => Promise<void>;
-  onAddAttributes: (names: string[]) => Promise<void>;
+  onAddAttributes: (values: AttributeValueInput[]) => Promise<void>;
   onRemoveAttributes: (names: string[]) => Promise<void>;
 }) {
   if (!open || !instance || !targetField) {
@@ -1213,40 +1399,7 @@ function InstanceSyncModal({
           </div>
 
           {missingAttributes.length ? (
-            <div className="rounded-lg border border-black/10 dark:border-white/10 p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Faltante en Instancia</div>
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => void onAddAttributes(missingAttributes.map((item) => item.name))}
-                  className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold disabled:opacity-50"
-                >
-                  Agregar todos
-                </button>
-              </div>
-              <div className="space-y-2">
-                {missingAttributes.map((item) => (
-                  <div key={`missing-${item.name}`} className="flex items-center justify-between gap-3 rounded-lg bg-zinc-50 dark:bg-white/5 p-3">
-                    <div>
-                      <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{item.name}</div>
-                      <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {translateProjectDetailLabel(item.catalog_definition?.value_type || "text")}
-                        {item.catalog_definition?.options.length ? ` • ${item.catalog_definition.options.join(", ")}` : ""}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={syncing}
-                      onClick={() => void onAddAttributes([item.name])}
-                      className="px-3 py-1.5 rounded bg-accent-500 hover:bg-accent-400 text-xs font-semibold text-zinc-950 disabled:opacity-50"
-                    >
-                      Agregar
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <MissingAttributeReconcilePanel attributes={missingAttributes} syncing={syncing} onAdd={onAddAttributes} />
           ) : null}
 
           {extraAttributes.length ? (
@@ -2371,6 +2524,7 @@ function CommentsOverlay({
 
 function InstanceCard({
   instance,
+  focused,
   readOnly,
   subtypeOptions,
   targetOptions,
@@ -2381,6 +2535,8 @@ function InstanceCard({
   onEdit,
   onDelete,
   onOpenComments,
+  onCreateLinkedAccessory,
+  linkedAccessoryCategories,
   onOpenCalculationSheet,
   onCreateOccurrence,
   onUpdateOccurrence,
@@ -2390,6 +2546,7 @@ function InstanceCard({
   onDeleteMaterial,
 }: {
   instance: ProjectInstance;
+  focused: boolean;
   readOnly: boolean;
   subtypeOptions: FlatSubtype[];
   targetOptions: TargetOption[];
@@ -2400,6 +2557,8 @@ function InstanceCard({
   onEdit: () => void;
   onDelete: () => void;
   onOpenComments: () => void;
+  onCreateLinkedAccessory: () => void;
+  linkedAccessoryCategories: ProjectCategorySection[];
   onOpenCalculationSheet: (material: InstanceMaterial) => void;
   onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
@@ -2408,7 +2567,7 @@ function InstanceCard({
   onAddManualMaterial: (materialId: number) => Promise<void>;
   onDeleteMaterial: (materialKey: string) => Promise<void>;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(focused);
   const [materialsExpanded, setMaterialsExpanded] = useState(true);
   const nameSync = getScalarSyncField(syncPreview, "name");
   const shortNameSync = getScalarSyncField(syncPreview, "short_name");
@@ -2424,8 +2583,14 @@ function InstanceCard({
     }
   }, [expanded, onEnsureSyncPreview, readOnly, syncPreview, syncPreviewLoading]);
 
+  useEffect(() => {
+    if (focused) {
+      setExpanded(true);
+    }
+  }, [focused]);
+
   return (
-    <div className="border-b border-black/10 dark:border-white/10 last:border-0">
+    <div id={`instance-${instance.id}`} className="scroll-mt-24 border-b border-black/10 dark:border-white/10 last:border-0">
       <div 
         className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
@@ -2463,6 +2628,18 @@ function InstanceCard({
               <i className="ph-bold ph-chat-circle-text" />
               <span>{instance.comment_summary?.total_count || 0}</span>
               {instance.comment_summary?.unread_count ? <span className="h-1.5 w-1.5 rounded-full bg-accent-500" /> : null}
+            </button> : null}
+            {!readOnly && instance.type === "item" && linkedAccessoryCategories.length ? <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCreateLinkedAccessory();
+              }}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-accent-500/30 bg-accent-500/10 text-accent-700 dark:text-accent-400 transition-colors hover:bg-accent-500/20"
+              aria-label={`Crear accesorio vinculado a ${instance.name}`}
+              title="Crear accesorio vinculado"
+            >
+              <i className="ph-bold ph-link" />
             </button> : null}
           </div>
           </div>
@@ -2741,7 +2918,12 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categorySearch, setCategorySearch] = useState("");
+  const [focusedInstanceId, setFocusedInstanceId] = useState<number | null>(() => {
+    const match = window.location.hash.match(/^#instance-(\d+)$/);
+    return match ? Number(match[1]) : null;
+  });
   const [modalState, setModalState] = useState<ModalState>(null);
+  const [linkedAccessoryState, setLinkedAccessoryState] = useState<LinkedAccessoryState>(null);
   const [calculationSheetState, setCalculationSheetState] = useState<CalculationSheetState>(null);
   const [syncModalState, setSyncModalState] = useState<SyncModalState>(null);
   const [syncPreviews, setSyncPreviews] = useState<Record<number, InstanceSyncPreview>>({});
@@ -2876,10 +3058,21 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
     setSyncPreviews({});
     setSyncPreviewLoading({});
     setSyncModalState(null);
+    setLinkedAccessoryState(null);
     setCommentOverlay(null);
     setComments([]);
     void loadProject();
   }, [onTitleChange, projectId]);
+
+  useEffect(() => {
+    if (!focusedInstanceId || !data) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`instance-${focusedInstanceId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [data, focusedInstanceId]);
 
   useEffect(() => {
     const handleCommentNavigation = () => setCommentNavigationTick((current) => current + 1);
@@ -2965,23 +3158,20 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
       ? activeCategory.instances.find((instance) => instance.id === modalState.instanceId)
       : undefined;
 
+  const linkedAccessoryCategoryOptions = linkedAccessoryState && data
+    ? linkedAccessoryState.categoryIds
+        .map((categoryId) => data.categories.find((category) => category.id === categoryId))
+        .filter((category): category is ProjectCategorySection => Boolean(category))
+    : [];
+  const activeLinkedAccessoryCategory = linkedAccessoryState?.selectedCategoryId
+    ? linkedAccessoryCategoryOptions.find((category) => category.id === linkedAccessoryState.selectedCategoryId) || null
+    : null;
+
   const activeSyncInstance = syncModalState && data
     ? data.categories.flatMap((category) => category.instances).find((instance) => instance.id === syncModalState.instanceId) || null
     : null;
 
-  async function handleCreateInstance(payload: {
-    component_id?: number;
-    name: string;
-    short_name: string | null;
-    description: string | null;
-    short_description: string | null;
-    installation: string | null;
-    unit_amount: number | null;
-    attribute_values: AttributeValueInput[];
-    selected_material_rule_ids?: number[];
-    media_asset_id?: number | null;
-    clear_media?: boolean;
-  }) {
+  async function handleCreateInstance(payload: InstanceFormPayload) {
     if (!modalState || modalState.kind !== "create" || !activeCategory || !payload.component_id) {
       return;
     }
@@ -3012,17 +3202,78 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
     }
   }
 
-  async function handleUpdateInstance(payload: {
-    name: string;
-    short_name: string | null;
-    description: string | null;
-    short_description: string | null;
-    installation: string | null;
-    unit_amount: number | null;
-    attribute_values: AttributeValueInput[];
-    media_asset_id?: number | null;
-    clear_media?: boolean;
-  }) {
+  async function handleCreateLinkedAccessory(payload: InstanceFormPayload) {
+    const currentLinkedAccessoryState = linkedAccessoryState;
+    const category = activeLinkedAccessoryCategory;
+    if (!currentLinkedAccessoryState || !category || !payload.component_id) {
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    let createdInstance: ProjectInstance | null = null;
+    try {
+      const result = await api.createProjectInstance(projectId, {
+        category_id: category.id,
+        component_id: payload.component_id,
+        name: payload.name,
+        short_name: payload.short_name,
+        description: payload.description,
+        short_description: payload.short_description,
+        installation: payload.installation,
+        unit_amount: payload.unit_amount,
+        attribute_values: payload.attribute_values,
+        selected_material_rule_ids: payload.selected_material_rule_ids ?? [],
+        media_asset_id: payload.media_asset_id ?? null,
+      });
+      if (!result.instance) {
+        throw new Error("No se pudo crear la instancia del accesorio.");
+      }
+
+      createdInstance = result.instance as ProjectInstance;
+      setData((current) => (current ? upsertCategoryInstance(current, category.id, createdInstance as ProjectInstance) : current));
+
+      const occurrenceResult = await api.createProjectOccurrence(projectId, createdInstance.id, {
+        relationship_type: "uses",
+        context_label: null,
+        target_instance_id: currentLinkedAccessoryState.targetInstanceId,
+        attribute_values: [],
+      });
+      if (!occurrenceResult.occurrence) {
+        throw new Error("El accesorio fue creado, pero no se pudo vincular al ítem.");
+      }
+
+      setData((current) =>
+        current ? applyOccurrenceToProject(current, createdInstance?.id || 0, occurrenceResult.occurrence as UsageOccurrence) : current,
+      );
+      setLinkedAccessoryState(null);
+    } catch (err) {
+      if (createdInstance) {
+        setLinkedAccessoryState(null);
+      }
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "No se pudo crear el accesorio vinculado.";
+      setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function openLinkedAccessoryCreator(item: ProjectInstance, itemCategory: ProjectCategorySection) {
+    const categories = getLinkedAccessoryCategories(data as ProjectDetailData, itemCategory);
+    if (!categories.length) {
+      setError("No hay categorías de accesorios vinculables para este ítem.");
+      return;
+    }
+    const categoryIds = categories.map((category) => category.id);
+    setLinkedAccessoryState({
+      targetInstanceId: item.id,
+      targetInstanceName: item.name,
+      categoryIds,
+      selectedCategoryId: categoryIds.length === 1 ? categoryIds[0] : null,
+    });
+  }
+
+  async function handleUpdateInstance(payload: InstanceFormPayload) {
     if (!modalState || modalState.kind !== "edit" || !activeInstance) {
       return;
     }
@@ -3250,7 +3501,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
     }
   }
 
-  async function handleReconcileAttributes(instanceId: number, payload: { add_attribute_names?: string[]; remove_attribute_names?: string[] }) {
+  async function handleReconcileAttributes(instanceId: number, payload: SyncAttributeReconcileRequest) {
     setSyncingInstanceId(instanceId);
     setError(null);
     try {
@@ -3286,6 +3537,12 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
       })),
   );
 
+  function selectInstance(instanceId: number) {
+    setFocusedInstanceId(instanceId);
+    setCategorySearch("");
+    window.history.replaceState({}, "", `#instance-${instanceId}`);
+  }
+
   return (
     <div className="max-w-[1600px] mx-auto">
       {error ? (
@@ -3300,15 +3557,13 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
                 <i className="ph-bold ph-list-magnifying-glass" /> Categorías
               </h2>
             </div>
-            <input
-              value={categorySearch}
-              onChange={(event) => setCategorySearch(event.target.value)}
-              type="text"
-              placeholder="Filtrar categorías..."
-              className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
-            />
+            <SearchField value={categorySearch} onChange={setCategorySearch} />
             <div className="flex-1 overflow-y-auto pr-2 space-y-1">
-              <ProjectCategoryTree nodes={categoryTree} filterTerm={categorySearch} />
+              {categoryTree.some((node) => projectTreeMatches(node, categorySearch)) ? (
+                <ProjectCategoryTree nodes={categoryTree} filterTerm={categorySearch} onSelectInstance={selectInstance} />
+              ) : (
+                <p className="px-2 py-3 text-xs text-zinc-500">No hay categorías, ítems ni accesorios que coincidan.</p>
+              )}
             </div>
           </div>
         </div>
@@ -3339,47 +3594,53 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
               </div>
               <div className="w-full border border-black/10 dark:border-white/10 rounded-xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm">
                 {category.instances.length ? (
-                  category.instances.map((instance) => (
-                    <InstanceCard
-                      key={instance.id}
-                      instance={instance}
-                      readOnly={readOnly}
-                      subtypeOptions={flatSubtypeOptions}
-                      targetOptions={targetOptions.filter(
-                        (target) =>
-                          target.instance_id !== instance.id &&
-                          (category.linked_category_ids.length === 0 || category.linked_category_ids.includes(target.category_id)),
-                      )}
-                      syncPreview={syncPreviews[instance.id] || null}
-                      syncPreviewLoading={Boolean(syncPreviewLoading[instance.id])}
-                      onEnsureSyncPreview={async () => {
-                        await ensureSyncPreview(instance.id);
-                      }}
-                      onOpenSyncModal={(field) => void openSyncModal(instance.id, field)}
-                      onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
-                      onDelete={() => void handleDeleteInstance(category.id, instance.id)}
-                      onOpenComments={() =>
-                        void openCommentsForInstance({
-                          instanceId: instance.id,
-                          instanceName: instance.name,
-                          source: "badge",
-                        })
-                      }
-                      onOpenCalculationSheet={(material) =>
-                        setCalculationSheetState({
-                          instanceId: instance.id,
-                          instanceName: instance.name,
-                          material,
-                        })
-                      }
-                      onCreateOccurrence={(payload) => handleCreateOccurrence(instance.id, payload)}
-                      onUpdateOccurrence={(occurrenceId, payload) => handleUpdateOccurrence(instance.id, occurrenceId, payload)}
-                      onDeleteOccurrence={(occurrenceId) => handleDeleteOccurrence(instance.id, occurrenceId)}
-                      onUpdateMaterial={(materialKey, payload) => handleUpdateMaterialOccurrence(instance.id, materialKey, payload)}
-                      onAddManualMaterial={(materialId) => handleAddManualMaterial(instance.id, materialId)}
-                      onDeleteMaterial={(materialKey) => handleDeleteMaterialOccurrence(instance.id, materialKey)}
-                    />
-                  ))
+                  category.instances.map((instance) => {
+                    const linkedAccessoryCategories = getLinkedAccessoryCategories(data, category);
+                    return (
+                      <InstanceCard
+                        key={instance.id}
+                        instance={instance}
+                        focused={focusedInstanceId === instance.id}
+                        readOnly={readOnly}
+                        subtypeOptions={flatSubtypeOptions}
+                        targetOptions={targetOptions.filter(
+                          (target) =>
+                            target.instance_id !== instance.id &&
+                            (category.linked_category_ids.length === 0 || category.linked_category_ids.includes(target.category_id)),
+                        )}
+                        linkedAccessoryCategories={linkedAccessoryCategories}
+                        syncPreview={syncPreviews[instance.id] || null}
+                        syncPreviewLoading={Boolean(syncPreviewLoading[instance.id])}
+                        onEnsureSyncPreview={async () => {
+                          await ensureSyncPreview(instance.id);
+                        }}
+                        onOpenSyncModal={(field) => void openSyncModal(instance.id, field)}
+                        onEdit={() => setModalState({ kind: "edit", categoryId: category.id, instanceId: instance.id })}
+                        onDelete={() => void handleDeleteInstance(category.id, instance.id)}
+                        onOpenComments={() =>
+                          void openCommentsForInstance({
+                            instanceId: instance.id,
+                            instanceName: instance.name,
+                            source: "badge",
+                          })
+                        }
+                        onCreateLinkedAccessory={() => openLinkedAccessoryCreator(instance, category)}
+                        onOpenCalculationSheet={(material) =>
+                          setCalculationSheetState({
+                            instanceId: instance.id,
+                            instanceName: instance.name,
+                            material,
+                          })
+                        }
+                        onCreateOccurrence={(payload) => handleCreateOccurrence(instance.id, payload)}
+                        onUpdateOccurrence={(occurrenceId, payload) => handleUpdateOccurrence(instance.id, occurrenceId, payload)}
+                        onDeleteOccurrence={(occurrenceId) => handleDeleteOccurrence(instance.id, occurrenceId)}
+                        onUpdateMaterial={(materialKey, payload) => handleUpdateMaterialOccurrence(instance.id, materialKey, payload)}
+                        onAddManualMaterial={(materialId) => handleAddManualMaterial(instance.id, materialId)}
+                        onDeleteMaterial={(materialKey) => handleDeleteMaterialOccurrence(instance.id, materialKey)}
+                      />
+                    );
+                  })
                 ) : (
                   <div className="text-center p-6 border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-xl text-xs font-mono text-zinc-500">
                     No instances in this category.
@@ -3457,6 +3718,28 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         />
       ) : null}
 
+      {!readOnly && linkedAccessoryState && !linkedAccessoryState.selectedCategoryId ? (
+        <LinkedAccessoryCategoryModal
+          open
+          itemName={linkedAccessoryState.targetInstanceName}
+          categories={linkedAccessoryCategoryOptions}
+          onClose={() => setLinkedAccessoryState(null)}
+          onSelect={(categoryId) => setLinkedAccessoryState((current) => current ? { ...current, selectedCategoryId: categoryId } : current)}
+        />
+      ) : null}
+
+      {!readOnly && linkedAccessoryState && activeLinkedAccessoryCategory ? (
+        <InstanceFormModal
+          open
+          mode="create"
+          categoryName={`Accesorio vinculado · ${activeLinkedAccessoryCategory.name}`}
+          availableComponents={activeLinkedAccessoryCategory.available_components.filter((component) => component.type === "accessory")}
+          submitting={submitting}
+          onClose={() => setLinkedAccessoryState(null)}
+          onSubmit={handleCreateLinkedAccessory}
+        />
+      ) : null}
+
       {!readOnly && calculationSheetState ? (
         <MaterialCalculationSheetModal
           open={calculationSheetState !== null}
@@ -3495,11 +3778,14 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
           }
           await handleApplyInstanceField(syncModalState.instanceId, field);
         }}
-        onAddAttributes={async (names) => {
+        onAddAttributes={async (values) => {
           if (!syncModalState) {
             return;
           }
-          await handleReconcileAttributes(syncModalState.instanceId, { add_attribute_names: names });
+          await handleReconcileAttributes(syncModalState.instanceId, {
+            add_attribute_names: values.map((value) => value.name),
+            attribute_values: values,
+          });
         }}
         onRemoveAttributes={async (names) => {
           if (!syncModalState) {

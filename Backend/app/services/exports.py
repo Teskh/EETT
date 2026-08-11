@@ -26,6 +26,7 @@ from app.services.export_projection import (
     build_commercial_export_sections,
     build_detailed_material_export_sections,
     build_full_technical_export_sections,
+    iter_existing_instance_materials,
 )
 from app.services.projects import get_project_view_data
 from app.services.projects import get_project_with_details
@@ -614,7 +615,7 @@ def _load_cost_model_price_map(
     seen_skus: set[str] = set()
     for section in project_data.get("categories", []):
         for instance in section.get("instances", []):
-            for material in instance.get("materials", []):
+            for material in iter_existing_instance_materials(instance):
                 sku = str(material.get("sku") or "").strip().upper()
                 if not sku or sku in seen_skus:
                     continue

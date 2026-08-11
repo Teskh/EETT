@@ -29,6 +29,8 @@ from app.api_models import (
     BackupSettingsModel,
     BackupSettingsUpdateRequest,
     CatalogCategoryCreateRequest,
+    CatalogCategoryDeletionImpactModel,
+    CatalogCategoryUpdateRequest,
     CatalogComponentMutationResultModel,
     CatalogCategoryLinksUpdateRequest,
     CatalogComponentAttributesReplaceRequest,
@@ -91,6 +93,7 @@ from app.api_models import (
     ProjectDetailResponse,
     ProjectCopyRequest,
     ProjectCreateRequest,
+    ProjectUpdateRequest,
     ProjectStatusUpdateRequest,
     ProjectInstanceMutationResultModel,
     ProjectOccurrenceUpdateRequest,
@@ -147,15 +150,19 @@ from app.services.auth import (
 from app.services import microsoft_auth
 from app.services.catalog import create_category, create_component, get_catalog_page_data, update_category_links
 from app.services.catalog import (
+    CategoryCascadeConfirmationRequired,
     create_attribute_definition,
+    delete_category,
     delete_attribute_definition,
     delete_component,
+    get_category_deletion_impact,
     get_catalog_component_data,
     replace_component_material_rules,
     replace_component_attributes,
     search_material_candidates,
     set_component_primary_media,
     update_attribute_definition,
+    update_category_name,
     update_component,
 )
 from app.services.collaboration import (
@@ -247,6 +254,7 @@ from app.services.projects import (
     refresh_instance_snapshot,
     replace_project_material_occurrence,
     set_project_material_mode,
+    update_project,
     update_project_status,
     update_project_instance_occurrence,
     update_project_subtype,
@@ -1188,6 +1196,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return {"ok": True, "category_id": category.id}
 
+    @app.put("/api/v1/catalog/categories/{category_id}", response_model=MutationResultModel)
+    async def update_catalog_category_v1(
+        category_id: int,
+        payload: CatalogCategoryUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "catalog")
+        try:
+            category = update_category_name(session, category_id=category_id, name=payload.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if category is None:
+            raise HTTPException(status_code=404, detail="Catalog category not found")
+        return {"ok": True, "category_id": category.id}
+
+    @app.get(
+        "/api/v1/catalog/categories/{category_id}/deletion-impact",
+        response_model=CatalogCategoryDeletionImpactModel,
+    )
+    async def catalog_category_deletion_impact_v1(
+        category_id: int,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "catalog")
+        impact = get_category_deletion_impact(session, category_id=category_id)
+        if impact is None:
+            raise HTTPException(status_code=404, detail="Catalog category not found")
+        return impact
+
+    @app.delete("/api/v1/catalog/categories/{category_id}", response_model=MutationResultModel)
+    async def delete_catalog_category_v1(
+        category_id: int,
+        confirm_cascade: bool = False,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "catalog")
+        try:
+            impact = delete_category(session, category_id=category_id, confirm_cascade=confirm_cascade)
+        except CategoryCascadeConfirmationRequired as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if impact is None:
+            raise HTTPException(status_code=404, detail="Catalog category not found")
+        return {"ok": True, "deleted_id": category_id, "category_id": impact["parent_id"]}
+
     @app.post("/api/v1/catalog/components", response_model=CatalogComponentMutationResultModel)
     async def create_catalog_component_v1(
         payload: CatalogComponentCreateRequest,
@@ -1435,6 +1490,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_project_delete(current_user, project)
         delete_project(session, project=project)
         return {"ok": True, "deleted_id": project_id}
+
+    @app.put("/api/v1/projects/{project_id}", response_model=MutationResultModel)
+    async def update_project_v1(
+        project_id: int,
+        payload: ProjectUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        try:
+            update_project(
+                session,
+                project=project,
+                name=payload.name,
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"ok": True, "project_id": project.id}
 
     @app.put("/api/v1/projects/{project_id}/status", response_model=MutationResultModel)
     async def update_project_status_v1(
@@ -2191,14 +2270,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_project_edit(current_user, project)
         if not any(item.id == instance_id for item in project.instances):
             raise HTTPException(status_code=404, detail="Project instance not found")
-        preview = reconcile_instance_base_attributes(
-            session,
-            instance_id=instance_id,
-            add_attribute_names=payload.add_attribute_names,
-            remove_attribute_names=payload.remove_attribute_names,
-            actor_user=current_user,
-            mutation_batch_id=mutation_batch_id,
-        )
+        try:
+            preview = reconcile_instance_base_attributes(
+                session,
+                instance_id=instance_id,
+                add_attribute_names=payload.add_attribute_names,
+                remove_attribute_names=payload.remove_attribute_names,
+                attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if preview is None:
             raise HTTPException(status_code=404, detail="Project instance not found")
         return preview

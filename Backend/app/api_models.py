@@ -152,6 +152,30 @@ class CatalogCategoryCreateRequest(BaseModel):
     parent_id: int | None = None
 
 
+class CatalogCategoryUpdateRequest(BaseModel):
+    name: str
+
+
+class CatalogCategoryAffectedProjectModel(BaseModel):
+    id: int
+    name: str
+    instance_count: int
+
+
+class CatalogCategoryDeletionImpactModel(BaseModel):
+    category_id: int
+    category_name: str
+    parent_id: int | None = None
+    affected_category_ids: list[int] = Field(default_factory=list)
+    descendant_count: int
+    descendant_names: list[str] = Field(default_factory=list)
+    component_count: int
+    instance_count: int
+    linked_category_count: int
+    affected_projects: list[CatalogCategoryAffectedProjectModel] = Field(default_factory=list)
+    requires_confirmation: bool
+
+
 class CatalogComponentCreateRequest(BaseModel):
     category_id: int
     component_type: str
@@ -242,6 +266,10 @@ class ProjectCreateRequest(BaseModel):
 class ProjectCopyRequest(BaseModel):
     name: str | None = None
     status: str | None = None
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
 
 
 class ProjectStatusUpdateRequest(BaseModel):
@@ -658,6 +686,7 @@ class SyncFieldApplyRequest(BaseModel):
 class SyncAttributeSchemaUpdateRequest(BaseModel):
     add_attribute_names: list[str] = Field(default_factory=list)
     remove_attribute_names: list[str] = Field(default_factory=list)
+    attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
 
 
 class MaterialModeResponse(BaseModel):

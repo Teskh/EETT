@@ -5,12 +5,16 @@ import { CatalogAttributeEditor } from "../components/CatalogAttributeEditor";
 import { CatalogMaterialRuleEditor } from "../components/CatalogMaterialRuleEditor";
 import { MediaPicker } from "../components/MediaPicker";
 import { FactoryQuantityLabel } from "../components/QuantityLabels";
+import { SearchField } from "../components/SearchField";
 import { ApiError, api } from "../lib/api";
+import { matchesSearchText, normalizeSearchText, searchTreeBranchMatches } from "../lib/search";
 import type {
   CatalogAttribute,
+  CatalogCategoryDeletionImpact,
   CatalogComponent,
   CatalogMaterialRule,
   CatalogPageData,
+  CatalogTreeComponent,
   CatalogTreeNode,
   CreateCategoryRequest,
   CreateComponentRequest,
@@ -25,8 +29,14 @@ type CatalogPageProps = {
 
 type ComponentCardProps = {
   component: CatalogComponent;
+  focused: boolean;
   onComponentSaved: (component: CatalogComponent) => void;
   onComponentDeleted: (componentId: number) => void;
+};
+
+type CategoryActionTarget = {
+  id: number;
+  name: string;
 };
 
 const initialCategoryForm: CreateCategoryRequest = {
@@ -67,14 +77,15 @@ function formatCondition(rule: CatalogMaterialRule) {
   });
 }
 
-function treeMatches(node: CatalogTreeNode, term: string): boolean {
-  if (!term) {
-    return true;
-  }
-  if (node.name.toLowerCase().includes(term)) {
-    return true;
-  }
-  return node.children.some((child) => treeMatches(child, term));
+function componentMatches(component: CatalogTreeComponent, term: string): boolean {
+  return matchesSearchText(term, component.name, component.short_name);
+}
+
+export function treeMatches(node: CatalogTreeNode, term: string): boolean {
+  return searchTreeBranchMatches(node, term, (current) => [
+    current.name,
+    ...current.components.flatMap((component) => [component.name, component.short_name]),
+  ]);
 }
 
 function CatalogTree({
@@ -82,12 +93,16 @@ function CatalogTree({
   selectedCategoryId,
   filterTerm,
   onSelect,
+  onSelectComponent,
+  onManageCategory,
   depth = 0,
 }: {
   nodes: CatalogTreeNode[];
   selectedCategoryId: number | null;
   filterTerm: string;
   onSelect: (categoryId: number) => void;
+  onSelectComponent: (categoryId: number, componentId: number) => void;
+  onManageCategory: (category: CategoryActionTarget) => void;
   depth?: number;
 }) {
   return (
@@ -96,43 +111,92 @@ function CatalogTree({
         .filter((node) => treeMatches(node, filterTerm))
         .map((node) => {
           const active = node.id === selectedCategoryId;
+          const matchingComponents = normalizeSearchText(filterTerm)
+            ? node.components.filter((component) => componentMatches(component, filterTerm))
+            : [];
           return (
             <li key={node.id}>
               {depth === 0 ? (
-                <button
-                  type="button"
-                  onClick={() => onSelect(node.id)}
-                  className={`w-full flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                    active
-                      ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium"
-                      : "hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-zinc-600 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <i className={`${active ? "ph-fill ph-folder-open text-accent-600 dark:text-accent-400" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} />
-                    {node.name}
-                  </span>
-                  <span className="font-mono text-[10px] text-zinc-500">{node.component_count} ítems</span>
-                </button>
+                <div className="group/category flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(node.id)}
+                    className={`min-w-0 flex-1 flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                      active
+                        ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium"
+                        : "hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-zinc-600 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
+                    }`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <i className={`${active ? "ph-fill ph-folder-open text-accent-600 dark:text-accent-400" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} />
+                      <span className="truncate">{node.name}</span>
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-zinc-500">{node.component_count} ítems</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onManageCategory(node)}
+                    aria-label={`Editar o eliminar ${node.name}`}
+                    title="Editar categoría"
+                    className="pointer-events-none flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-all hover:bg-black/5 hover:text-zinc-900 focus:pointer-events-auto focus:opacity-100 group-hover/category:pointer-events-auto group-hover/category:opacity-100 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+                  >
+                    <i className="ph-bold ph-dots-three" />
+                  </button>
+                </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => onSelect(node.id)}
-                  className={`w-full block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 ${
-                    active
-                      ? "text-accent-600 dark:text-accent-400 font-semibold before:bg-accent-600/50 dark:before:bg-accent-400/50"
-                      : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 before:bg-black/10 dark:before:bg-white/10"
-                  }`}
-                >
-                  {node.name}
-                </button>
+                <div className="group/category flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => onSelect(node.id)}
+                    className={`min-w-0 flex-1 block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 ${
+                      active
+                        ? "text-accent-600 dark:text-accent-400 font-semibold before:bg-accent-600/50 dark:before:bg-accent-400/50"
+                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 before:bg-black/10 dark:before:bg-white/10"
+                    }`}
+                  >
+                    <span className="block truncate">{node.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onManageCategory(node)}
+                    aria-label={`Editar o eliminar ${node.name}`}
+                    title="Editar subcategoría"
+                    className="pointer-events-none flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-all hover:bg-black/5 hover:text-zinc-900 focus:pointer-events-auto focus:opacity-100 group-hover/category:pointer-events-auto group-hover/category:opacity-100 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+                  >
+                    <i className="ph-bold ph-dots-three" />
+                  </button>
+                </div>
               )}
+              {matchingComponents.length ? (
+                <ul className="ml-5 mt-1 space-y-1 border-l border-black/10 pl-3 dark:border-white/10">
+                  {matchingComponents.map((component) => {
+                    const isAccessory = component.type === "accessory";
+                    return (
+                      <li key={component.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectComponent(node.id, component.id)}
+                          className="relative flex w-full items-center gap-2 px-2 py-1 text-left text-sm text-zinc-600 transition-colors before:absolute before:-left-3 before:top-1/2 before:h-px before:w-2 before:bg-black/10 hover:text-zinc-900 dark:text-zinc-400 dark:before:bg-white/10 dark:hover:text-zinc-200"
+                        >
+                          <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"} text-zinc-400 dark:text-zinc-500`} />
+                          <span className="min-w-0 flex-1 truncate">{component.name}</span>
+                          <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-zinc-500">
+                            {isAccessory ? "Accesorio" : "Ítem"}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
               {node.children.length ? (
                 <CatalogTree
                   nodes={node.children}
                   selectedCategoryId={selectedCategoryId}
                   filterTerm={filterTerm}
                   onSelect={onSelect}
+                  onSelectComponent={onSelectComponent}
+                  onManageCategory={onManageCategory}
                   depth={depth + 1}
                 />
               ) : null}
@@ -143,8 +207,8 @@ function CatalogTree({
   );
 }
 
-function ComponentCard({ component, onComponentSaved, onComponentDeleted }: ComponentCardProps) {
-  const [expanded, setExpanded] = useState(false);
+function ComponentCard({ component, focused, onComponentSaved, onComponentDeleted }: ComponentCardProps) {
+  const [expanded, setExpanded] = useState(focused);
   const [saving, setSaving] = useState(false);
   const [attributeSaving, setAttributeSaving] = useState(false);
   const [materialSaving, setMaterialSaving] = useState(false);
@@ -171,6 +235,12 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
       component_type: component.type,
     });
   }, [component]);
+
+  useEffect(() => {
+    if (focused) {
+      setExpanded(true);
+    }
+  }, [focused]);
 
   async function handleSaveComponent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -236,7 +306,7 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
   }
 
   return (
-    <div className="border-b border-black/10 dark:border-white/10 last:border-0">
+    <div id={`component-${component.id}`} className="scroll-mt-6 border-b border-black/10 dark:border-white/10 last:border-0">
       <div 
         className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
         onClick={() => setExpanded((current) => !current)}
@@ -316,21 +386,21 @@ function ComponentCard({ component, onComponentSaved, onComponentDeleted }: Comp
                   onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
                   rows={2}
                   placeholder="Descripción"
-                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
                   value={form.short_description || ""}
                   onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))}
                   rows={2}
                   placeholder="Descripción corta"
-                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
                   value={form.installation || ""}
                   onChange={(event) => setForm((current) => ({ ...current, installation: event.target.value }))}
                   rows={2}
                   placeholder="Instalación"
-                  className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
+                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <div className="flex justify-between items-center mt-2">
                   <button className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
@@ -452,11 +522,38 @@ function sortComponents(components: CatalogComponent[]) {
   return [...components].sort((left, right) => left.name.localeCompare(right.name));
 }
 
-function updateTreeComponentCount(nodes: CatalogTreeNode[], categoryId: number, delta: number): CatalogTreeNode[] {
+function toTreeComponent(component: CatalogComponent): CatalogTreeComponent {
+  return {
+    id: component.id,
+    name: component.name,
+    short_name: component.short_name,
+    type: component.type,
+  };
+}
+
+function upsertTreeComponent(nodes: CatalogTreeNode[], component: CatalogComponent): CatalogTreeNode[] {
   return nodes.map((node) => ({
     ...node,
-    component_count: node.id === categoryId ? Math.max(0, node.component_count + delta) : node.component_count,
-    children: updateTreeComponentCount(node.children, categoryId, delta),
+    component_count:
+      node.id === component.category_id && !node.components.some((item) => item.id === component.id)
+        ? node.component_count + 1
+        : node.component_count,
+    components:
+      node.id === component.category_id
+        ? [...node.components.filter((item) => item.id !== component.id), toTreeComponent(component)].sort((left, right) =>
+            left.name.localeCompare(right.name),
+          )
+        : node.components,
+    children: upsertTreeComponent(node.children, component),
+  }));
+}
+
+function removeTreeComponent(nodes: CatalogTreeNode[], categoryId: number, componentId: number): CatalogTreeNode[] {
+  return nodes.map((node) => ({
+    ...node,
+    component_count: node.id === categoryId ? Math.max(0, node.component_count - 1) : node.component_count,
+    components: node.id === categoryId ? node.components.filter((component) => component.id !== componentId) : node.components,
+    children: removeTreeComponent(node.children, categoryId, componentId),
   }));
 }
 
@@ -482,7 +579,7 @@ function upsertSelectedComponent(data: CatalogPageData, nextComponent: CatalogCo
           ...data.summary,
           components: data.summary.components + 1,
         },
-    tree: exists ? data.tree : updateTreeComponentCount(data.tree, nextComponent.category_id, 1),
+    tree: upsertTreeComponent(data.tree, nextComponent),
   };
 }
 
@@ -502,7 +599,7 @@ function removeSelectedComponent(data: CatalogPageData, componentId: number): Ca
       ...data.summary,
       components: Math.max(0, data.summary.components - 1),
     },
-    tree: updateTreeComponentCount(data.tree, data.selected.id, -1),
+    tree: removeTreeComponent(data.tree, data.selected.id, componentId),
     selected: {
       ...data.selected,
       components: nextComponents,
@@ -531,6 +628,147 @@ function patchSelectedLinks(data: CatalogPageData, linkedCategoryIds: number[]):
   };
 }
 
+function CategoryActionsModal({
+  target,
+  name,
+  setName,
+  impact,
+  saving,
+  error,
+  onClose,
+  onRename,
+  onInspectDelete,
+  onConfirmDelete,
+  onCancelDelete,
+}: {
+  target: CategoryActionTarget | null;
+  name: string;
+  setName: (name: string) => void;
+  impact: CatalogCategoryDeletionImpact | null;
+  saving: boolean;
+  error: string | null;
+  onClose: () => void;
+  onRename: (event: FormEvent<HTMLFormElement>) => void;
+  onInspectDelete: () => void;
+  onConfirmDelete: () => void;
+  onCancelDelete: () => void;
+}) {
+  return (
+    <Modal open={Boolean(target)} title="Editar categoría" kicker={target?.name || "Categoría"} onClose={onClose} panelClassName="max-w-lg">
+      <div className="space-y-6">
+        {error ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">
+            {error}
+          </div>
+        ) : null}
+
+        <form className="space-y-4" onSubmit={onRename}>
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300" htmlFor="catalog-category-name">
+              Nombre de la categoría
+            </label>
+            <input
+              id="catalog-category-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              required
+              className="w-full rounded-lg border border-black/10 bg-white px-3 py-2.5 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none focus:ring-2 focus:ring-accent-500/10 dark:border-white/10 dark:bg-black/40 dark:text-zinc-200"
+            />
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saving || !name.trim() || name.trim() === target?.name}
+              className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-400 disabled:opacity-50"
+            >
+              {saving ? "Guardando..." : "Guardar nombre"}
+            </button>
+          </div>
+        </form>
+
+        <div className="border-t border-black/10 pt-5 dark:border-white/10">
+          {!impact?.requires_confirmation ? (
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Eliminar categoría</div>
+                <p className="mt-0.5 text-xs text-zinc-500">Se comprobará su contenido antes de continuar.</p>
+              </div>
+              <button
+                type="button"
+                onClick={onInspectDelete}
+                disabled={saving}
+                className="shrink-0 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10"
+              >
+                {saving ? "Comprobando..." : "Eliminar"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-black/10 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="flex items-start gap-3">
+                  <i className="ph-bold ph-warning-circle mt-0.5 text-lg text-amber-600 dark:text-amber-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">La categoría contiene información</div>
+                    <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
+                      Al eliminarla también se eliminarán los siguientes elementos:
+                    </p>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 text-sm">
+                      {impact.descendant_count ? (
+                        <div className="flex justify-between gap-2 border-b border-black/5 pb-1 dark:border-white/5">
+                          <dt className="text-zinc-500">Subcategorías</dt><dd className="font-mono text-zinc-900 dark:text-zinc-200">{impact.descendant_count}</dd>
+                        </div>
+                      ) : null}
+                      {impact.component_count ? (
+                        <div className="flex justify-between gap-2 border-b border-black/5 pb-1 dark:border-white/5">
+                          <dt className="text-zinc-500">Componentes</dt><dd className="font-mono text-zinc-900 dark:text-zinc-200">{impact.component_count}</dd>
+                        </div>
+                      ) : null}
+                      {impact.instance_count ? (
+                        <div className="flex justify-between gap-2 border-b border-black/5 pb-1 dark:border-white/5">
+                          <dt className="text-zinc-500">Instancias</dt><dd className="font-mono text-zinc-900 dark:text-zinc-200">{impact.instance_count}</dd>
+                        </div>
+                      ) : null}
+                      {impact.linked_category_count ? (
+                        <div className="flex justify-between gap-2 border-b border-black/5 pb-1 dark:border-white/5">
+                          <dt className="text-zinc-500">Vínculos</dt><dd className="font-mono text-zinc-900 dark:text-zinc-200">{impact.linked_category_count}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {impact.affected_projects.length ? (
+                      <div className="mt-3 border-t border-black/5 pt-3 text-xs dark:border-white/5">
+                        <div className="mb-1.5 font-medium text-zinc-600 dark:text-zinc-300">Proyectos afectados</div>
+                        <div className="space-y-1 text-zinc-500">
+                          {impact.affected_projects.map((project) => (
+                            <div key={project.id} className="flex justify-between gap-3">
+                              <span className="truncate">{project.name}</span>
+                              <span className="shrink-0 font-mono">{project.instance_count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-zinc-500">Esta acción no se puede deshacer.</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={onCancelDelete} disabled={saving} className="rounded-lg px-3 py-2 text-sm text-zinc-600 transition-colors hover:bg-black/5 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-white/5">
+                    Volver
+                  </button>
+                  <button type="button" onClick={onConfirmDelete} disabled={saving} className="rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-500 disabled:opacity-50">
+                    {saving ? "Eliminando..." : "Eliminar categoría"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 
 function AddCategoryModal({ open, onClose, form, setForm, saving, onSubmit }: { open: boolean; onClose: () => void; form: CreateCategoryRequest; setForm: React.Dispatch<React.SetStateAction<CreateCategoryRequest>>; saving: boolean; onSubmit: (e: FormEvent<HTMLFormElement>) => void; }) {
   return (
@@ -538,7 +776,7 @@ function AddCategoryModal({ open, onClose, form, setForm, saving, onSubmit }: { 
       <form className="flex flex-col gap-4" onSubmit={onSubmit}>
         <div className="space-y-3">
           <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required placeholder="Nombre de categoría" className="w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
-          <textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={3} placeholder="Descripción" className="w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono resize-none" />
+          <textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={3} placeholder="Descripción" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
           <select value={form.scope} onChange={(event) => setForm((current) => ({ ...current, scope: event.target.value }))} className="w-full bg-zinc-50 dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono">
             <option value="item">Ítem</option>
             <option value="accessory">Accesorio</option>
@@ -570,8 +808,8 @@ function AddComponentModal({ open, onClose, form, setForm, saving, onSubmit }: {
             </select>
             <input value={form.unit_type || ""} onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))} placeholder="Unidad (m2, set)" className="w-1/2 bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
           </div>
-          <textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={2} placeholder="Descripción" className="w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono resize-none" />
-          <textarea value={form.short_description || ""} onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))} rows={2} placeholder="Descripción corta" className="w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono resize-none" />
+          <textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={2} placeholder="Descripción" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
+          <textarea value={form.short_description || ""} onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))} rows={2} placeholder="Descripción corta" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-white/5 transition-colors">Cancelar</button>
@@ -617,10 +855,19 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [focusedComponentId, setFocusedComponentId] = useState<number | null>(() => {
+    const match = window.location.hash.match(/^#component-(\d+)$/);
+    return match ? Number(match[1]) : null;
+  });
   const [categoryForm, setCategoryForm] = useState<CreateCategoryRequest>(initialCategoryForm);
   const [componentForm, setComponentForm] = useState<CreateComponentRequest>(initialComponentForm);
   const [selectedLinks, setSelectedLinks] = useState<number[]>([]);
   const [savingLinks, setSavingLinks] = useState(false);
+  const [categoryActionTarget, setCategoryActionTarget] = useState<CategoryActionTarget | null>(null);
+  const [categoryActionName, setCategoryActionName] = useState("");
+  const [categoryDeletionImpact, setCategoryDeletionImpact] = useState<CatalogCategoryDeletionImpact | null>(null);
+  const [categoryActionSaving, setCategoryActionSaving] = useState(false);
+  const [categoryActionError, setCategoryActionError] = useState<string | null>(null);
 
   const [savingCategory, setSavingCategory] = useState(false);
   const [savingComponent, setSavingComponent] = useState(false);
@@ -647,6 +894,16 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
   useEffect(() => {
     void loadCatalog();
   }, [categoryId]);
+
+  useEffect(() => {
+    if (!focusedComponentId || data?.selected?.id !== categoryId) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`component-${focusedComponentId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [categoryId, data?.selected?.id, focusedComponentId]);
 
   useEffect(() => {
     setSelectedLinks(data?.selected?.linked_category_ids || []);
@@ -726,7 +983,103 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
     }
   }
 
+  function openCategoryActions(target: CategoryActionTarget) {
+    setCategoryActionTarget(target);
+    setCategoryActionName(target.name);
+    setCategoryDeletionImpact(null);
+    setCategoryActionError(null);
+  }
+
+  function closeCategoryActions() {
+    if (categoryActionSaving) {
+      return;
+    }
+    setCategoryActionTarget(null);
+    setCategoryDeletionImpact(null);
+    setCategoryActionError(null);
+  }
+
+  async function handleRenameCategory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!categoryActionTarget || !categoryActionName.trim()) {
+      return;
+    }
+    setCategoryActionSaving(true);
+    setCategoryActionError(null);
+    try {
+      await api.updateCategory(categoryActionTarget.id, { name: categoryActionName.trim() });
+      setCategoryActionTarget(null);
+      setCategoryDeletionImpact(null);
+      await loadCatalog();
+    } catch (err) {
+      setCategoryActionError(err instanceof ApiError ? err.message : "No se pudo renombrar la categoría.");
+    } finally {
+      setCategoryActionSaving(false);
+    }
+  }
+
+  async function finishCategoryDeletion(impact: CatalogCategoryDeletionImpact, confirmCascade: boolean) {
+    if (!categoryActionTarget) {
+      return;
+    }
+    const result = await api.deleteCategory(categoryActionTarget.id, confirmCascade);
+    const selectedWasDeleted = Boolean(selected && impact.affected_category_ids.includes(selected.id));
+    setCategoryActionTarget(null);
+    setCategoryDeletionImpact(null);
+    if (selectedWasDeleted) {
+      onNavigate(result.category_id ? `/catalog?category_id=${result.category_id}` : "/catalog");
+    } else {
+      await loadCatalog();
+    }
+  }
+
+  async function handleInspectCategoryDeletion() {
+    if (!categoryActionTarget) {
+      return;
+    }
+    setCategoryActionSaving(true);
+    setCategoryActionError(null);
+    try {
+      const impact = await api.getCategoryDeletionImpact(categoryActionTarget.id);
+      if (impact.requires_confirmation) {
+        setCategoryDeletionImpact(impact);
+      } else {
+        await finishCategoryDeletion(impact, false);
+      }
+    } catch (err) {
+      setCategoryActionError(err instanceof ApiError ? err.message : "No se pudo comprobar el impacto de la eliminación.");
+    } finally {
+      setCategoryActionSaving(false);
+    }
+  }
+
+  async function handleConfirmCategoryDeletion() {
+    if (!categoryDeletionImpact) {
+      return;
+    }
+    setCategoryActionSaving(true);
+    setCategoryActionError(null);
+    try {
+      await finishCategoryDeletion(categoryDeletionImpact, true);
+    } catch (err) {
+      setCategoryActionError(err instanceof ApiError ? err.message : "No se pudo eliminar la categoría.");
+    } finally {
+      setCategoryActionSaving(false);
+    }
+  }
+
   const selected = data?.selected || null;
+
+  function selectCategory(nextCategoryId: number) {
+    setFocusedComponentId(null);
+    onNavigate(`/catalog?category_id=${nextCategoryId}`);
+  }
+
+  function selectComponent(nextCategoryId: number, componentId: number) {
+    setFocusedComponentId(componentId);
+    setSearchTerm("");
+    onNavigate(`/catalog?category_id=${nextCategoryId}#component-${componentId}`);
+  }
 
   return (
     <div className="max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-12 gap-6">
@@ -738,20 +1091,21 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
             </h2>
             <i className="ph-bold ph-magnifying-glass text-zinc-600" />
           </div>
-          <input
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value.toLowerCase())}
-            placeholder="Filtrar categorías..."
-            className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg py-1.5 px-3 mb-4 text-sm text-zinc-800 dark:text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
-          />
+          <SearchField value={searchTerm} onChange={setSearchTerm} />
           <div className="flex-1 overflow-y-auto pr-2">
             {data ? (
-              <CatalogTree
-                nodes={data.tree}
-                selectedCategoryId={selected?.id || categoryId}
-                filterTerm={searchTerm}
-                onSelect={(nextCategoryId) => onNavigate(`/catalog?category_id=${nextCategoryId}`)}
-              />
+              data.tree.some((node) => treeMatches(node, searchTerm)) ? (
+                <CatalogTree
+                  nodes={data.tree}
+                  selectedCategoryId={selected?.id || categoryId}
+                  filterTerm={searchTerm}
+                  onSelect={selectCategory}
+                  onSelectComponent={selectComponent}
+                  onManageCategory={openCategoryActions}
+                />
+              ) : (
+                <p className="px-2 py-3 text-xs text-zinc-500">No hay categorías, ítems ni accesorios que coincidan.</p>
+              )
             ) : (
               <p className="text-xs text-zinc-500 font-mono">Cargando categorías...</p>
             )}
@@ -831,7 +1185,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                         key={child.id}
                         type="button"
                         className="px-3 py-1.5 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-800 dark:text-zinc-300 transition-colors shadow-sm"
-                        onClick={() => onNavigate(`/catalog?category_id=${child.id}`)}
+                        onClick={() => selectCategory(child.id)}
                       >
                         {child.name} <span className="text-zinc-500 font-mono text-[10px] ml-2">{child.scope}</span>
                       </button>
@@ -882,6 +1236,7 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     <ComponentCard
                       key={component.id}
                       component={component}
+                      focused={focusedComponentId === component.id}
                       onComponentSaved={(nextComponent) =>
                         setData((current) => (current ? upsertSelectedComponent(current, nextComponent) : current))
                       }
@@ -905,6 +1260,22 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
           <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">No hay categoría seleccionada.</div>
         )}
       </div>
+      <CategoryActionsModal
+        target={categoryActionTarget}
+        name={categoryActionName}
+        setName={setCategoryActionName}
+        impact={categoryDeletionImpact}
+        saving={categoryActionSaving}
+        error={categoryActionError}
+        onClose={closeCategoryActions}
+        onRename={handleRenameCategory}
+        onInspectDelete={() => void handleInspectCategoryDeletion()}
+        onConfirmDelete={() => void handleConfirmCategoryDeletion()}
+        onCancelDelete={() => {
+          setCategoryDeletionImpact(null);
+          setCategoryActionError(null);
+        }}
+      />
     </div>
   );
 }

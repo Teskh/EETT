@@ -6,6 +6,28 @@ from typing import Any
 from app.models import Project, ProjectInstance
 
 
+def material_exists_in_instance(material: dict[str, Any]) -> bool:
+    """Return whether a serialized material represents a persisted occurrence.
+
+    Project detail payloads intentionally include applicable catalog candidates
+    that were not selected for the instance.  Those candidates are marked as
+    ``missing`` and contain placeholder BOM rows so they can still be added from
+    the editor.  They must not be treated as project materials by reports,
+    costing, exports, or ERP enrichment.
+
+    Payloads produced before ``source_status`` was introduced are treated as
+    existing for backwards compatibility.
+    """
+
+    return material.get("source_status") != "missing"
+
+
+def iter_existing_instance_materials(instance: dict[str, Any]):
+    for material in instance.get("materials", []):
+        if material_exists_in_instance(material):
+            yield material
+
+
 def number_category_sections(categories: list[dict[str, Any]]) -> list[dict[str, Any]]:
     counters: list[int] = []
     numbered: list[dict[str, Any]] = []
@@ -26,7 +48,7 @@ def iter_material_context_rows(project_data: dict[str, Any]):
         category_label = f"{section['number']}. {section['name']}"
         for instance in section.get("instances", []):
             instance_label = instance.get("short_name") or instance["name"]
-            for material in instance.get("materials", []):
+            for material in iter_existing_instance_materials(instance):
                 for bom_entry in material.get("bom_entries", []):
                     yield {
                         "category_label": category_label,
@@ -53,7 +75,7 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
         category_label = f"{section['number']}. {section['name']}"
         for instance in section.get("instances", []):
             instance_label = instance.get("short_name") or instance["name"]
-            for material in instance.get("materials", []):
+            for material in iter_existing_instance_materials(instance):
                 for bom_entry in material.get("bom_entries", []):
                     yield {
                         "category_label": category_label,
@@ -85,7 +107,7 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
 
     for section in number_category_sections(project_data.get("categories", [])):
         for instance in section.get("instances", []):
-            for material in instance.get("materials", []):
+            for material in iter_existing_instance_materials(instance):
                 sku = str(material.get("sku") or "").strip().upper()
                 if not sku:
                     continue
@@ -682,7 +704,7 @@ def _technical_materials(instance: dict[str, Any], settings: dict[str, Any]) -> 
         return []
 
     materials: list[dict[str, Any]] = []
-    for material in instance.get("materials", []):
+    for material in iter_existing_instance_materials(instance):
         display_rows = []
         for bom_entry in material.get("bom_entries", []):
             state = bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state"))

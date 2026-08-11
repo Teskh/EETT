@@ -418,8 +418,11 @@ def create_project(
     return project
 
 
-def _project_name_exists(session: Session, name: str) -> bool:
-    return session.scalar(select(Project.id).where(Project.name == name).limit(1)) is not None
+def _project_name_exists(session: Session, name: str, *, exclude_project_id: int | None = None) -> bool:
+    statement = select(Project.id).where(Project.name == name)
+    if exclude_project_id is not None:
+        statement = statement.where(Project.id != exclude_project_id)
+    return session.scalar(statement.limit(1)) is not None
 
 
 def _default_project_copy_name(session: Session, source_name: str) -> str:
@@ -719,6 +722,55 @@ def copy_project(
 def delete_project(session: Session, *, project: Project) -> None:
     session.delete(project)
     session.commit()
+
+
+def update_project(
+    session: Session,
+    *,
+    project: Project,
+    name: str,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> Project:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Project name is required.")
+    if len(clean_name) > 160:
+        raise ValueError("Project name cannot exceed 160 characters.")
+    if clean_name == project.name:
+        return project
+    if _project_name_exists(session, clean_name, exclude_project_id=project.id):
+        raise ValueError("A project with that name already exists.")
+
+    previous_name = project.name
+    project.name = clean_name
+    if actor_user is not None:
+        record_project_activity(
+            session,
+            project=project,
+            context=build_audit_context(
+                actor=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                title="Project renamed",
+                scope_type="project",
+                scope_id=project.id,
+            ),
+            entity_type="Project",
+            entity_id=project.id,
+            action="updated",
+            title="Project renamed",
+            scope_type="project",
+            scope_id=project.id,
+            details=build_activity_details(
+                headline="Project renamed",
+                subject_name=clean_name,
+                changes=[build_activity_change("Name", previous_name, clean_name)],
+                kind="project",
+            ),
+        )
+    session.commit()
+    session.refresh(project)
+    return project
 
 
 def update_project_status(
@@ -2325,6 +2377,7 @@ def reconcile_instance_base_attributes(
     instance_id: int,
     add_attribute_names: list[str],
     remove_attribute_names: list[str],
+    attribute_values: dict[str, str | None],
     actor_user: User | None,
     mutation_batch_id: str | None = None,
 ) -> dict | None:
@@ -2369,10 +2422,16 @@ def reconcile_instance_base_attributes(
     for name in sorted(add_names):
         if name in existing_values or name not in catalog_definitions:
             continue
+        definition = catalog_definitions[name]
+        raw_value = attribute_values.get(name)
+        value = raw_value.strip() if isinstance(raw_value, str) else raw_value
+        allowed_options = {option.value for option in definition.options}
+        if value is not None and allowed_options and value not in allowed_options:
+            raise ValueError(f"Invalid predefined value for attribute {name}.")
         base_group.attribute_values.append(
             ProjectInstanceAttributeValue(
                 attribute_name=name,
-                value=None,
+                value=value or None,
                 sort_order=len(base_group.attribute_values) + 1,
             )
         )

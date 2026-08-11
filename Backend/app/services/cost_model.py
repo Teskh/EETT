@@ -18,7 +18,7 @@ from app.models import (
 )
 from app.models.entities import MaterialMode
 from app.services.auth import can_view_project
-from app.services.export_projection import iter_cost_model_rows
+from app.services.export_projection import iter_cost_model_rows, iter_existing_instance_materials
 from app.services.projects import get_project_view_data, get_project_with_details
 
 
@@ -353,7 +353,7 @@ def _load_cost_model_prices(
     seen_skus: set[str] = set()
     for section in project_data.get("categories", []):
         for instance in section.get("instances", []):
-            for material in instance.get("materials", []):
+            for material in iter_existing_instance_materials(instance):
                 sku = str(material.get("sku") or "").strip().upper()
                 if not sku or sku in seen_skus:
                     continue

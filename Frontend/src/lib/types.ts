@@ -655,11 +655,19 @@ export type BackupRestoreResponse = {
   pruned: string[];
 };
 
+export type CatalogTreeComponent = {
+  id: number;
+  name: string;
+  short_name: string | null;
+  type: string;
+};
+
 export type CatalogTreeNode = {
   id: number;
   name: string;
   scope: string;
   component_count: number;
+  components: CatalogTreeComponent[];
   children: CatalogTreeNode[];
 };
 
@@ -765,6 +773,20 @@ export type CatalogPageData = {
   tree: CatalogTreeNode[];
   selected: CatalogSelectedCategory | null;
   link_targets: Array<{ id: number; name: string }>;
+};
+
+export type CatalogCategoryDeletionImpact = {
+  category_id: number;
+  category_name: string;
+  parent_id: number | null;
+  affected_category_ids: number[];
+  descendant_count: number;
+  descendant_names: string[];
+  component_count: number;
+  instance_count: number;
+  linked_category_count: number;
+  affected_projects: Array<{ id: number; name: string; instance_count: number }>;
+  requires_confirmation: boolean;
 };
 
 export type ProjectSummary = {
@@ -1206,6 +1228,10 @@ export type CopyProjectRequest = {
   status?: string | null;
 };
 
+export type UpdateProjectRequest = {
+  name: string;
+};
+
 export type UpdateProjectStatusRequest = {
   status: string;
 };
@@ -1213,6 +1239,12 @@ export type UpdateProjectStatusRequest = {
 export type AttributeValueInput = {
   name: string;
   value: string | null;
+};
+
+export type SyncAttributeReconcileRequest = {
+  add_attribute_names?: string[];
+  remove_attribute_names?: string[];
+  attribute_values?: AttributeValueInput[];
 };
 
 export type CreateProjectInstanceRequest = {

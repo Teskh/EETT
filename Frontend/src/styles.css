@@ -99,6 +99,17 @@ input, textarea, select, button {
   font: inherit;
 }
 
+/* Description fields grow with their content until they reach a practical
+   editing height. The resize handle remains available for users who want a
+   different height, and overflow becomes scrollable at the cap. */
+.description-textarea {
+  field-sizing: content;
+  min-height: 3.75rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  resize: vertical;
+}
+
 button {
   cursor: pointer;
 }

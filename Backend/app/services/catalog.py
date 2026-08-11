@@ -19,11 +19,16 @@ from app.models import (
     Material,
     MaterialRuleCondition,
     MaterialRuleGroup,
+    Project,
     ProjectInstance,
     ProjectInstanceAttributeGroup,
 )
 from app.models.entities import CategoryScope, ComponentType, utcnow
 from app.services.media import serialize_media_link
+
+
+class CategoryCascadeConfirmationRequired(ValueError):
+    pass
 
 
 def get_catalog_page_data(session: Session, selected_category_id: int | None = None) -> dict:
@@ -102,6 +107,104 @@ def create_category(
     session.commit()
     session.refresh(category)
     return category
+
+
+def update_category_name(session: Session, *, category_id: int, name: str) -> CatalogCategory | None:
+    category = session.get(CatalogCategory, category_id)
+    if category is None:
+        return None
+    normalized_name = name.strip()
+    if not normalized_name:
+        raise ValueError("Category name cannot be empty.")
+    category.name = normalized_name
+    session.commit()
+    session.refresh(category)
+    return category
+
+
+def get_category_deletion_impact(session: Session, *, category_id: int) -> dict | None:
+    categories = session.execute(select(CatalogCategory.id, CatalogCategory.parent_id, CatalogCategory.name)).all()
+    category_by_id = {row.id: row for row in categories}
+    target = category_by_id.get(category_id)
+    if target is None:
+        return None
+
+    children_by_parent: dict[int | None, list[int]] = defaultdict(list)
+    for row in categories:
+        children_by_parent[row.parent_id].append(row.id)
+
+    affected_ids = []
+    pending = [category_id]
+    seen = set()
+    while pending:
+        current_id = pending.pop(0)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        affected_ids.append(current_id)
+        pending.extend(children_by_parent.get(current_id, []))
+
+    component_count = session.scalar(
+        select(func.count(CatalogComponent.id)).where(CatalogComponent.category_id.in_(affected_ids))
+    ) or 0
+    instance_count = session.scalar(
+        select(func.count(ProjectInstance.id)).where(ProjectInstance.category_id.in_(affected_ids))
+    ) or 0
+    linked_category_count = session.scalar(
+        select(func.count(CatalogCategoryLink.id)).where(
+            or_(
+                CatalogCategoryLink.category_id.in_(affected_ids),
+                CatalogCategoryLink.linked_category_id.in_(affected_ids),
+            )
+        )
+    ) or 0
+    affected_projects = [
+        {"id": project_id, "name": project_name, "instance_count": project_instance_count}
+        for project_id, project_name, project_instance_count in session.execute(
+            select(Project.id, Project.name, func.count(ProjectInstance.id))
+            .join(ProjectInstance, ProjectInstance.project_id == Project.id)
+            .where(ProjectInstance.category_id.in_(affected_ids))
+            .group_by(Project.id, Project.name)
+            .order_by(Project.name)
+        ).all()
+    ]
+    descendant_names = [category_by_id[item_id].name for item_id in affected_ids[1:]]
+    requires_confirmation = bool(descendant_names or component_count or instance_count or linked_category_count)
+
+    return {
+        "category_id": category_id,
+        "category_name": target.name,
+        "parent_id": target.parent_id,
+        "affected_category_ids": affected_ids,
+        "descendant_count": len(descendant_names),
+        "descendant_names": descendant_names,
+        "component_count": component_count,
+        "instance_count": instance_count,
+        "linked_category_count": linked_category_count,
+        "affected_projects": affected_projects,
+        "requires_confirmation": requires_confirmation,
+    }
+
+
+def delete_category(session: Session, *, category_id: int, confirm_cascade: bool = False) -> dict | None:
+    impact = get_category_deletion_impact(session, category_id=category_id)
+    if impact is None:
+        return None
+    if impact["requires_confirmation"] and not confirm_cascade:
+        raise CategoryCascadeConfirmationRequired("Cascade confirmation is required for this category.")
+
+    affected_ids = impact["affected_category_ids"]
+    instances = session.scalars(select(ProjectInstance).where(ProjectInstance.category_id.in_(affected_ids))).all()
+    for instance in instances:
+        session.delete(instance)
+    session.flush()
+
+    category = session.get(CatalogCategory, category_id)
+    if category is None:
+        return None
+    session.delete(category)
+    session.commit()
+    return impact
 
 
 def create_component(
@@ -496,6 +599,15 @@ def _serialize_category_node(
         "name": category.name,
         "scope": category.scope.value,
         "component_count": counts_by_category.get(category.id, 0),
+        "components": [
+            {
+                "id": component.id,
+                "name": component.name,
+                "short_name": component.short_name,
+                "type": component.component_type.value,
+            }
+            for component in sorted(category.components, key=lambda item: item.name.casefold())
+        ],
         "children": [
             _serialize_category_node(child, counts_by_category, children_by_parent)
             for child in children_by_parent.get(category.id, [])

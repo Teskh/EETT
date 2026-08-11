@@ -229,8 +229,10 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
   const [draggingProject, setDraggingProject] = useState<{ projectId: number; fromStatus: string } | null>(null);
   const [dropTargetStatus, setDropTargetStatus] = useState<string | null>(null);
   const [updatingProjectId, setUpdatingProjectId] = useState<number | null>(null);
-  const [pendingProjectAction, setPendingProjectAction] = useState<{ projectId: number; action: "copy" | "delete" } | null>(null);
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<number | null>(null);
+  const [pendingProjectAction, setPendingProjectAction] = useState<{ projectId: number; action: "rename" | "copy" | "delete" } | null>(null);
   const canChangeProjectStatus = currentUser.permissions.project_change_status;
+  const canEditProjects = currentUser.permissions.project_edit || Boolean(currentUser.page_access.projects?.can_edit);
   const isGuest = Boolean(currentUser.is_guest);
 
   function openExportModal(projectId: number, projectName: string) {
@@ -565,7 +567,36 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
     }
   }
 
+  async function handleRenameProject(project: ProjectsBoardData["grouped_projects"][string][number]) {
+    setOpenProjectMenuId(null);
+    const nextName = window.prompt("Nuevo nombre del proyecto", project.name);
+    if (nextName === null) {
+      return;
+    }
+    const cleanName = nextName.trim();
+    if (!cleanName) {
+      setError("El nombre del proyecto es obligatorio.");
+      return;
+    }
+    if (cleanName === project.name) {
+      return;
+    }
+
+    setPendingProjectAction({ projectId: project.id, action: "rename" });
+    setError(null);
+    try {
+      await api.updateProject(project.id, { name: cleanName });
+      await loadProjects();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : "No se pudo renombrar el proyecto.";
+      setError(message);
+    } finally {
+      setPendingProjectAction(null);
+    }
+  }
+
   async function handleDeleteProject(project: ProjectsBoardData["grouped_projects"][string][number]) {
+    setOpenProjectMenuId(null);
     const confirmation = window.prompt(`Escribe "${project.name}" para eliminar este proyecto definitivamente.`);
     if (confirmation === null) {
       return;
@@ -671,7 +702,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                           setDropTargetStatus(null);
                         }}
                         className={[
-                          "bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3",
+                          "relative bg-black/5 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-xl p-4 group hover:border-accent-500/50 transition-colors flex flex-col gap-3",
                           isGuest ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60" : "",
                           canChangeProjectStatus ? "cursor-grab active:cursor-grabbing" : "",
                           draggingProject?.projectId === project.id || updatingProjectId === project.id ? "opacity-60" : "",
@@ -679,7 +710,7 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                           .filter(Boolean)
                           .join(" ")}
                       >
-                        <div>
+                        <div className="pr-10">
                           <h3 className="mb-1">
                             {isGuest ? (
                               <span className="text-left text-sm font-bold text-zinc-900 transition-colors group-hover:text-accent-600 dark:text-white dark:group-hover:text-accent-400">
@@ -696,6 +727,45 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             )}
                           </h3>
                         </div>
+                        {canEditProjects ? (
+                          <div
+                            className="absolute right-3 top-3 z-20"
+                            onBlur={(event) => {
+                              if (!event.currentTarget.contains(event.relatedTarget)) {
+                                setOpenProjectMenuId(null);
+                              }
+                            }}
+                          >
+                            <button
+                              type="button"
+                              disabled={pendingProjectAction?.projectId === project.id}
+                              onClick={() => setOpenProjectMenuId((current) => current === project.id ? null : project.id)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white text-base text-zinc-700 shadow-sm transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                              aria-label={`Más acciones para ${project.name}`}
+                              aria-expanded={openProjectMenuId === project.id}
+                              aria-haspopup="menu"
+                            >
+                              <i className={`ph-bold ${pendingProjectAction?.projectId === project.id ? "ph-circle-notch animate-spin" : "ph-dots-three"}`} />
+                            </button>
+                            {openProjectMenuId === project.id ? (
+                              <div role="menu" className="absolute right-0 top-10 z-30 min-w-40 overflow-hidden rounded-lg border border-black/10 bg-white py-1 shadow-xl dark:border-white/10 dark:bg-zinc-900">
+                                <button type="button" role="menuitem" onClick={() => void handleRenameProject(project)} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10">
+                                  <i className="ph-bold ph-pencil-simple" /> Renombrar
+                                </button>
+                                {currentUser.permissions.project_create ? (
+                                  <button type="button" role="menuitem" onClick={() => { setOpenProjectMenuId(null); void handleCopyProject(project); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-white/10">
+                                    <i className="ph-bold ph-copy" /> Copiar
+                                  </button>
+                                ) : null}
+                                {currentUser.permissions.project_delete ? (
+                                  <button type="button" role="menuitem" onClick={() => void handleDeleteProject(project)} className="flex w-full items-center gap-2 border-t border-black/5 px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50 dark:border-white/5 dark:text-red-300 dark:hover:bg-red-500/10">
+                                    <i className="ph-bold ph-trash" /> Eliminar
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <div className="flex items-center justify-between border-t border-black/5 dark:border-white/5 pt-3 mt-auto">
                           <div className="flex items-center gap-2 font-mono text-[10px] text-zinc-500">
                             <i className="ph-bold ph-stack" /> {project.instance_count} instancias
@@ -707,30 +777,12 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                             </span>
                           ) : null}
                           {!isGuest ? <div className="flex items-center gap-2">
-                            {currentUser.permissions.project_create && !isGuest ? (
-                              <button
-                                type="button"
-                                disabled={pendingProjectAction?.projectId === project.id}
-                                className="h-7 w-7 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 disabled:opacity-50 inline-flex items-center justify-center"
-                                onClick={() => void handleCopyProject(project)}
-                                aria-label={`Copiar ${project.name}`}
-                                title="Copiar proyecto"
-                              >
-                                <i
-                                  className={`ph-bold ${
-                                    pendingProjectAction?.projectId === project.id && pendingProjectAction.action === "copy"
-                                      ? "ph-circle-notch animate-spin"
-                                      : "ph-copy"
-                                  }`}
-                                />
-                              </button>
-                            ) : null}
                             <button
                               type="button"
-                              disabled={!currentUser.permissions.project_edit}
+                              disabled={!canEditProjects}
                               className="px-3 py-1.5 bg-zinc-50 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-900 dark:text-white rounded text-[10px] font-semibold transition-colors border border-black/10 dark:border-white/10 disabled:opacity-50 disabled:hover:bg-zinc-50 dark:disabled:hover:bg-white/5"
                               onClick={() => setSubtypeModal({ projectId: project.id, projectName: project.name })}
-                              title={currentUser.permissions.project_edit ? "Administrar subtipos del proyecto" : "Este rol no puede editar subtipos del proyecto"}
+                              title={canEditProjects ? "Administrar subtipos del proyecto" : "Este rol no puede editar subtipos del proyecto"}
                             >
                               Subtipos
                             </button>
@@ -743,24 +795,6 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
                               <i className="ph-bold ph-file-arrow-down" />
                               Exportar
                             </button>
-                            {currentUser.permissions.project_delete && !isGuest ? (
-                              <button
-                                type="button"
-                                disabled={pendingProjectAction?.projectId === project.id}
-                                className="h-7 w-7 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 text-red-700 dark:text-red-300 rounded text-[10px] font-semibold transition-colors border border-red-200 dark:border-red-500/20 disabled:opacity-50 inline-flex items-center justify-center"
-                                onClick={() => void handleDeleteProject(project)}
-                                aria-label={`Eliminar ${project.name}`}
-                                title="Eliminar proyecto"
-                              >
-                                <i
-                                  className={`ph-bold ${
-                                    pendingProjectAction?.projectId === project.id && pendingProjectAction.action === "delete"
-                                      ? "ph-circle-notch animate-spin"
-                                      : "ph-trash"
-                                  }`}
-                                />
-                              </button>
-                            ) : null}
                           </div> : null}
                         </div>
                       </div>

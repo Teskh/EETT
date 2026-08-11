@@ -5,6 +5,7 @@ import type {
   BackupRestoreResponse,
   BackupSettings,
   CatalogAttribute,
+  CatalogCategoryDeletionImpact,
   CatalogMaterialRule,
   CatalogMaterialSearchResponse,
   CatalogPageData,
@@ -55,6 +56,8 @@ import type {
   ProjectsBoardData,
   RolePageAccessUpdateRequest,
   SessionUser,
+  SyncAttributeReconcileRequest,
+  UpdateProjectRequest,
   UpdateProjectStatusRequest,
   UpdateMaterialCalculationSheetRequest,
   UpdateMaterialOccurrenceRequest,
@@ -271,6 +274,21 @@ export const api = {
     return request<MutationResult>("/api/v1/catalog/categories", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+  updateCategory(categoryId: number, payload: { name: string }) {
+    return request<MutationResult>(`/api/v1/catalog/categories/${categoryId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+  getCategoryDeletionImpact(categoryId: number) {
+    return request<CatalogCategoryDeletionImpact>(`/api/v1/catalog/categories/${categoryId}/deletion-impact`);
+  },
+  deleteCategory(categoryId: number, confirmCascade = false) {
+    const query = confirmCascade ? "?confirm_cascade=true" : "";
+    return request<MutationResult>(`/api/v1/catalog/categories/${categoryId}${query}`, {
+      method: "DELETE",
     });
   },
   createComponent(payload: CreateComponentRequest) {
@@ -576,6 +594,13 @@ export const api = {
       headers: mutationHeaders(mutationBatchId),
     });
   },
+  updateProject(projectId: number, payload: UpdateProjectRequest, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
   deleteProject(projectId: number, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}`, {
       method: "DELETE",
@@ -785,7 +810,7 @@ export const api = {
   reconcileProjectInstanceAttributes(
     projectId: number,
     instanceId: number,
-    payload: { add_attribute_names?: string[]; remove_attribute_names?: string[] },
+    payload: SyncAttributeReconcileRequest,
     mutationBatchId?: string,
   ) {
     return request<InstanceSyncPreview>(`/api/v1/projects/${projectId}/instances/${instanceId}/sync-attributes/reconcile`, {
