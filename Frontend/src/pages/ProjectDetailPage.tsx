@@ -2922,6 +2922,8 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
     const match = window.location.hash.match(/^#instance-(\d+)$/);
     return match ? Number(match[1]) : null;
   });
+  const [instanceScrollRequest, setInstanceScrollRequest] = useState(0);
+  const pendingInstanceScrollRef = useRef<number | null>(focusedInstanceId);
   const [modalState, setModalState] = useState<ModalState>(null);
   const [linkedAccessoryState, setLinkedAccessoryState] = useState<LinkedAccessoryState>(null);
   const [calculationSheetState, setCalculationSheetState] = useState<CalculationSheetState>(null);
@@ -3065,14 +3067,15 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
   }, [onTitleChange, projectId]);
 
   useEffect(() => {
-    if (!focusedInstanceId || !data) {
+    if (!focusedInstanceId || !data || pendingInstanceScrollRef.current !== focusedInstanceId) {
       return;
     }
     const frame = window.requestAnimationFrame(() => {
+      pendingInstanceScrollRef.current = null;
       document.getElementById(`instance-${focusedInstanceId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [data, focusedInstanceId]);
+  }, [data, focusedInstanceId, instanceScrollRequest]);
 
   useEffect(() => {
     const handleCommentNavigation = () => setCommentNavigationTick((current) => current + 1);
@@ -3538,7 +3541,9 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
   );
 
   function selectInstance(instanceId: number) {
+    pendingInstanceScrollRef.current = instanceId;
     setFocusedInstanceId(instanceId);
+    setInstanceScrollRequest((current) => current + 1);
     setCategorySearch("");
     window.history.replaceState({}, "", `#instance-${instanceId}`);
   }

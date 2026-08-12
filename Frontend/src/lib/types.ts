@@ -1346,6 +1346,7 @@ export type ProjectSubtypeDeletionImpact = {
   calculation_sheets: number;
   auxiliary_materials: number;
   production_links: number;
+  dependent_entries: number;
 };
 
 export type MaterialOccurrenceEntryInput = {

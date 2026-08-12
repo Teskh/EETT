@@ -1000,27 +1000,26 @@ def delete_project_subtype(
     if subtype is None:
         return False
     impact = get_project_subtype_deletion_impact(session, project=project, subtype_id=subtype_id)
-    affected_count = sum(
-        int(impact[key])
-        for key in (
-            "bom_rows",
-            "cost_adjustments",
-            "calculation_sheets",
-            "auxiliary_materials",
-            "production_links",
-        )
-    )
+    affected_count = int(impact["dependent_entries"])
     if affected_count and not confirm_impact:
         raise ValueError("Subtype deletion has dependent data and requires explicit confirmation.")
     subtree_ids = impact["subtype_ids"]
-    for link in session.scalars(
-        select(ProductionHouseTypeLink).where(ProductionHouseTypeLink.project_subtype_id.in_(subtree_ids))
-    ).all():
-        session.delete(link)
-    for selection in session.scalars(
-        select(ProjectAuxiliaryMaterialSelection).where(ProjectAuxiliaryMaterialSelection.subtype_id.in_(subtree_ids))
-    ).all():
-        session.delete(selection)
+    dependent_records = (
+        (ProjectBomEntry, ProjectBomEntry.subtype_id),
+        (ProjectCostModelAdjustment, ProjectCostModelAdjustment.subtype_id),
+        (ProjectMaterialCalculationSheet, ProjectMaterialCalculationSheet.subtype_id),
+        (ProjectAuxiliaryMaterialSelection, ProjectAuxiliaryMaterialSelection.subtype_id),
+        (ProductionHouseTypeLink, ProductionHouseTypeLink.project_subtype_id),
+    )
+    for model, subtype_column in dependent_records:
+        for record in session.scalars(select(model).where(subtype_column.in_(subtree_ids))).all():
+            session.delete(record)
+
+    # Remove dependants before deleting the subtype tree. Without this flush,
+    # SQLAlchemy can null nullable subtype foreign keys in already-loaded BOM
+    # rows instead of deleting them. That both preserves data the user confirmed
+    # should be removed and can collide with a general BOM row's unique constraint.
+    session.flush()
     details = {"name": subtype.name, "parent_id": subtype.parent_id}
     if actor_user is not None:
         record_project_activity(
@@ -1074,7 +1073,7 @@ def get_project_subtype_deletion_impact(
 
     collect(subtype)
     subtype_ids = [node.id for node in subtree]
-    return {
+    impact = {
         "subtype_id": subtype.id,
         "subtype_ids": subtype_ids,
         "subtype_names": [subtype_path(node) for node in subtree],
@@ -1115,6 +1114,17 @@ def get_project_subtype_deletion_impact(
             or 0
         ),
     }
+    impact["dependent_entries"] = sum(
+        int(impact[key])
+        for key in (
+            "bom_rows",
+            "cost_adjustments",
+            "calculation_sheets",
+            "auxiliary_materials",
+            "production_links",
+        )
+    )
+    return impact
 
 
 def _project_material_mode_value(project: Project) -> str:

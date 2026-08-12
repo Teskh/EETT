@@ -26,6 +26,7 @@ from app.models import (
     ComponentType,
     ComponentMaterialRule,
     ErpMaterialCache,
+    Material,
     MaterialDashboardCacheEntry,
     MaterialStudyGroup,
     Project,
@@ -1488,6 +1489,77 @@ class ServiceLayerTests(unittest.TestCase):
         with self.session_factory() as session:
             deleted = session.scalar(select(ProjectSubtype).where(ProjectSubtype.id == root_id))
         self.assertIsNone(deleted)
+
+    def test_project_subtype_deletion_reports_and_removes_subtree_bom_rows(self) -> None:
+        create_root = self.client.post(
+            "/api/v1/projects/2/subtypes",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Temporary BOM root"},
+        )
+        self.assertEqual(create_root.status_code, 200)
+        root_id = create_root.json()["subtype_id"]
+
+        create_child = self.client.post(
+            "/api/v1/projects/2/subtypes",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={"name": "Temporary BOM child", "parent_id": root_id},
+        )
+        self.assertEqual(create_child.status_code, 200)
+        child_id = create_child.json()["subtype_id"]
+
+        with self.session_factory() as session:
+            instance = session.scalar(select(ProjectInstance).where(ProjectInstance.project_id == 2).limit(1))
+            self.assertIsNotNone(instance)
+            material = Material(sku="TEST-SUBTYPE-DELETE", name="Subtype deletion test", unit="UN")
+            session.add(material)
+            session.flush()
+            material_id = material.id
+            for subtype_id, quantity in ((None, 1.0), (root_id, 2.0), (child_id, 3.0)):
+                session.add(
+                    ProjectBomEntry(
+                        project_id=2,
+                        instance_id=instance.id,
+                        material_id=material_id,
+                        subtype_id=subtype_id,
+                        quantity=quantity,
+                        unit="UN",
+                    )
+                )
+            session.commit()
+
+        impact_response = self.client.get(
+            f"/api/v1/projects/2/subtypes/{root_id}/deletion-impact",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(impact_response.status_code, 200)
+        impact = impact_response.json()
+        self.assertEqual(impact["subtype_count"], 2)
+        self.assertEqual(impact["bom_rows"], 2)
+        self.assertEqual(impact["dependent_entries"], 2)
+
+        unconfirmed_delete = self.client.delete(
+            f"/api/v1/projects/2/subtypes/{root_id}",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(unconfirmed_delete.status_code, 409)
+
+        confirmed_delete = self.client.delete(
+            f"/api/v1/projects/2/subtypes/{root_id}?confirm_impact=true",
+            headers={"X-Spec-Sheets-User": "editor"},
+        )
+        self.assertEqual(confirmed_delete.status_code, 200)
+
+        with self.session_factory() as session:
+            remaining_subtypes = session.scalars(
+                select(ProjectSubtype).where(ProjectSubtype.id.in_((root_id, child_id)))
+            ).all()
+            remaining_bom_rows = session.scalars(
+                select(ProjectBomEntry).where(ProjectBomEntry.material_id == material_id)
+            ).all()
+        self.assertEqual(remaining_subtypes, [])
+        self.assertEqual(len(remaining_bom_rows), 1)
+        self.assertIsNone(remaining_bom_rows[0].subtype_id)
+        self.assertEqual(remaining_bom_rows[0].quantity, 1.0)
 
     def test_project_material_occurrence_updates_toggle_between_general_and_per_subtype(self) -> None:
         with self.session_factory() as session:

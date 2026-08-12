@@ -451,11 +451,12 @@ export function ProjectsPage({ onNavigate, currentUser }: ProjectsPageProps) {
       const confirmed = window.confirm(
         [
           `¿Eliminar ${impact.subtype_count} subtipo(s)?`,
+          `Esta acción eliminará ${impact.dependent_entries} registro(s) dependiente(s) en cascada:`,
           `${impact.bom_rows} filas BOM`,
           `${impact.cost_adjustments} ajustes de costo`,
           `${impact.calculation_sheets} planillas de cálculo`,
           `${impact.auxiliary_materials} materiales auxiliares`,
-          `${impact.production_links} vínculos de producción quedarán sin vincular`,
+          `${impact.production_links} vínculos de producción`,
         ].join("\n"),
       );
       if (!confirmed) {
