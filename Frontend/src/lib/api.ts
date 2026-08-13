@@ -29,6 +29,8 @@ import type {
   MaterialCalculationSheet,
   HouseTypeLinkPayload,
   HouseTypeLinksBundle,
+  ProductionHouseLinksBulkUpdateResponse,
+  ProductionHouseLinksBundle,
   MaterialDashboardCecoResponse,
   MaterialDashboardEconomicMetricsResponse,
   MaterialDashboardGroupEconomicMetricsResponse,
@@ -501,6 +503,23 @@ export const api = {
     return request<HouseTypeLinksBundle>("/api/v1/dashboard/house-type-links", {
       method: "PUT",
       body: JSON.stringify({ links }),
+    });
+  },
+  getProductionHouseLinks() {
+    return request<ProductionHouseLinksBundle>("/api/v1/dashboard/production-house-links");
+  },
+  updateProductionHouseLinks(payload: {
+    workOrderIds: number[];
+    projectId: number | null;
+    projectSubtypeId: number | null;
+  }) {
+    return request<ProductionHouseLinksBulkUpdateResponse>("/api/v1/dashboard/production-house-links", {
+      method: "PATCH",
+      body: JSON.stringify({
+        work_order_ids: payload.workOrderIds,
+        project_id: payload.projectId,
+        project_subtype_id: payload.projectSubtypeId,
+      }),
     });
   },
   getProductionHouseStarts(range: { startDate: string; endDate: string }) {

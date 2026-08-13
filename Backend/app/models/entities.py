@@ -1042,6 +1042,52 @@ class ProductionHouseTypeLink(Base):
     updated_by: Mapped[User | None] = relationship()
 
 
+class ProductionHouseLink(Base):
+    """Local snapshot and mapping for one Production II work order.
+
+    Production-side identifiers remain plain integers because they live in a
+    separate database. A row exists even while the house is unmapped so that
+    automatic defaults apply only to genuinely new work orders.
+    """
+
+    __tablename__ = "production_house_links"
+    __table_args__ = (
+        Index("ix_production_house_links_house_type", "production_house_type_id"),
+        Index("ix_production_house_links_lifecycle", "start_date", "planned_start_date"),
+        Index("ix_production_house_links_project", "project_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    production_work_order_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    production_project_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    house_identifier: Mapped[str | None] = mapped_column(String(200), default=None)
+    production_house_type_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    production_house_type_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    production_sub_type_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    production_sub_type_name: Mapped[str | None] = mapped_column(String(200), default=None)
+    planned_start_date: Mapped[date | None] = mapped_column(Date, default=None)
+    planned_sequence: Mapped[int | None] = mapped_column(Integer, default=None)
+    start_date: Mapped[date | None] = mapped_column(Date, default=None)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), default=None
+    )
+    project_subtype_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_subtypes.id", ondelete="SET NULL"), default=None
+    )
+    mapping_source: Mapped[str | None] = mapped_column(String(20), default=None)
+    updated_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    project: Mapped[Project | None] = relationship(foreign_keys=[project_id])
+    project_subtype: Mapped[ProjectSubtype | None] = relationship(foreign_keys=[project_subtype_id])
+    updated_by: Mapped[User | None] = relationship(foreign_keys=[updated_by_user_id])
+
+
 class ProjectCostModelAdjustment(Base):
     __tablename__ = "project_cost_model_adjustments"
     __table_args__ = (

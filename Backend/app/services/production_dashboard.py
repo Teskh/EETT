@@ -211,6 +211,120 @@ _ALL_HOUSE_STARTS_SQL = """
 """
 
 
+_ALL_PRODUCTION_HOUSES_SQL = """
+    WITH panel_events AS (
+        SELECT
+            wu.work_order_id AS work_order_id,
+            COALESCE(ti.started_at, ti.completed_at) AS event_at
+        FROM task_instances ti
+        JOIN panel_units pu ON pu.id = ti.panel_unit_id
+        JOIN work_units wu ON wu.id = pu.work_unit_id
+        WHERE UPPER(ti.scope::text) = :scope_panel
+          AND COALESCE(ti.started_at, ti.completed_at) IS NOT NULL
+        UNION ALL
+        SELECT
+            wu.work_order_id AS work_order_id,
+            te.created_at AS event_at
+        FROM task_exceptions te
+        JOIN panel_units pu ON pu.id = te.panel_unit_id
+        JOIN work_units wu ON wu.id = pu.work_unit_id
+        WHERE UPPER(te.scope::text) = :scope_panel
+          AND te.created_at IS NOT NULL
+    ),
+    first_panel_task AS (
+        SELECT work_order_id, MIN(event_at) AS first_started_at
+        FROM panel_events
+        GROUP BY work_order_id
+    ),
+    work_order_plan AS (
+        SELECT
+            work_order_id,
+            MIN(planned_start_datetime) AS planned_start_at,
+            MIN(planned_sequence) AS planned_sequence
+        FROM work_units
+        GROUP BY work_order_id
+    )
+    SELECT
+        wo.id AS work_order_id,
+        wo.project_name AS production_project_name,
+        wo.house_identifier AS house_identifier,
+        wo.house_type_id AS house_type_id,
+        ht.name AS house_type_name,
+        wo.sub_type_id AS sub_type_id,
+        hst.name AS sub_type_name,
+        p.planned_start_at AS planned_start_at,
+        p.planned_sequence AS planned_sequence,
+        f.first_started_at AS first_started_at
+    FROM work_orders wo
+    JOIN house_types ht ON ht.id = wo.house_type_id
+    LEFT JOIN house_sub_types hst ON hst.id = wo.sub_type_id
+    JOIN work_order_plan p ON p.work_order_id = wo.id
+    LEFT JOIN first_panel_task f ON f.work_order_id = wo.id
+    ORDER BY
+        CASE WHEN f.first_started_at IS NULL THEN 0 ELSE 1 END,
+        p.planned_start_at NULLS LAST,
+        p.planned_sequence NULLS LAST,
+        f.first_started_at DESC,
+        wo.id
+"""
+
+
+def get_production_houses(settings: Settings) -> dict:
+    """Every current Production II work order, including planned houses.
+
+    A work order is considered started only when it satisfies the dashboard''s
+    existing first-PANEL-event definition. All remaining queued work orders
+    are explicitly marked planned.
+    """
+
+    try:
+        with production_session(settings) as session:
+            rows = list(
+                session.execute(
+                    text(_ALL_PRODUCTION_HOUSES_SQL),
+                    {"scope_panel": "PANEL"},
+                ).mappings()
+            )
+    except OperationalError as exc:
+        raise RuntimeError("Could not connect to the Production II database") from exc
+    except SQLAlchemyError as exc:
+        raise RuntimeError(f"Production II house query failed: {exc.__class__.__name__}") from exc
+
+    houses: list[dict] = []
+    for row in rows:
+        planned_value = row["planned_start_at"]
+        started_value = row["first_started_at"]
+        if isinstance(planned_value, datetime):
+            planned_value = planned_value.date()
+        if isinstance(started_value, datetime):
+            started_value = started_value.date()
+        houses.append(
+            {
+                "work_order_id": int(row["work_order_id"]),
+                "production_project_name": str(row["production_project_name"] or ""),
+                "house_identifier": (str(row["house_identifier"]).strip() or None)
+                if row["house_identifier"] is not None
+                else None,
+                "house_type_id": int(row["house_type_id"]),
+                "house_type_name": str(row["house_type_name"] or ""),
+                "sub_type_id": int(row["sub_type_id"]) if row["sub_type_id"] is not None else None,
+                "sub_type_name": str(row["sub_type_name"]) if row["sub_type_name"] is not None else None,
+                "planned_start_date": planned_value.isoformat() if planned_value is not None else None,
+                "planned_sequence": int(row["planned_sequence"]) if row["planned_sequence"] is not None else None,
+                "start_date": started_value.isoformat() if started_value is not None else None,
+                "lifecycle_status": "started" if started_value is not None else "planned",
+            }
+        )
+
+    return {
+        "houses": houses,
+        "total_houses": len(houses),
+        "planned_houses": sum(1 for house in houses if house["lifecycle_status"] == "planned"),
+        "started_houses": sum(1 for house in houses if house["lifecycle_status"] == "started"),
+        "generated_at": datetime.utcnow().isoformat(),
+    }
+
+
 def get_production_house_starts(
     settings: Settings,
     *,
@@ -298,6 +412,24 @@ def build_house_start_grid(houses: list[dict]) -> list[dict]:
             grid[key] = bucket
         bucket["house_starts"] += 1
     return sorted(grid.values(), key=lambda row: (row["date"], row["house_type_name"], row["sub_type_name"] or ""))
+
+
+def build_individual_house_start_grid(houses: list[dict]) -> list[dict]:
+    """Preserve one row per started work order for per-house mapping."""
+
+    return [
+        {
+            "date": str(house["start_date"]),
+            "work_order_id": int(house["work_order_id"]),
+            "house_type_id": int(house["house_type_id"]),
+            "house_type_name": str(house.get("house_type_name") or ""),
+            "sub_type_id": house.get("sub_type_id"),
+            "sub_type_name": house.get("sub_type_name"),
+            "house_starts": 1,
+        }
+        for house in houses
+        if house.get("start_date") is not None
+    ]
 
 
 def _load_house_start_context(

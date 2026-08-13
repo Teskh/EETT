@@ -717,7 +717,7 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
       <div className="max-w-5xl mx-auto bg-white dark:bg-[#09090b] sm:border border-zinc-200 dark:border-white/10 sm:rounded-lg sm:shadow-sm overflow-hidden flex flex-col">
         
         {/* Extremely Dense Header / Filter Bar */}
-        <div className="sticky top-0 z-40 bg-zinc-50 dark:bg-[#09090b] border-b border-zinc-200 dark:border-white/10 px-4 py-2 flex flex-col gap-3">
+        <div className="sticky top-0 z-20 bg-zinc-50 dark:bg-[#09090b] border-b border-zinc-200 dark:border-white/10 px-4 py-2 flex flex-col gap-3">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="flex items-center gap-4">
               <h1 className="text-base font-bold tracking-tight uppercase flex items-center gap-2">

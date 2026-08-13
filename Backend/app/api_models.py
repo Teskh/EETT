@@ -1013,6 +1013,53 @@ class HouseTypeLinksBundleResponse(BaseModel):
     production_error: str | None = None
 
 
+class ProductionHouseLinkModel(BaseModel):
+    id: int
+    work_order_id: int
+    production_project_name: str
+    house_identifier: str | None = None
+    house_type_id: int
+    house_type_name: str
+    sub_type_id: int | None = None
+    sub_type_name: str | None = None
+    planned_start_date: str | None = None
+    planned_sequence: int | None = None
+    start_date: str | None = None
+    lifecycle_status: str
+    mapped: bool
+    mapped_project_id: int | None = None
+    mapped_project_name: str | None = None
+    mapped_project_subtype_id: int | None = None
+    mapped_project_subtype_name: str | None = None
+    mapping_source: str | None = None
+    mapping_issue: str | None = None
+    missing_quantity_count: int = 0
+    updated_at: str | None = None
+
+
+class ProductionHouseLinksBundleResponse(BaseModel):
+    houses: list[ProductionHouseLinkModel] = Field(default_factory=list)
+    projects: list[LinkTargetProjectModel] = Field(default_factory=list)
+    total_houses: int = 0
+    planned_houses: int = 0
+    started_houses: int = 0
+    mapped_houses: int = 0
+    unmapped_houses: int = 0
+    automatic_houses: int = 0
+    production_error: str | None = None
+    generated_at: str
+
+
+class ProductionHouseLinksBulkUpdateRequest(BaseModel):
+    work_order_ids: list[int] = Field(min_length=1, max_length=5000)
+    project_id: int | None = Field(default=None, ge=1)
+    project_subtype_id: int | None = Field(default=None, ge=1)
+
+
+class ProductionHouseLinksBulkUpdateResponse(BaseModel):
+    houses: list[ProductionHouseLinkModel] = Field(default_factory=list)
+
+
 class ProductionHouseStartModel(BaseModel):
     work_order_id: int
     production_project_name: str

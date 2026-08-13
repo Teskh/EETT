@@ -186,6 +186,47 @@ export type HouseTypeLinksBundle = {
   production_error: string | null;
 };
 
+export type ProductionHouseLink = {
+  id: number;
+  work_order_id: number;
+  production_project_name: string;
+  house_identifier: string | null;
+  house_type_id: number;
+  house_type_name: string;
+  sub_type_id: number | null;
+  sub_type_name: string | null;
+  planned_start_date: string | null;
+  planned_sequence: number | null;
+  start_date: string | null;
+  lifecycle_status: "planned" | "started";
+  mapped: boolean;
+  mapped_project_id: number | null;
+  mapped_project_name: string | null;
+  mapped_project_subtype_id: number | null;
+  mapped_project_subtype_name: string | null;
+  mapping_source: "manual" | "automatic" | "legacy" | null;
+  mapping_issue: "incomplete_bom" | null;
+  missing_quantity_count: number;
+  updated_at: string | null;
+};
+
+export type ProductionHouseLinksBundle = {
+  houses: ProductionHouseLink[];
+  projects: LinkTargetProject[];
+  total_houses: number;
+  planned_houses: number;
+  started_houses: number;
+  mapped_houses: number;
+  unmapped_houses: number;
+  automatic_houses: number;
+  production_error: string | null;
+  generated_at: string;
+};
+
+export type ProductionHouseLinksBulkUpdateResponse = {
+  houses: ProductionHouseLink[];
+};
+
 export type ProductionHouseStart = {
   work_order_id: number;
   production_project_name: string;

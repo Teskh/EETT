@@ -34,17 +34,17 @@ from app.services.erp import (
 from app.services.effective_bom import build_project_expected_quantity_map, effective_occurrence_rows
 from app.services.house_type_links import (
     expected_quantities_for_link,
-    build_links_by_key,
     build_mapped_house_comparison,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
+    ensure_production_house_links_initialized,
     linked_projects_bom_fingerprint,
     link_missing_quantity_count,
-    load_house_type_links,
-    resolve_house_type_link,
+    load_production_house_links_by_work_order,
+    sync_production_house_links,
 )
 from app.services.production_dashboard import (
-    build_house_start_grid,
+    build_individual_house_start_grid,
     get_production_house_starts,
 )
 
@@ -246,10 +246,17 @@ def get_material_dashboard_mapped_house_comparison(
         end_date=end_date.isoformat() if end_date else None,
         history_days=history_days,
     )
-    start_grid = build_house_start_grid(production["houses"])
-    links = load_house_type_links(session)
-    links_by_key = build_links_by_key(links)
-    expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
+    ensure_production_house_links_initialized(session, settings)
+    sync_production_house_links(session, production["houses"])
+    start_grid = build_individual_house_start_grid(production["houses"])
+    links_by_key = load_production_house_links_by_work_order(
+        session,
+        [house["work_order_id"] for house in production["houses"]],
+    )
+    expected_maps = get_project_expected_quantity_maps(
+        session,
+        {link.project_id for link in links_by_key.values() if link.project_id is not None},
+    )
 
     comparison = build_mapped_house_comparison(
         movements=movements,
@@ -264,7 +271,7 @@ def get_material_dashboard_mapped_house_comparison(
         {
             "sku": normalized_sku,
             "ceco_filters": list(cost_centers or []),
-            "link_count": len(links),
+            "link_count": sum(1 for link in links_by_key.values() if link.project_id is not None),
             "generated_at": datetime.utcnow().isoformat(),
         }
     )
@@ -288,15 +295,22 @@ def get_production_house_starts_with_links(
         end_date=end_date.isoformat() if end_date else None,
         history_days=history_days,
     )
-    links = load_house_type_links(session)
-    links_by_key = build_links_by_key(links)
-    expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
+    ensure_production_house_links_initialized(session, settings)
+    sync_production_house_links(session, production["houses"])
+    links_by_key = load_production_house_links_by_work_order(
+        session,
+        [house["work_order_id"] for house in production["houses"]],
+    )
+    expected_maps = get_project_expected_quantity_maps(
+        session,
+        {link.project_id for link in links_by_key.values() if link.project_id is not None},
+    )
 
     houses = []
     mapped_count = 0
     partial_count = 0
     for house in production["houses"]:
-        link = resolve_house_type_link(links_by_key, house["house_type_id"], house.get("sub_type_id"))
+        link = links_by_key.get(int(house["work_order_id"]))
         missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
         # An incomplete BOM still contributes the quantities defined so far, so
         # the house counts as mapped and is flagged rather than dropped.
@@ -315,7 +329,8 @@ def get_production_house_starts_with_links(
                 "mapped_project_subtype_name": link.project_subtype.name
                 if link and link.project_subtype
                 else None,
-                "mapped_via_sub_type": bool(link and link.production_sub_type_id is not None),
+                "mapped_via_sub_type": False,
+                "mapping_source": link.mapping_source if link else None,
                 "mapping_issue": "incomplete_bom" if link is not None and missing_count > 0 else None,
                 "missing_quantity_count": missing_count,
             }
@@ -800,10 +815,16 @@ def get_material_dashboard_economic_metrics(
             end_date=requested_end_day.isoformat(),
             history_days=movement_window_days,
         )
-        start_grid = build_house_start_grid(production["houses"])
-        links_by_key = build_links_by_key(load_house_type_links(session))
+        ensure_production_house_links_initialized(session, settings)
+        sync_production_house_links(session, production["houses"])
+        start_grid = build_individual_house_start_grid(production["houses"])
+        links_by_key = load_production_house_links_by_work_order(
+            session,
+            [house["work_order_id"] for house in production["houses"]],
+        )
         expected_maps = get_project_expected_quantity_maps(
-            session, {link.project_id for link in links_by_key.values()}
+            session,
+            {link.project_id for link in links_by_key.values() if link.project_id is not None},
         )
 
         # Expected consumption per SKU across every mapped house started in
@@ -818,13 +839,13 @@ def get_material_dashboard_economic_metrics(
         for grid_row in start_grid:
             count = int(grid_row.get("house_starts") or 0)
             total_house_starts += count
-            link = resolve_house_type_link(links_by_key, grid_row["house_type_id"], grid_row.get("sub_type_id"))
-            if link is None:
+            link = links_by_key.get(int(grid_row["work_order_id"]))
+            if link is None or link.project_id is None:
                 continue
             total_mapped_house_starts += count
             if link_missing_quantity_count(link, expected_maps) > 0:
                 total_partial_house_starts += count
-            link_key = (link.production_house_type_id, link.production_sub_type_id)
+            link_key = (link.project_id, link.project_subtype_id)
             if link_key not in per_link_quantities:
                 per_link_quantities[link_key] = expected_quantities_for_link(link, expected_maps)
             for sku, quantity in per_link_quantities[link_key].items():

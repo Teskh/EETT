@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
+    ProductionHouseLink,
     ProductionHouseTypeLink,
     Project,
     ProjectBomEntry,
@@ -72,6 +73,241 @@ def list_house_type_links(session: Session) -> list[dict[str, Any]]:
     links = load_house_type_links(session)
     expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
     return [serialize_house_type_link(link, expected_maps) for link in links]
+
+
+def load_production_house_links(session: Session) -> list[ProductionHouseLink]:
+    return list(
+        session.scalars(
+            select(ProductionHouseLink)
+            .options(
+                selectinload(ProductionHouseLink.project),
+                selectinload(ProductionHouseLink.project_subtype),
+            )
+            .order_by(
+                ProductionHouseLink.start_date.desc().nullslast(),
+                ProductionHouseLink.planned_start_date.asc().nullslast(),
+                ProductionHouseLink.planned_sequence.asc().nullslast(),
+                ProductionHouseLink.production_work_order_id,
+            )
+        ).all()
+    )
+
+
+def load_production_house_links_by_work_order(
+    session: Session,
+    work_order_ids: Iterable[int] | None = None,
+) -> dict[int, ProductionHouseLink]:
+    statement = select(ProductionHouseLink).options(
+        selectinload(ProductionHouseLink.project),
+        selectinload(ProductionHouseLink.project_subtype),
+    )
+    if work_order_ids is not None:
+        normalized_ids = {int(value) for value in work_order_ids}
+        if not normalized_ids:
+            return {}
+        statement = statement.where(ProductionHouseLink.production_work_order_id.in_(normalized_ids))
+    return {
+        link.production_work_order_id: link
+        for link in session.scalars(statement).all()
+    }
+
+
+def _coerce_production_date(value: Any) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def sync_production_house_links(
+    session: Session,
+    houses: Sequence[Mapping[str, Any]],
+) -> list[ProductionHouseLink]:
+    """Upsert Production II work-order snapshots and default only new houses.
+
+    Existing type/subtype rules are imported as legacy mappings. A new house
+    is automatically mapped only when every previously observed house of the
+    same Production II type is mapped to the exact same local project/subtype
+    and at least one of those mappings was verified manually.
+    """
+
+    observed_by_id = {
+        int(house.get("work_order_id") or 0): house
+        for house in houses
+        if int(house.get("work_order_id") or 0) > 0
+    }
+    if not observed_by_id:
+        return []
+
+    existing_links = load_production_house_links(session)
+    existing_by_id = {link.production_work_order_id: link for link in existing_links}
+    prior_by_type: dict[int, list[ProductionHouseLink]] = defaultdict(list)
+    for link in existing_links:
+        prior_by_type[link.production_house_type_id].append(link)
+
+    # The old type/subtype rules are a one-time bootstrap for the production
+    # history that exists when this table is first populated. Once any house
+    # snapshots exist, genuinely new work orders use only the consensus rule.
+    legacy_by_key = (
+        build_links_by_key(load_house_type_links(session))
+        if not existing_links
+        else {}
+    )
+    now = datetime.now(timezone.utc)
+    new_links: list[ProductionHouseLink] = []
+
+    for work_order_id, house in observed_by_id.items():
+        link = existing_by_id.get(work_order_id)
+        if link is None:
+            link = ProductionHouseLink(production_work_order_id=work_order_id)
+            session.add(link)
+            existing_by_id[work_order_id] = link
+            new_links.append(link)
+
+        link.production_project_name = str(house.get("production_project_name") or "")
+        link.house_identifier = str(house.get("house_identifier") or "").strip() or None
+        link.production_house_type_id = int(house.get("house_type_id") or 0)
+        link.production_house_type_name = str(house.get("house_type_name") or "")
+        subtype_raw = house.get("sub_type_id")
+        link.production_sub_type_id = int(subtype_raw) if subtype_raw is not None else None
+        link.production_sub_type_name = str(house.get("sub_type_name") or "").strip() or None
+        planned_date = _coerce_production_date(house.get("planned_start_date"))
+        if planned_date is not None or link.planned_start_date is None:
+            link.planned_start_date = planned_date
+        sequence_raw = house.get("planned_sequence")
+        if sequence_raw is not None or link.planned_sequence is None:
+            link.planned_sequence = int(sequence_raw) if sequence_raw is not None else None
+        start_value = house.get("start_date")
+        if start_value is not None:
+            link.start_date = _coerce_production_date(start_value)
+        link.last_seen_at = now
+
+    session.flush()
+
+    for link in new_links:
+        legacy = resolve_house_type_link(
+            legacy_by_key,
+            link.production_house_type_id,
+            link.production_sub_type_id,
+        )
+        if legacy is not None:
+            link.project_id = legacy.project_id
+            link.project_subtype_id = legacy.project_subtype_id
+            link.mapping_source = "legacy"
+            continue
+
+        prior = prior_by_type.get(link.production_house_type_id, [])
+        if not prior or any(row.project_id is None for row in prior):
+            continue
+        targets = {(row.project_id, row.project_subtype_id) for row in prior}
+        manually_verified = any(row.mapping_source == "manual" for row in prior)
+        if len(targets) != 1 or not manually_verified:
+            continue
+        project_id, project_subtype_id = next(iter(targets))
+        link.project_id = project_id
+        link.project_subtype_id = project_subtype_id
+        link.mapping_source = "automatic"
+
+    session.flush()
+    return [existing_by_id[work_order_id] for work_order_id in observed_by_id]
+
+
+def ensure_production_house_links_initialized(
+    session: Session,
+    settings: Any,
+) -> None:
+    """Bootstrap the legacy history from a full Production II snapshot once."""
+
+    if session.scalar(select(ProductionHouseLink.id).limit(1)) is not None:
+        return
+    # Local import avoids coupling this persistence module to the external
+    # production query module during application import.
+    from app.services.production_dashboard import get_production_houses
+
+    production = get_production_houses(settings)
+    sync_production_house_links(session, production["houses"])
+
+
+def serialize_production_house_link(
+    link: ProductionHouseLink,
+    expected_maps: Mapping[int, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    missing_count = (
+        link_missing_quantity_count(link, expected_maps or {})
+        if link.project_id is not None
+        else 0
+    )
+    return {
+        "id": link.id,
+        "work_order_id": link.production_work_order_id,
+        "production_project_name": link.production_project_name,
+        "house_identifier": link.house_identifier,
+        "house_type_id": link.production_house_type_id,
+        "house_type_name": link.production_house_type_name,
+        "sub_type_id": link.production_sub_type_id,
+        "sub_type_name": link.production_sub_type_name,
+        "planned_start_date": link.planned_start_date.isoformat() if link.planned_start_date else None,
+        "planned_sequence": link.planned_sequence,
+        "start_date": link.start_date.isoformat() if link.start_date else None,
+        "lifecycle_status": "started" if link.start_date is not None else "planned",
+        "mapped": link.project_id is not None,
+        "mapped_project_id": link.project_id,
+        "mapped_project_name": link.project.name if link.project else None,
+        "mapped_project_subtype_id": link.project_subtype_id,
+        "mapped_project_subtype_name": link.project_subtype.name if link.project_subtype else None,
+        "mapping_source": link.mapping_source if link.project_id is not None else None,
+        "mapping_issue": "incomplete_bom" if link.project_id is not None and missing_count > 0 else None,
+        "missing_quantity_count": missing_count,
+        "updated_at": link.updated_at.isoformat() if link.updated_at else None,
+    }
+
+
+def bulk_assign_production_houses(
+    session: Session,
+    *,
+    work_order_ids: Sequence[int],
+    project_id: int | None,
+    project_subtype_id: int | None,
+    user: User | None = None,
+) -> list[ProductionHouseLink]:
+    normalized_ids = list(dict.fromkeys(int(value) for value in work_order_ids if int(value) > 0))
+    if not normalized_ids:
+        raise ValueError("Select at least one house")
+
+    links_by_id = load_production_house_links_by_work_order(session, normalized_ids)
+    if len(links_by_id) != len(normalized_ids):
+        raise ValueError("One or more selected houses are no longer available")
+
+    if project_id is None:
+        if project_subtype_id is not None:
+            raise ValueError("A subtype cannot be selected without a type")
+    else:
+        project = session.scalar(
+            select(Project)
+            .where(Project.id == int(project_id))
+            .options(selectinload(Project.subtypes))
+        )
+        if project is None:
+            raise ValueError(f"Project {project_id} not found")
+        if project_subtype_id is not None:
+            subtype_ids = {subtype.id for subtype in selectable_subtypes(project)}
+            if int(project_subtype_id) not in subtype_ids:
+                raise ValueError(
+                    f"Subtype {project_subtype_id} does not belong to project {project.name} or is only a group"
+                )
+
+    for work_order_id in normalized_ids:
+        link = links_by_id[work_order_id]
+        link.project_id = int(project_id) if project_id is not None else None
+        link.project_subtype_id = int(project_subtype_id) if project_subtype_id is not None else None
+        link.mapping_source = "manual" if project_id is not None else None
+        link.updated_by_user_id = user.id if user is not None else None
+
+    session.flush()
+    return [links_by_id[work_order_id] for work_order_id in normalized_ids]
 
 
 def replace_house_type_links(
@@ -143,17 +379,17 @@ def replace_house_type_links(
 
 
 def house_type_links_fingerprint(session: Session) -> str:
-    """Stable digest of the mapping state, for cache keys that depend on it."""
+    """Stable digest of individual-house mappings for dependent cache keys."""
     parts = [
         (
-            link.production_house_type_id,
-            link.production_sub_type_id,
+            link.production_work_order_id,
             link.project_id,
             link.project_subtype_id,
+            link.mapping_source,
         )
-        for link in session.scalars(select(ProductionHouseTypeLink)).all()
+        for link in session.scalars(select(ProductionHouseLink)).all()
     ]
-    serialized = json.dumps(sorted(parts, key=_fingerprint_part_sort_key), separators=(",", ":"))
+    serialized = json.dumps(sorted(parts, key=lambda part: part[0]), separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
 
@@ -212,7 +448,11 @@ def get_project_expected_quantity_maps(
 
 
 def linked_projects_bom_fingerprint(session: Session) -> str:
-    project_ids = set(session.scalars(select(ProductionHouseTypeLink.project_id)).all())
+    project_ids = {
+        int(project_id)
+        for project_id in session.scalars(select(ProductionHouseLink.project_id)).all()
+        if project_id is not None
+    }
     if not project_ids:
         return "none"
     projects = session.scalars(
@@ -284,7 +524,7 @@ def build_mapped_house_comparison(
     *,
     movements: Sequence[Mapping[str, Any]],
     start_grid: Sequence[Mapping[str, Any]],
-    links_by_key: Mapping[LinkKey, Any],
+    links_by_key: Mapping[Any, Any],
     expected_maps: Mapping[int, Mapping[str, Any]],
     sku_factors: Mapping[str, float],
     start_day: date,
@@ -307,7 +547,7 @@ def build_mapped_house_comparison(
         if str(sku).strip() and float(factor or 0.0) != 0.0
     }
 
-    per_house_quantity_cache: dict[LinkKey, float] = {}
+    per_house_quantity_cache: dict[tuple[int, int | None], float] = {}
     starts_by_day: dict[str, dict[str, float]] = defaultdict(
         lambda: {
             "house_starts": 0,
@@ -316,9 +556,9 @@ def build_mapped_house_comparison(
             "expected_quantity": 0.0,
         }
     )
-    expected_breakdown_by_day: dict[str, dict[LinkKey, dict[str, Any]]] = defaultdict(dict)
+    expected_breakdown_by_day: dict[str, dict[tuple[Any, ...], dict[str, Any]]] = defaultdict(dict)
     unmapped_by_key: dict[LinkKey, dict[str, Any]] = {}
-    partial_by_key: dict[LinkKey, dict[str, Any]] = {}
+    partial_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
     mapped_projects: dict[int, str] = {}
 
     for row in start_grid:
@@ -332,11 +572,16 @@ def build_mapped_house_comparison(
         bucket = starts_by_day[day_key]
         bucket["house_starts"] += count
 
-        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
-        actual_key: LinkKey = (house_type_id, sub_type_id)
+        work_order_raw = row.get("work_order_id")
+        link = (
+            links_by_key.get(int(work_order_raw))
+            if work_order_raw is not None
+            else resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
+        )
+        source_key: LinkKey = (house_type_id, sub_type_id)
         if link is None:
             summary = unmapped_by_key.setdefault(
-                actual_key,
+                source_key,
                 {
                     "house_type_id": house_type_id,
                     "house_type_name": str(row.get("house_type_name") or ""),
@@ -349,6 +594,14 @@ def build_mapped_house_comparison(
             )
             summary["house_starts"] += count
             continue
+
+        project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
+        project_subtype_id = (
+            link.get("project_subtype_id")
+            if isinstance(link, Mapping)
+            else link.project_subtype_id
+        )
+        actual_key = (house_type_id, sub_type_id, project_id, project_subtype_id)
 
         # A link with undefined quantities still describes part of the house:
         # sum what is defined and flag the gap instead of dropping the house.
@@ -368,16 +621,12 @@ def build_mapped_house_comparison(
             )
             partial["house_starts"] += count
 
-        resolved_key: LinkKey = (
-            link["production_house_type_id"] if isinstance(link, Mapping) else link.production_house_type_id,
-            link["production_sub_type_id"] if isinstance(link, Mapping) else link.production_sub_type_id,
-        )
+        resolved_key = (project_id, project_subtype_id)
         if resolved_key not in per_house_quantity_cache:
             per_house_quantity_cache[resolved_key] = study_quantity_for_link(
                 link, expected_maps, normalized_factors
             )
         expected_per_house = per_house_quantity_cache[resolved_key]
-        project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
         expected_map = expected_maps.get(project_id)
         project_name = ""
         if expected_map is not None:
@@ -401,9 +650,7 @@ def build_mapped_house_comparison(
                 "total_expected_material_quantity": 0.0,
                 "mapped_project_id": project_id,
                 "mapped_project_name": project_name,
-                "mapped_project_subtype_id": (
-                    link["project_subtype_id"] if isinstance(link, Mapping) else link.project_subtype_id
-                ),
+                "mapped_project_subtype_id": project_subtype_id,
                 "missing_quantity_count": missing_count,
             },
         )

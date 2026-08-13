@@ -19,7 +19,7 @@ import {
   stockRiskMetricsCacheKey,
 } from "../lib/materialDashboardCacheKeys";
 import type {
-  HouseTypeLink,
+  ProductionHouseLink,
   MaterialDashboardCeco,
   MaterialDashboardData,
   MaterialDashboardDetailData,
@@ -125,7 +125,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   // House type → project mapping (global, DB-stored). linksVersion bumps when
   // the mapping is edited so comparison/economics resources refetch.
-  const [links, setLinks] = useState<HouseTypeLink[]>([]);
+  const [links, setLinks] = useState<ProductionHouseLink[]>([]);
   const [linksLoaded, setLinksLoaded] = useState(false);
   const [linksVersion, setLinksVersion] = useState(0);
   const [linksModal, setLinksModal] = useState<{ open: boolean; tab: HouseLinksModalTab }>({ open: false, tab: "links" });
@@ -167,9 +167,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     let cancelled = false;
     async function loadLinks() {
       try {
-        const response = await api.getHouseTypeLinks();
+        const response = await api.getProductionHouseLinks();
         if (!cancelled) {
-          setLinks(response.links);
+          setLinks(response.houses.filter((house) => house.mapped));
           setLinksLoaded(true);
         }
       } catch {
@@ -418,7 +418,9 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const singleMappedProject = useMemo(() => {
     const distinct = new Map<number, string>();
     for (const link of links) {
-      distinct.set(link.project_id, link.project_name || `Proyecto ${link.project_id}`);
+      if (link.mapped_project_id !== null) {
+        distinct.set(link.mapped_project_id, link.mapped_project_name || `Proyecto ${link.mapped_project_id}`);
+      }
     }
     if (distinct.size !== 1) {
       return null;

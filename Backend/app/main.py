@@ -5,7 +5,7 @@ import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote, urlunsplit
@@ -90,6 +90,9 @@ from app.api_models import (
     MentionableUsersResponse,
     MutationResultModel,
     NotificationModel,
+    ProductionHouseLinksBulkUpdateRequest,
+    ProductionHouseLinksBulkUpdateResponse,
+    ProductionHouseLinksBundleResponse,
     ProductionHouseStartsResponse,
     ProjectDetailResponse,
     ProjectCopyRequest,
@@ -197,9 +200,15 @@ from app.services.dashboard import (
     get_recent_material_dashboard,
 )
 from app.services.house_type_links import (
+    bulk_assign_production_houses,
+    get_project_expected_quantity_maps,
+    load_production_house_links,
+    load_production_house_links_by_work_order,
     list_house_type_links,
     list_link_target_projects,
     replace_house_type_links,
+    serialize_production_house_link,
+    sync_production_house_links,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
 from app.services.material_units import (
@@ -221,6 +230,7 @@ from app.services.material_calculation_sheets import get_material_calculation_sh
 from app.services.production_dashboard import (
     get_material_dashboard_house_start_comparison,
     get_material_dashboard_house_types,
+    get_production_houses,
 )
 from app.services.exports import build_project_export_artifact, execute_project_export, get_project_export_job_for_artifact, get_project_export_jobs, request_project_export
 from app.services.media import (
@@ -3035,6 +3045,79 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "house_types": house_types,
             "projects": list_link_target_projects(session),
             "production_error": production_error,
+        }
+
+    @app.get("/api/v1/dashboard/production-house-links", response_model=ProductionHouseLinksBundleResponse)
+    def production_house_links_v1(
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_material_dashboard_access(current_user)
+        production_error: str | None = None
+        try:
+            production = get_production_houses(request.app.state.settings)
+            observed_ids = [int(house["work_order_id"]) for house in production["houses"]]
+            sync_production_house_links(session, production["houses"])
+            session.flush()
+            session.expire_all()
+            links_by_id = load_production_house_links_by_work_order(session, observed_ids)
+            links = [links_by_id[work_order_id] for work_order_id in observed_ids if work_order_id in links_by_id]
+            generated_at = production["generated_at"]
+        except RuntimeError as exc:
+            production_error = str(exc)
+            links = load_production_house_links(session)
+            generated_at = datetime.utcnow().isoformat()
+
+        expected_maps = get_project_expected_quantity_maps(
+            session,
+            {link.project_id for link in links if link.project_id is not None},
+        )
+        houses = [serialize_production_house_link(link, expected_maps) for link in links]
+        return {
+            "houses": houses,
+            "projects": list_link_target_projects(session),
+            "total_houses": len(houses),
+            "planned_houses": sum(1 for house in houses if house["lifecycle_status"] == "planned"),
+            "started_houses": sum(1 for house in houses if house["lifecycle_status"] == "started"),
+            "mapped_houses": sum(1 for house in houses if house["mapped"]),
+            "unmapped_houses": sum(1 for house in houses if not house["mapped"]),
+            "automatic_houses": sum(1 for house in houses if house["mapping_source"] == "automatic"),
+            "production_error": production_error,
+            "generated_at": generated_at,
+        }
+
+    @app.patch(
+        "/api/v1/dashboard/production-house-links",
+        response_model=ProductionHouseLinksBulkUpdateResponse,
+    )
+    def update_production_house_links_v1(
+        payload: ProductionHouseLinksBulkUpdateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        require_page_edit(current_user, "material_dashboard")
+        try:
+            updated = bulk_assign_production_houses(
+                session,
+                work_order_ids=payload.work_order_ids,
+                project_id=payload.project_id,
+                project_subtype_id=payload.project_subtype_id,
+                user=current_user,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        updated_ids = [link.production_work_order_id for link in updated]
+        session.flush()
+        session.expire_all()
+        refreshed_by_id = load_production_house_links_by_work_order(session, updated_ids)
+        refreshed = [refreshed_by_id[work_order_id] for work_order_id in updated_ids]
+        expected_maps = get_project_expected_quantity_maps(
+            session,
+            {link.project_id for link in refreshed if link.project_id is not None},
+        )
+        return {
+            "houses": [serialize_production_house_link(link, expected_maps) for link in refreshed],
         }
 
     @app.get("/api/v1/dashboard/house-starts", response_model=ProductionHouseStartsResponse)

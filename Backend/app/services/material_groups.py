@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 import hashlib
 import json
 from math import isfinite
@@ -22,17 +23,20 @@ from app.services.erp import (
     get_recent_movement_materials,
 )
 from app.services.house_type_links import (
-    build_links_by_key,
     build_mapped_house_comparison,
     expected_quantities_for_link,
+    ensure_production_house_links_initialized,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
     linked_projects_bom_fingerprint,
     link_missing_quantity_count,
-    load_house_type_links,
-    resolve_house_type_link,
+    load_production_house_links_by_work_order,
+    sync_production_house_links,
 )
-from app.services.production_dashboard import build_house_start_grid, get_production_house_starts
+from app.services.production_dashboard import (
+    build_individual_house_start_grid,
+    get_production_house_starts,
+)
 
 
 def build_material_study_group_subject_key(group_id: int) -> str:
@@ -475,10 +479,17 @@ def get_material_dashboard_group_economic_metrics(
             end_date=requested_end_day.isoformat(),
             history_days=movement_window_days,
         )
-        start_grid = build_house_start_grid(production["houses"])
-        links = load_house_type_links(session)
-        links_by_key = build_links_by_key(links)
-        expected_maps = get_project_expected_quantity_maps(session, {link.project_id for link in links})
+        ensure_production_house_links_initialized(session, settings)
+        sync_production_house_links(session, production["houses"])
+        start_grid = build_individual_house_start_grid(production["houses"])
+        links_by_key = load_production_house_links_by_work_order(
+            session,
+            [house["work_order_id"] for house in production["houses"]],
+        )
+        expected_maps = get_project_expected_quantity_maps(
+            session,
+            {link.project_id for link in links_by_key.values() if link.project_id is not None},
+        )
 
         all_skus = [
             member.sku.strip().upper()
@@ -728,16 +739,25 @@ def _expected_source_quantities_for_members(
         count = int(row.get("house_starts") or 0)
         if count <= 0:
             continue
-        house_type_id = int(row.get("house_type_id") or 0)
-        sub_type_raw = row.get("sub_type_id")
-        sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
-        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
+        if row.get("work_order_id") is not None:
+            link = links_by_key.get(int(row["work_order_id"]))
+        else:
+            subtype_raw = row.get("sub_type_id")
+            subtype_id = int(subtype_raw) if subtype_raw is not None else None
+            legacy = links_by_key.get((int(row.get("house_type_id") or 0), subtype_id))
+            if legacy is None:
+                legacy = links_by_key.get((int(row.get("house_type_id") or 0), None))
+            link = (
+                SimpleNamespace(
+                    project_id=int(legacy["project_id"]),
+                    project_subtype_id=legacy.get("project_subtype_id"),
+                )
+                if isinstance(legacy, Mapping)
+                else legacy
+            )
         if link is None:
             continue
-        link_key = (
-            link["production_house_type_id"] if isinstance(link, Mapping) else link.production_house_type_id,
-            link["production_sub_type_id"] if isinstance(link, Mapping) else link.production_sub_type_id,
-        )
+        link_key = (link.project_id, link.project_subtype_id)
         if link_key not in per_link_quantities:
             per_link_quantities[link_key] = expected_quantities_for_link(link, expected_maps)
         for sku, source_quantity_per_house in per_link_quantities[link_key].items():
@@ -789,27 +809,19 @@ def _group_normalized_price_delta(
 
 
 def _count_mapped_house_starts(start_grid: list[dict], links_by_key: dict, expected_maps: dict) -> int:
-    """Houses that resolve to a link, including links whose BOM is still
-    incomplete — those contribute the quantities defined so far."""
-    total = 0
-    for row in start_grid:
-        house_type_id = int(row.get("house_type_id") or 0)
-        sub_type_raw = row.get("sub_type_id")
-        sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
-        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
-        if link is not None:
-            total += int(row.get("house_starts") or 0)
-    return total
+    """Houses that resolve to an individual mapping, including incomplete BOMs."""
+    return sum(
+        int(row.get("house_starts") or 0)
+        for row in start_grid
+        if links_by_key.get(int(row["work_order_id"])) is not None
+    )
 
 
 def _count_partial_house_starts(start_grid: list[dict], links_by_key: dict, expected_maps: dict) -> int:
-    """Subset of the mapped houses whose link still has undefined quantities."""
+    """Subset of individually mapped houses whose BOM is incomplete."""
     total = 0
     for row in start_grid:
-        house_type_id = int(row.get("house_type_id") or 0)
-        sub_type_raw = row.get("sub_type_id")
-        sub_type_id = int(sub_type_raw) if sub_type_raw is not None else None
-        link = resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
+        link = links_by_key.get(int(row["work_order_id"]))
         if link is not None and link_missing_quantity_count(link, expected_maps) > 0:
             total += int(row.get("house_starts") or 0)
     return total

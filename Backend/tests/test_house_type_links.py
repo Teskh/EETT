@@ -108,6 +108,36 @@ class HouseStartGridTests(unittest.TestCase):
         )
 
 
+class IndividualHouseStartGridTests(unittest.TestCase):
+    def test_grid_preserves_work_order_identity_and_excludes_planned_houses(self) -> None:
+        from app.services.production_dashboard import build_individual_house_start_grid
+
+        grid = build_individual_house_start_grid(
+            [
+                {
+                    "work_order_id": 41,
+                    "start_date": "2026-08-01",
+                    "house_type_id": 1,
+                    "house_type_name": "T54",
+                    "sub_type_id": 5,
+                    "sub_type_name": "A",
+                },
+                {
+                    "work_order_id": 42,
+                    "start_date": None,
+                    "planned_start_date": "2026-08-10",
+                    "house_type_id": 1,
+                    "house_type_name": "T54",
+                    "sub_type_id": None,
+                    "sub_type_name": None,
+                },
+            ]
+        )
+        self.assertEqual(len(grid), 1)
+        self.assertEqual(grid[0]["work_order_id"], 41)
+        self.assertEqual(grid[0]["house_starts"], 1)
+
+
 class MappedComparisonTests(unittest.TestCase):
     def build(self, **overrides):
         params = {
