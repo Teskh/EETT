@@ -66,6 +66,8 @@ class GuestAuthTests(unittest.TestCase):
         self.assertEqual(board["grouped_projects"]["finished"], [])
 
         require_guest_request_access(user, method="GET", path="/api/v1/activity")
+        require_guest_request_access(user, method="GET", path="/api/v1/activity/projects")
+        require_guest_request_access(user, method="GET", path="/api/v1/projects/2/activity")
         require_guest_request_access(user, method="POST", path="/api/v1/projects/2/exports")
         require_guest_request_access(user, method="GET", path="/exports/12-execution-commercial.pdf")
         with self.assertRaises(HTTPException):

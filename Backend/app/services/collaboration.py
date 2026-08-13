@@ -206,6 +206,21 @@ def get_project_activity(session: Session, project_id: int) -> list[dict]:
     return _merge_activity_groups([_serialize_activity_group(group) for group in groups])
 
 
+def get_activity_projects(session: Session, user: User, *, execution_only: bool = False) -> list[dict]:
+    projects = session.scalars(select(Project).order_by(Project.name)).all()
+    return [
+        {
+            "id": project.id,
+            "name": project.name,
+            "status": project.status.value,
+            "status_label": PROJECT_STATUS_LABELS[project.status.value],
+        }
+        for project in projects
+        if can_view_project(user, project)
+        and (not execution_only or project.status == ProjectStatus.EXECUTION)
+    ]
+
+
 def get_activity_history(session: Session, user: User, *, execution_only: bool = False) -> list[dict]:
     groups = session.scalars(
         select(ProjectActivityGroup)

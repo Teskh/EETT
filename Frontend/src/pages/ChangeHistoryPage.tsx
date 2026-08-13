@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { 
   ArrowRight, 
   MagnifyingGlass, 
@@ -11,7 +11,7 @@ import {
 } from "@phosphor-icons/react";
 
 import { ApiError, api } from "../lib/api";
-import type { ActivityChange, ActivityEntry, ActivityGroup, SessionUser } from "../lib/types";
+import type { ActivityChange, ActivityEntry, ActivityGroup, ActivityProject, SessionUser } from "../lib/types";
 import { renderQuantityText } from "../components/QuantityLabels";
 
 function formatTimestamp(value: string) {
@@ -601,10 +601,26 @@ function ActivityGroupRow({ group, showProject }: { group: ActivityGroup; showPr
   );
 }
 
+function describeLoadError(error: unknown, fallback: string) {
+  if (error instanceof ApiError) {
+    const detail = error.message.trim();
+    return detail
+      ? `${fallback} (HTTP ${error.status}: ${detail})`
+      : `${fallback} (HTTP ${error.status}).`;
+  }
+  if (error instanceof SyntaxError) {
+    return `${fallback} La respuesta del servidor no tenía un formato válido.`;
+  }
+  return `${fallback} Revise su conexión e inténtelo nuevamente.`;
+}
+
 export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser }) {
   const isGuest = Boolean(currentUser.is_guest);
   const [groups, setGroups] = useState<ActivityGroup[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [projectOptions, setProjectOptions] = useState<ActivityProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
   const [search, setSearch] = useState("");
@@ -614,33 +630,53 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
     () => new Set(DEFAULT_CHANGE_TYPE_FILTERS),
   );
   const deferredSearch = useDeferredValue(search);
+  const historyRequestId = useRef(0);
 
-  async function loadHistory() {
+  async function loadProjects() {
+    setProjectsLoading(true);
+    setProjectsError(null);
+    try {
+      setProjectOptions(await api.getActivityProjects());
+    } catch (err) {
+      setProjectsError(describeLoadError(err, "No se pudo cargar la lista de proyectos."));
+    } finally {
+      setProjectsLoading(false);
+    }
+  }
+
+  async function loadHistory(selection: string) {
+    const requestId = ++historyRequestId.current;
+    if (!selection) {
+      setGroups([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
+    setGroups([]);
     try {
-      setGroups(await api.getActivityHistory());
+      const nextGroups = selection === "all"
+        ? await api.getActivityHistory()
+        : await api.getProjectActivity(Number(selection));
+      if (requestId === historyRequestId.current) {
+        setGroups(nextGroups);
+      }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "No se pudo cargar el historial de cambios.";
-      setError(message);
+      if (requestId === historyRequestId.current) {
+        setError(describeLoadError(err, "No se pudo cargar el historial de cambios."));
+      }
     } finally {
-      setLoading(false);
+      if (requestId === historyRequestId.current) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
-    void loadHistory();
+    void loadProjects();
   }, []);
-
-  const projectOptions = useMemo(() => {
-    const seen = new Map<number, { id: number; name: string }>();
-    for (const group of groups) {
-      if (!seen.has(group.project.id)) {
-        seen.set(group.project.id, { id: group.project.id, name: group.project.name });
-      }
-    }
-    return [...seen.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [groups]);
 
   const filteredGroups = useMemo(() => {
     if (!projectFilter) {
@@ -726,13 +762,18 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
                 <div className="relative w-full sm:w-48">
                   <select
                     value={projectFilter}
-                    onChange={(e) => setProjectFilter(e.target.value)}
+                    onChange={(e) => {
+                      const selection = e.target.value;
+                      setProjectFilter(selection);
+                      void loadHistory(selection);
+                    }}
                     className="appearance-none w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-white/10 rounded pl-7 pr-6 py-1.5 text-xs focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-500 cursor-pointer font-mono"
+                    disabled={projectsLoading}
                   >
-                    <option value="">SELECCIONAR PROYECTO</option>
+                    <option value="">{projectsLoading ? "CARGANDO PROYECTOS..." : "SELECCIONAR PROYECTO"}</option>
                     {!isGuest ? <option value="all">TODOS LOS PROYECTOS</option> : null}
                     {projectOptions.map(p => (
-                      <option key={p.id} value={p.id}>{p.name.toUpperCase()}</option>
+                      <option key={p.id} value={String(p.id)}>{p.name.toUpperCase()}</option>
                     ))}
                   </select>
                   <Stack className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 w-3.5 h-3.5 pointer-events-none" />
@@ -740,12 +781,12 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
                 </div>
 
                 <button 
-                  onClick={() => void loadHistory()}
-                  disabled={loading}
+                  onClick={() => void (projectFilter ? loadHistory(projectFilter) : loadProjects())}
+                  disabled={loading || projectsLoading}
                   className="flex-shrink-0 flex items-center justify-center w-8 h-8 rounded bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 disabled:opacity-50 transition-colors"
                   title="Actualizar"
                 >
-                  <ArrowClockwise weight="bold" className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+                  <ArrowClockwise weight="bold" className={`w-4 h-4 ${loading || projectsLoading ? "animate-spin" : ""}`} />
                 </button>
               </div>
             </div>
@@ -769,6 +810,13 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
           </div>
         </div>
 
+      {projectsError && (
+        <div className="flex items-center gap-2 bg-red-500 text-white px-4 py-2 text-xs font-mono">
+          <WarningCircle weight="fill" className="w-4 h-4" />
+          {projectsError}
+        </div>
+      )}
+
       {error && (
         <div className="flex items-center gap-2 bg-red-500 text-white px-4 py-2 text-xs font-mono">
           <WarningCircle weight="fill" className="w-4 h-4" />
@@ -778,7 +826,12 @@ export function ChangeHistoryPage({ currentUser }: { currentUser: SessionUser })
 
       {/* Feed List (Cockpit Mode Grid) */}
       <div className="relative">
-        {loading ? (
+        {projectsLoading ? (
+          <div className="px-4 py-8 text-xs font-mono text-zinc-500 flex items-center gap-2">
+             <ArrowClockwise className="w-4 h-4 animate-spin" />
+             CARGANDO PROYECTOS...
+          </div>
+        ) : loading ? (
           <div className="px-4 py-8 text-xs font-mono text-zinc-500 flex items-center gap-2">
              <ArrowClockwise className="w-4 h-4 animate-spin" />
              CARGANDO REGISTROS DE AUDITORÍA...

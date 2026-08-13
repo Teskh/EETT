@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api_models import (
+    ActivityGroupProjectModel,
     ActivityGroupModel,
     ApprovalModel,
     AttributeValueInputModel,
@@ -169,6 +170,7 @@ from app.services.collaboration import (
     add_project_comment,
     delete_project_comment,
     decide_project_approval,
+    get_activity_projects,
     get_comment_context,
     get_activity_history,
     get_comment_payload,
@@ -2393,6 +2395,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
         return get_activity_history(session, current_user, execution_only=is_guest_user(current_user))
+
+    @app.get("/api/v1/activity/projects", response_model=list[ActivityGroupProjectModel])
+    async def activity_projects_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        require_page_read(current_user, "history")
+        return get_activity_projects(session, current_user, execution_only=is_guest_user(current_user))
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
     async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

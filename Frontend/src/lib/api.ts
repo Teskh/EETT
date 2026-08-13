@@ -1,5 +1,6 @@
 import type {
   ActivityGroup,
+  ActivityProject,
   BackupCreateResponse,
   BackupRecord,
   BackupRestoreResponse,
@@ -579,6 +580,9 @@ export const api = {
   },
   getActivityHistory() {
     return request<ActivityGroup[]>("/api/v1/activity");
+  },
+  getActivityProjects() {
+    return request<ActivityProject[]>("/api/v1/activity/projects");
   },
   createProject(payload: CreateProjectRequest, mutationBatchId?: string) {
     return request<MutationResult>("/api/v1/projects", {

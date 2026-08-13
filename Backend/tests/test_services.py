@@ -1229,6 +1229,11 @@ class ServiceLayerTests(unittest.TestCase):
         guest_history = self.client.get("/api/v1/activity", headers=guest_headers)
         self.assertEqual(guest_history.status_code, 200)
         self.assertTrue(all(group["project"]["status"] == "execution" for group in guest_history.json()))
+        guest_history_projects = self.client.get("/api/v1/activity/projects", headers=guest_headers)
+        self.assertEqual(guest_history_projects.status_code, 200)
+        self.assertTrue(guest_history_projects.json())
+        self.assertTrue(all(project["status"] == "execution" for project in guest_history_projects.json()))
+        self.assertTrue(all(set(project) == {"id", "name", "status", "status_label"} for project in guest_history_projects.json()))
         guest_comment = self.client.post(
             "/api/v1/projects/2/comments",
             headers=guest_headers,

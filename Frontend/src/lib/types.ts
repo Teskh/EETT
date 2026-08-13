@@ -1174,15 +1174,17 @@ export type ActivityEntry = {
   is_minor: boolean;
 };
 
+export type ActivityProject = {
+  id: number;
+  name: string;
+  status: string;
+  status_label: string;
+};
+
 export type ActivityGroup = {
   id: number;
   title: string;
-  project: {
-    id: number;
-    name: string;
-    status: string;
-    status_label: string;
-  };
+  project: ActivityProject;
   created_at: string;
   updated_at: string;
   actor: string | null;
