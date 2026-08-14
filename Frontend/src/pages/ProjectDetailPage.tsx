@@ -1112,29 +1112,28 @@ function renderOccurrenceSummary(
   index: number,
   options?: {
     primaryLabel?: string;
+    showRelationshipType?: boolean;
   },
 ) {
   const primaryLabel = options?.primaryLabel || getOccurrencePrimaryLabel(occurrence);
 
   return (
-    <div key={`${occurrence.relationship_type}-${primaryLabel}-${index}`} className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-3">
-      <div className="mb-2">
-        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</div>
-        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 dark:text-zinc-500">{occurrence.relationship_type}</div>
-      </div>
-      {occurrence.attributes.length ? (
-        <div className="flex flex-wrap gap-1.5 mb-2">
-          {occurrence.attributes.map((attribute) => (
-            <span
-              key={`${primaryLabel}-${attribute.name}`}
-              className="px-2 py-0.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 text-[10px] font-mono text-zinc-700 dark:text-zinc-300"
-            >
-              {attribute.name}: {attribute.value || "-"}
-            </span>
-          ))}
-        </div>
+    <li
+      key={`${occurrence.relationship_type}-${primaryLabel}-${index}`}
+      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 text-xs"
+    >
+      <span className="font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</span>
+      {options?.showRelationshipType !== false ? (
+        <span className="text-[10px] uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500">
+          {translateRelationshipType(occurrence.relationship_type)}
+        </span>
       ) : null}
-    </div>
+      {occurrence.attributes.length ? (
+        <span className="font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
+          {occurrence.attributes.map((attribute) => `${attribute.name}: ${attribute.value || "-"}`).join(" · ")}
+        </span>
+      ) : null}
+    </li>
   );
 }
 
@@ -1174,6 +1173,14 @@ function getSyncStatusMeta(status: string) {
     default:
       return null;
   }
+}
+
+function translateRelationshipType(type: string) {
+  const translations: Record<string, string> = {
+    applied_to: "Aplicado a",
+    uses: "Usa",
+  };
+  return translations[(type || "").trim().toLowerCase()] || type;
 }
 
 function translateProjectDetailLabel(label: string | null | undefined) {
@@ -2600,6 +2607,7 @@ function CommentsOverlay({
 }
 
 function InstanceCard({
+  expandAll,
   instance,
   focused,
   readOnly,
@@ -2623,6 +2631,7 @@ function InstanceCard({
   onDeleteMaterial,
 }: {
   instance: ProjectInstance;
+  expandAll: boolean | null;
   focused: boolean;
   readOnly: boolean;
   subtypeOptions: FlatSubtype[];
@@ -2665,6 +2674,12 @@ function InstanceCard({
       setExpanded(true);
     }
   }, [focused]);
+
+  useEffect(() => {
+    if (expandAll !== null) {
+      setExpanded(expandAll);
+    }
+  }, [expandAll]);
 
   return (
     <div id={`instance-${instance.id}`} className="scroll-mt-24 border-b border-black/10 dark:border-white/10 last:border-0">
@@ -2815,28 +2830,29 @@ function InstanceCard({
                   onDeleteOccurrence={onDeleteOccurrence}
                 />
               ) : instance.outgoing_occurrences.length ? (
-                <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
-                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <div>
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                     <i className="ph-bold ph-flow-arrow text-zinc-600" /> Resumen de usos
                   </h6>
-                  <div className="space-y-3">
+                  <ul className="max-h-44 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
                     {instance.outgoing_occurrences.map((occurrence, index) => renderOccurrenceSummary(occurrence, index))}
-                  </div>
+                  </ul>
                 </div>
               ) : null}
 
               {instance.incoming_occurrences.length ? (
-                <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
-                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                <div>
+                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                     <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenciado aquí
                   </h6>
-                  <div className="space-y-3">
+                  <ul className="max-h-44 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
                     {instance.incoming_occurrences.map((occurrence, index) =>
                       renderOccurrenceSummary(occurrence, index, {
                         primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index, instance.incoming_occurrences),
+                        showRelationshipType: false,
                       }),
                     )}
-                  </div>
+                  </ul>
                 </div>
               ) : null}
 
@@ -2985,6 +3001,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [categorySearch, setCategorySearch] = useState("");
+  const [allItemsExpanded, setAllItemsExpanded] = useState<boolean | null>(null);
   const [focusedInstanceId, setFocusedInstanceId] = useState<number | null>(() => {
     const match = window.location.hash.match(/^#instance-(\d+)$/);
     return match ? Number(match[1]) : null;
@@ -3614,6 +3631,10 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
     setCategorySearch("");
     window.history.replaceState({}, "", `#instance-${instanceId}`);
   }
+  function toggleAllItems() {
+    setAllItemsExpanded((current) => current !== true);
+  }
+
 
   return (
     <div className="max-w-[1600px] mx-auto">
@@ -3673,6 +3694,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
                         key={instance.id}
                         instance={instance}
                         focused={focusedInstanceId === instance.id}
+                        expandAll={allItemsExpanded}
                         readOnly={readOnly}
                         subtypeOptions={flatSubtypeOptions}
                         targetOptions={targetOptions.filter(
@@ -3764,6 +3786,21 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         </div>
       </div>
 
+      {data.categories.some((category) => category.instances.length > 0) ? (
+        <div className="pointer-events-none fixed bottom-5 right-5 z-30 sm:bottom-6 sm:right-6">
+          <button
+            type="button"
+            onClick={toggleAllItems}
+            className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/90 px-4 py-2.5 text-xs font-semibold text-zinc-700 shadow-lg shadow-black/10 backdrop-blur-md transition-colors hover:border-accent-500/40 hover:bg-white hover:text-zinc-950 dark:border-white/10 dark:bg-zinc-900/90 dark:text-zinc-200 dark:shadow-black/30 dark:hover:bg-zinc-800 dark:hover:text-white"
+            aria-label={allItemsExpanded ? "Colapsar todos los ítems" : "Expandir todos los ítems"}
+            aria-pressed={allItemsExpanded === true}
+            title={allItemsExpanded ? "Colapsar todos los ítems" : "Expandir todos los ítems"}
+          >
+            <i className={`ph-bold ${allItemsExpanded ? "ph-arrows-in" : "ph-arrows-out"} text-sm`} aria-hidden="true" />
+            <span>{allItemsExpanded ? "Colapsar todo" : "Expandir todo"}</span>
+          </button>
+        </div>
+      ) : null}
       {!readOnly ? <CommentsOverlay
         open={commentOverlay !== null}
         instanceName={commentOverlay?.instanceName || ""}
