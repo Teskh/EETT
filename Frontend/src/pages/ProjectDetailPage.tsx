@@ -1760,6 +1760,19 @@ function MaterialOccurrenceEditor({
   const draftSignature = buildMaterialDraftSignature(draftMode, draftRows);
   const displayRows = buildDraftDisplayRows(draftMode, draftRows, material, subtypeOptions);
 
+  // Unidad / Fuente / Fórmula are almost always identical across rows of a
+  // material. When uniform, surface them once in a slim meta strip instead of
+  // repeating three columns on every row.
+  const firstRow = displayRows[0] || null;
+  const metaUniform =
+    firstRow !== null &&
+    displayRows.every(
+      (row) =>
+        (row.unit || "-") === (firstRow.unit || "-") &&
+        row.calculation_mode === firstRow.calculation_mode &&
+        (row.calculation_formula || "-") === (firstRow.calculation_formula || "-"),
+    );
+
   useEffect(() => {
     const nextRows = buildDraftRows(material.bom_entries);
     const serverSignature = buildMaterialDraftSignature(material.mode, nextRows);
@@ -1835,225 +1848,289 @@ function MaterialOccurrenceEditor({
     persistIfChanged(nextRows, nextMode);
   }
 
+  const isPerSubtype = draftMode === "per_subtype";
+  const rowTint =
+    material.source_status === "missing"
+      ? "bg-red-50/30 dark:bg-red-950/10"
+      : material.source_status === "manual"
+        ? "bg-sky-50/30 dark:bg-sky-950/10"
+        : "";
+
+  const statusBadge =
+    material.source_status === "manual" ? (
+      <span
+        title={material.source_label || "Material agregado manualmente"}
+        className="flex items-center gap-1 px-1.5 py-px rounded-full border border-sky-200 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-500/10 text-[9px] font-semibold tracking-wide text-sky-700 dark:text-sky-300"
+      >
+        <i className="ph-bold ph-hand-pointing" /> Manual
+      </span>
+    ) : material.source_status === "missing" ? (
+      <span
+        title={material.source_label || "Material faltante en el catálogo"}
+        className="flex items-center gap-1 px-1.5 py-px rounded-full border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-[9px] font-semibold tracking-wide text-red-700 dark:text-red-300"
+      >
+        <i className="ph-bold ph-warning" /> Faltante
+      </span>
+    ) : material.source_status !== "catalog" ? (
+      <span
+        title={material.source_label || undefined}
+        className="flex items-center gap-1 px-1.5 py-px rounded-full border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[9px] font-semibold tracking-wide text-amber-700 dark:text-amber-300"
+      >
+        {material.source_status}
+      </span>
+    ) : null;
+
+  function metaLine(row: BomEntry) {
+    return `${row.unit || "-"} · ${translateCalculationMode(row.calculation_mode)} · ${row.calculation_formula || "Sin fórmula"}`;
+  }
+
+  function renderQuantityCells(row: BomEntry, index: number) {
+    return (
+      <>
+        <td className="px-2 py-1 text-right font-mono">
+          <input
+            value={draftRows[index]?.quantity ?? ""}
+            type="number"
+            step="any"
+            placeholder={row.quantity === null && row.effective_quantity !== null ? String(row.effective_quantity) : undefined}
+            title={row.inherited_from_subtype ? `Valor efectivo heredado: ${row.effective_quantity ?? "en blanco"}` : undefined}
+            onChange={(event) =>
+              setDraftRows((current) =>
+                current.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, quantity: event.target.value } : item,
+                ),
+              )
+            }
+            onBlur={(event) => {
+              const nextRows = draftRows.map((item, itemIndex) =>
+                itemIndex === index ? { ...item, quantity: event.target.value } : item,
+              );
+              persistIfChanged(nextRows, draftMode);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            className="w-20 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-1.5 py-0.5 text-right text-xs"
+          />
+        </td>
+        <td className="px-2 py-1 text-right font-mono text-zinc-500">
+          <input
+            value={draftRows[index]?.assembly_quantity ?? ""}
+            type="number"
+            step="any"
+            placeholder={
+              row.assembly_quantity === null && row.effective_assembly_quantity !== null
+                ? String(row.effective_assembly_quantity)
+                : undefined
+            }
+            onChange={(event) =>
+              setDraftRows((current) =>
+                current.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
+                ),
+              )
+            }
+            onBlur={(event) => {
+              const nextRows = draftRows.map((item, itemIndex) =>
+                itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
+              );
+              persistIfChanged(nextRows, draftMode);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.currentTarget.blur();
+              }
+            }}
+            className="w-20 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-1.5 py-0.5 text-right text-xs"
+          />
+        </td>
+        <td className="px-2 py-1">
+          {row.subtype_id === null ? (
+            <span className="text-[11px] text-zinc-500">Base</span>
+          ) : (
+            <select
+              value={draftRows[index]?.inheritance_mode ?? "override"}
+              aria-label={`Comportamiento de ${row.subtype}`}
+              title="Reemplazar fija el total de este subtipo; Sumar agrega la cifra al valor heredado. Deja las cantidades en blanco para heredar sin cambios."
+              onChange={(event) => {
+                const inheritanceMode = event.target.value as "override" | "add";
+                const nextRows = draftRows.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, inheritance_mode: inheritanceMode } : item,
+                );
+                setDraftRows(nextRows);
+                persistIfChanged(nextRows, draftMode);
+              }}
+              className="rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-1.5 py-0.5 text-[11px]"
+            >
+              <option value="override">Reemplazar</option>
+              <option value="add">Sumar</option>
+            </select>
+          )}
+        </td>
+      </>
+    );
+  }
+
   return (
-    <div className={`shadow-sm border rounded-lg overflow-hidden ${
-      material.source_status === "missing"
-        ? "bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-900/30"
-        : material.source_status === "manual"
-          ? "bg-sky-50/30 dark:bg-sky-950/10 border-sky-200 dark:border-sky-900/30"
-          : "bg-white dark:bg-black/20 border-black/5 dark:border-white/5"
-    }`}>
-      <div className={`relative flex items-center justify-between gap-3 p-3 border-b ${
-        material.source_status === "missing"
-          ? "border-red-200 dark:border-red-900/30 bg-red-50/50 dark:bg-red-900/20"
-          : material.source_status === "manual"
-            ? "border-sky-200 dark:border-sky-900/30 bg-sky-50/50 dark:bg-sky-900/20"
-            : "border-black/5 dark:border-white/5 bg-white dark:bg-black/40"
-      }`}>
-        <div className="flex items-center gap-3 min-w-0">
-          <h5 className="font-bold text-sm text-zinc-900 dark:text-white flex items-center gap-2 min-w-0">
-            <span className="truncate">{material.material_name}</span>
-            <span className="px-2 py-0.5 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[10px] font-mono text-zinc-600 dark:text-zinc-400">
+    <tbody className="border-t border-black/10 dark:border-white/10 divide-y divide-black/5 dark:divide-white/5">
+      <tr className={`${rowTint} ${!isPerSubtype && firstRow ? quantityClass(firstRow.quantity) : ""} hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors`}>
+        <td className="px-2 py-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-semibold text-zinc-900 dark:text-zinc-100">{material.material_name}</span>
+            <span className="px-1 py-px bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-[9px] font-mono text-zinc-600 dark:text-zinc-400">
               {material.sku}
             </span>
-            {material.source_status === "manual" ? (
-              <span
-                title={material.source_label || "Material agregado manualmente"}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-sky-200 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-500/10 text-[10px] font-semibold tracking-wide text-sky-700 dark:text-sky-300"
-              >
-                <i className="ph-bold ph-hand-pointing" /> Manual
-              </span>
-            ) : material.source_status === "missing" ? (
-              <span
-                title={material.source_label || "Material faltante en el catálogo"}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-[10px] font-semibold tracking-wide text-red-700 dark:text-red-300"
-              >
-                <i className="ph-bold ph-warning" /> Faltante
-              </span>
-            ) : material.source_status !== "catalog" ? (
-              <span
-                title={material.source_label || undefined}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[10px] font-semibold tracking-wide text-amber-700 dark:text-amber-300"
-              >
-                {material.source_status}
-              </span>
-            ) : null}
-          </h5>
-          <label className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 shrink-0">
-            <span>Subtipos</span>
+            {statusBadge}
+            <span
+              aria-live="polite"
+              className={`text-[9px] font-mono text-zinc-500 transition-opacity ${saving ? "opacity-100" : "opacity-0"}`}
+            >
+              Guardando...
+            </span>
+          </div>
+          {metaUniform && firstRow ? (
+            <div
+              className="text-[9px] font-mono uppercase tracking-wide text-zinc-500 truncate"
+              title={`Unidad · Fuente · Fórmula — ${metaLine(firstRow)}`}
+            >
+              {metaLine(firstRow)}
+            </div>
+          ) : null}
+        </td>
+        <td
+          className="px-2 py-1 whitespace-nowrap font-mono text-accent-700 dark:text-accent-400"
+          title="Cantidad por unidad definida por la regla del catálogo"
+        >
+          {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
+        </td>
+        {!isPerSubtype && firstRow ? renderQuantityCells(firstRow, 0) : <td colSpan={3} />}
+        <td className="px-2 py-1">
+          <div className="flex items-center justify-end gap-1">
             <button
               type="button"
               role="switch"
-              aria-checked={draftMode === "per_subtype"}
-              disabled={subtypeOptions.length === 0 && draftMode !== "per_subtype"}
-              onClick={() => void handleToggle(draftMode !== "per_subtype")}
-              className={`relative h-6 w-11 rounded-full transition-all duration-200 ease-out ${
-                draftMode === "per_subtype"
+              aria-checked={isPerSubtype}
+              aria-label="Cantidades por subtipo"
+              title="Cantidades por subtipo"
+              disabled={subtypeOptions.length === 0 && !isPerSubtype}
+              onClick={() => void handleToggle(!isPerSubtype)}
+              className={`relative h-4 w-7 rounded-full transition-all duration-200 ease-out ${
+                isPerSubtype
                   ? "bg-accent-500 shadow-[inset_0_0_0_1px_rgba(249,115,22,0.85)]"
                   : "bg-zinc-300 dark:bg-zinc-600 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)] dark:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
               } disabled:opacity-50`}
             >
               <span
-                className="absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-transform duration-200 ease-out"
+                className="absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.25)] transition-transform duration-200 ease-out"
                 style={{
-                  transform: draftMode === "per_subtype" ? "translateX(20px)" : "translateX(0px)",
+                  transform: isPerSubtype ? "translateX(12px)" : "translateX(0px)",
                 }}
               />
             </button>
-          </label>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <button
-            type="button"
-            onClick={onOpenCalculationSheet}
-            disabled={material.rule_id === null}
-            aria-label={`Abrir planilla de cálculo para ${material.material_name}`}
-            title={material.rule_id === null ? "Las planillas de cálculo están disponibles para reglas de materiales del catálogo." : "Abrir planilla de cálculo"}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-zinc-800 dark:text-zinc-200 disabled:opacity-40"
-          >
-            <i className="ph-bold ph-table" />
-          </button>
-          {material.source_status !== "missing" ? (
             <button
               type="button"
-              onClick={() => void onDeleteMaterial(material.material_key)}
-              aria-label={`Quitar ${material.material_name}`}
-              title="Quitar material de esta instancia"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300"
+              onClick={onOpenCalculationSheet}
+              disabled={material.rule_id === null}
+              aria-label={`Abrir planilla de cálculo para ${material.material_name}`}
+              title={material.rule_id === null ? "Las planillas de cálculo están disponibles para reglas de materiales del catálogo." : "Abrir planilla de cálculo"}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 text-xs text-zinc-800 dark:text-zinc-200 disabled:opacity-40"
             >
-              <i className="ph-bold ph-trash" />
+              <i className="ph-bold ph-table" />
             </button>
-          ) : null}
-          <div className="text-right flex flex-col items-end">
-            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest"><FactoryQuantityLabel /> Regla</span>
-            <span className="text-xs font-mono text-accent-700 dark:text-accent-400">
-              {material.unit_qty_per_unit ?? "-"} {material.unit || "-"}
-            </span>
+            {material.source_status !== "missing" ? (
+              <button
+                type="button"
+                onClick={() => void onDeleteMaterial(material.material_key)}
+                aria-label={`Quitar ${material.material_name}`}
+                title="Quitar material de esta instancia"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-xs text-red-700 dark:text-red-300"
+              >
+                <i className="ph-bold ph-trash" />
+              </button>
+            ) : null}
           </div>
-        </div>
-        <div className="absolute right-3 bottom-1.5 min-w-14 text-right text-[10px] font-mono text-zinc-500 pointer-events-none">
-          <span className={saving ? "opacity-100" : "opacity-0"}>Guardando...</span>
-        </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse text-sm">
-          <thead className="bg-white dark:bg-black/40 border-b border-black/5 dark:border-white/5">
-            <tr>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/4">Subtipo</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><FactoryQuantityLabel /></th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest text-right w-1/6"><WorkQuantityLabel /></th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/6">Comportamiento</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Unidad</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest w-1/12">Fuente</th>
-              <th className="px-3 py-1.5 text-[10px] text-zinc-500 font-bold uppercase tracking-widest">Fórmula</th>
+        </td>
+      </tr>
+      {isPerSubtype
+        ? displayRows.map((row, index) => (
+            <tr
+              key={`${material.material_key}-${row.subtype_id ?? "general"}-${index}`}
+              className={`${quantityClass(row.quantity)} hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors`}
+            >
+              <td className="px-2 py-1">
+                <div style={{ paddingLeft: `${14 + row.subtype_depth * 14}px` }} className="font-medium text-zinc-800 dark:text-zinc-300">
+                  {row.subtype}
+                </div>
+                {row.inherited_from_subtype ? (
+                  <div style={{ paddingLeft: `${14 + row.subtype_depth * 14}px` }} className="text-[9px] text-zinc-500">
+                    Hereda de {row.inherited_from_subtype}
+                  </div>
+                ) : null}
+                {!metaUniform ? (
+                  <div
+                    className="text-[9px] font-mono uppercase tracking-wide text-zinc-500 truncate"
+                    title={`Unidad · Fuente · Fórmula — ${metaLine(row)}`}
+                  >
+                    {metaLine(row)}
+                  </div>
+                ) : null}
+              </td>
+              <td />
+              {renderQuantityCells(row, index)}
+              <td />
             </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {displayRows.map((row, index) => (
-              <tr key={`${material.material_key}-${row.subtype_id ?? "general"}-${index}`} className={`group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors ${quantityClass(row.quantity)}`}>
-                <td className="px-3 py-2 text-zinc-800 dark:text-zinc-300 font-medium text-sm w-1/4">
-                  <div style={{ paddingLeft: `${row.subtype_depth * 14}px` }}>{row.subtype}</div>
-                  {row.inherited_from_subtype ? (
-                    <div className="mt-0.5 text-[10px] font-normal text-zinc-500">
-                      Hereda de {row.inherited_from_subtype}
-                    </div>
-                  ) : null}
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-sm w-1/6">
-                  <input
-                    value={draftRows[index]?.quantity ?? ""}
-                    type="number"
-                    step="any"
-                    placeholder={row.quantity === null && row.effective_quantity !== null ? String(row.effective_quantity) : undefined}
-                    title={row.inherited_from_subtype ? `Valor efectivo heredado: ${row.effective_quantity ?? "en blanco"}` : undefined}
-                    onChange={(event) =>
-                      setDraftRows((current) =>
-                        current.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, quantity: event.target.value } : item,
-                        ),
-                      )
-                    }
-                    onBlur={(event) => {
-                      const nextRows = draftRows.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, quantity: event.target.value } : item,
-                      );
-                      persistIfChanged(nextRows, draftMode);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        event.currentTarget.blur();
-                      }
-                    }}
-                    className="w-24 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-right"
-                  />
-                </td>
-                <td className="px-3 py-2 text-right font-mono text-sm text-zinc-500 w-1/6">
-                  <input
-                    value={draftRows[index]?.assembly_quantity ?? ""}
-                    type="number"
-                    step="any"
-                    placeholder={
-                      row.assembly_quantity === null && row.effective_assembly_quantity !== null
-                        ? String(row.effective_assembly_quantity)
-                        : undefined
-                    }
-                    onChange={(event) =>
-                      setDraftRows((current) =>
-                        current.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
-                        ),
-                      )
-                    }
-                    onBlur={(event) => {
-                      const nextRows = draftRows.map((item, itemIndex) =>
-                        itemIndex === index ? { ...item, assembly_quantity: event.target.value } : item,
-                      );
-                      persistIfChanged(nextRows, draftMode);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        event.currentTarget.blur();
-                      }
-                    }}
-                    className="w-24 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-right"
-                  />
-                </td>
-                <td className="px-3 py-2 w-1/6">
-                  {row.subtype_id === null ? (
-                    <span className="text-xs text-zinc-500">Base</span>
-                  ) : (
-                    <select
-                      value={draftRows[index]?.inheritance_mode ?? "override"}
-                      aria-label={`Comportamiento de ${row.subtype}`}
-                      title="Reemplazar fija el total de este subtipo; Sumar agrega la cifra al valor heredado. Deja las cantidades en blanco para heredar sin cambios."
-                      onChange={(event) => {
-                        const inheritanceMode = event.target.value as "override" | "add";
-                        const nextRows = draftRows.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, inheritance_mode: inheritanceMode } : item,
-                        );
-                        setDraftRows(nextRows);
-                        persistIfChanged(nextRows, draftMode);
-                      }}
-                      className="rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1 text-xs"
-                    >
-                      <option value="override">Reemplazar</option>
-                      <option value="add">Sumar</option>
-                    </select>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-zinc-600 dark:text-zinc-400 font-mono text-xs w-1/12">{row.unit || "-"}</td>
-                <td className="px-3 py-2 text-zinc-500 font-mono text-[10px] uppercase w-1/12">{translateCalculationMode(row.calculation_mode)}</td>
-                <td className="px-3 py-2 text-zinc-500 font-mono text-xs truncate max-w-[100px]" title={row.calculation_formula || "-"}>
-                  {row.calculation_formula || "-"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {error ? <div className="px-3 pb-3 text-xs text-red-700 dark:text-red-300">{error}</div> : null}
+          ))
+        : null}
+      {error ? (
+        <tr>
+          <td colSpan={6} className="px-2 py-1 text-[11px] text-red-700 dark:text-red-300">{error}</td>
+        </tr>
+      ) : null}
+    </tbody>
+  );
+}
+
+function InstanceMaterialsTable({
+  materials,
+  subtypeOptions,
+  onOpenCalculationSheet,
+  onUpdateMaterial,
+  onDeleteMaterial,
+}: {
+  materials: InstanceMaterial[];
+  subtypeOptions: FlatSubtype[];
+  onOpenCalculationSheet: (material: InstanceMaterial) => void;
+  onUpdateMaterial: (materialKey: string, payload: { mode: string; entries: Array<{ subtype_id: number | null; quantity: number | null; assembly_quantity: number | null; inheritance_mode: "override" | "add" }> }) => Promise<void>;
+  onDeleteMaterial: (materialKey: string) => Promise<void>;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-md border border-black/5 dark:border-white/5 bg-white dark:bg-black/20 shadow-sm">
+      <table className="w-full text-left border-collapse text-xs">
+        <thead className="bg-zinc-50 dark:bg-black/40 border-b border-black/10 dark:border-white/10">
+          <tr>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Material / Subtipo</th>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest w-28"><FactoryQuantityLabel /> regla</th>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest text-right w-24"><FactoryQuantityLabel /></th>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest text-right w-24"><WorkQuantityLabel /></th>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest w-32">Comportamiento</th>
+            <th className="px-2 py-1 text-[9px] text-zinc-500 font-bold uppercase tracking-widest text-right w-28">Acciones</th>
+          </tr>
+        </thead>
+        {materials.map((material) => (
+          <MaterialOccurrenceEditor
+            key={material.material_key}
+            material={material}
+            subtypeOptions={subtypeOptions}
+            onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
+            onUpdateMaterial={onUpdateMaterial}
+            onDeleteMaterial={onDeleteMaterial}
+          />
+        ))}
+      </table>
     </div>
   );
 }
@@ -2124,17 +2201,17 @@ function ManualMaterialPicker({
   }
 
   return (
-    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-2">
+    <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-2 space-y-2">
       <div className="flex items-center gap-2">
         <i className="ph-bold ph-plus-circle text-zinc-500" />
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Agregar material por SKU o nombre"
-          className="flex-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-black/30 px-2 py-1.5 text-sm"
+          className="flex-1 rounded border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-black/30 px-2 py-1 text-xs"
         />
       </div>
-      {loading ? <div className="text-xs text-zinc-500">Buscando...</div> : null}
+      {loading ? <div className="text-[11px] text-zinc-500">Buscando...</div> : null}
       {results.length ? (
         <div className="divide-y divide-black/5 dark:divide-white/5 rounded border border-black/5 dark:border-white/5 overflow-hidden">
           {results.map((result) => {
@@ -2145,13 +2222,13 @@ function ManualMaterialPicker({
                 type="button"
                 disabled={!result.material_id || alreadyAdded || addingId === result.material_id}
                 onClick={() => void handleAdd(result)}
-                className="w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-50"
+                className="w-full flex items-center justify-between gap-3 px-2.5 py-1.5 text-left text-xs bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 disabled:opacity-50"
               >
                 <span className="min-w-0">
                   <span className="block font-semibold text-zinc-900 dark:text-zinc-100 truncate">{result.name}</span>
-                  <span className="block text-[11px] font-mono text-zinc-500">{result.sku}</span>
+                  <span className="block text-[10px] font-mono text-zinc-500">{result.sku}</span>
                 </span>
-                <span className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+                <span className="text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
                   {alreadyAdded ? "Agregado" : addingId === result.material_id ? "Agregando..." : "Agregar"}
                 </span>
               </button>
@@ -2159,7 +2236,7 @@ function ManualMaterialPicker({
           })}
         </div>
       ) : null}
-      {error ? <div className="text-xs text-red-700 dark:text-red-300">{error}</div> : null}
+      {error ? <div className="text-[11px] text-red-700 dark:text-red-300">{error}</div> : null}
     </div>
   );
 }
@@ -2847,11 +2924,11 @@ function InstanceCard({
             </div>
           </div>
 
-          {!readOnly ? <div className="border-t border-black/10 dark:border-white/10 pt-6">
+          {!readOnly ? <div className="border-t border-black/10 dark:border-white/10 pt-4">
             <button
               type="button"
               onClick={() => setMaterialsExpanded((current) => !current)}
-              className="w-full flex items-center justify-between text-left mb-4"
+              className="w-full flex items-center justify-between text-left mb-3"
             >
               <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                 <i className="ph-bold ph-boxes text-zinc-600" /> Materiales aplicables
@@ -2859,43 +2936,33 @@ function InstanceCard({
               <i className={`ph-bold ${materialsExpanded ? "ph-caret-up" : "ph-caret-down"} text-zinc-600 dark:text-zinc-300`} />
             </button>
             {materialsExpanded ? (
-              <div className="space-y-4">
+              <div className="space-y-2">
                 <ManualMaterialPicker
                   existingMaterialIds={instance.materials.map((material) => material.material_id)}
                   onAddMaterial={onAddManualMaterial}
                 />
                 {instance.materials.filter(m => m.source_status === "catalog").length ? (
-                  <div className="space-y-4">
-                    {instance.materials.filter(m => m.source_status === "catalog").map((material) => (
-                      <MaterialOccurrenceEditor
-                        key={`${instance.id}-${material.material_key}`}
-                        material={material}
-                        subtypeOptions={subtypeOptions}
-                        onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
-                        onUpdateMaterial={onUpdateMaterial}
-                        onDeleteMaterial={onDeleteMaterial}
-                      />
-                    ))}
-                  </div>
+                  <InstanceMaterialsTable
+                    materials={instance.materials.filter(m => m.source_status === "catalog")}
+                    subtypeOptions={subtypeOptions}
+                    onOpenCalculationSheet={onOpenCalculationSheet}
+                    onUpdateMaterial={onUpdateMaterial}
+                    onDeleteMaterial={onDeleteMaterial}
+                  />
                 ) : null}
 
                 {instance.materials.filter(m => m.source_status !== "catalog").length ? (
-                  <div className="mt-6 pt-4 border-t border-dashed border-black/10 dark:border-white/10">
-                    <h6 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+                  <div className="mt-4 pt-3 border-t border-dashed border-black/10 dark:border-white/10">
+                    <h6 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                       <i className="ph-bold ph-warning-circle text-zinc-400" /> Excepciones (Manual / Faltante)
                     </h6>
-                    <div className="space-y-4">
-                      {instance.materials.filter(m => m.source_status !== "catalog").map((material) => (
-                        <MaterialOccurrenceEditor
-                          key={`${instance.id}-${material.material_key}`}
-                          material={material}
-                          subtypeOptions={subtypeOptions}
-                          onOpenCalculationSheet={() => onOpenCalculationSheet(material)}
-                          onUpdateMaterial={onUpdateMaterial}
-                          onDeleteMaterial={onDeleteMaterial}
-                        />
-                      ))}
-                    </div>
+                    <InstanceMaterialsTable
+                      materials={instance.materials.filter(m => m.source_status !== "catalog")}
+                      subtypeOptions={subtypeOptions}
+                      onOpenCalculationSheet={onOpenCalculationSheet}
+                      onUpdateMaterial={onUpdateMaterial}
+                      onDeleteMaterial={onDeleteMaterial}
+                    />
                   </div>
                 ) : null}
 
