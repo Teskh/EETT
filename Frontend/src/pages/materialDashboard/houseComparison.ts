@@ -29,7 +29,10 @@ function roundTo4(value: number) {
 }
 
 function getExpectedBreakdownKey(row: MaterialDashboardExpectedBreakdown) {
-  return `${row.house_type_id}:${row.sub_type_id ?? "general"}`;
+  if (row.mapped_project_id !== undefined && row.mapped_project_id !== null) {
+    return `app:${row.mapped_project_id}:${row.mapped_project_subtype_id ?? "general"}`;
+  }
+  return `production:${row.house_type_id}:${row.sub_type_id ?? "general"}`;
 }
 
 function aggregateExpectedBreakdown(points: MaterialDashboardMappedHouseComparisonPoint[]) {
@@ -39,8 +42,48 @@ function aggregateExpectedBreakdown(points: MaterialDashboardMappedHouseComparis
       const key = getExpectedBreakdownKey(row);
       const existing = byKey.get(key);
       if (existing) {
+        const previousStarts = existing.house_starts;
+        const nextStarts = previousStarts + row.house_starts;
         existing.house_starts += row.house_starts;
         existing.total_expected_material_quantity = roundTo4(existing.total_expected_material_quantity + row.total_expected_material_quantity);
+        existing.expected_quantity_per_house = nextStarts > 0
+          ? roundTo4(existing.total_expected_material_quantity / nextStarts)
+          : 0;
+        existing.missing_quantity_count = Math.max(existing.missing_quantity_count || 0, row.missing_quantity_count || 0);
+
+        const existingInstances = new Map(
+          (existing.instance_breakdown || []).map((instance) => [instance.instance_id, instance]),
+        );
+        const nextInstances = new Map(
+          (row.instance_breakdown || []).map((instance) => [instance.instance_id, instance]),
+        );
+        const instanceIds = new Set([...existingInstances.keys(), ...nextInstances.keys()]);
+        existing.instance_breakdown = Array.from(instanceIds)
+          .map((instanceId) => {
+            const previous = existingInstances.get(instanceId);
+            const next = nextInstances.get(instanceId);
+            if (!previous && next) {
+              return {
+                ...next,
+                quantity: roundTo4((next.quantity * row.house_starts) / nextStarts),
+              };
+            }
+            if (previous && !next) {
+              return {
+                ...previous,
+                quantity: roundTo4((previous.quantity * previousStarts) / nextStarts),
+              };
+            }
+            if (previous && next) {
+              return {
+                ...previous,
+                quantity: roundTo4((previous.quantity * previousStarts + next.quantity * row.house_starts) / nextStarts),
+              };
+            }
+            return null;
+          })
+          .filter((instance): instance is NonNullable<typeof instance> => instance !== null)
+          .sort((a, b) => a.instance_name.localeCompare(b.instance_name));
         return;
       }
       byKey.set(key, { ...row });
@@ -50,8 +93,8 @@ function aggregateExpectedBreakdown(points: MaterialDashboardMappedHouseComparis
   return Array.from(byKey.values()).sort(
     (a, b) =>
       b.house_starts - a.house_starts ||
-      a.house_type_name.localeCompare(b.house_type_name) ||
-      (a.sub_type_name || "").localeCompare(b.sub_type_name || ""),
+      (a.mapped_project_name || a.house_type_name).localeCompare(b.mapped_project_name || b.house_type_name) ||
+      (a.mapped_project_subtype_name || a.sub_type_name || "").localeCompare(b.mapped_project_subtype_name || b.sub_type_name || ""),
   );
 }
 
@@ -154,11 +197,12 @@ export function buildHouseComparisonChart(
   const stockRange = Math.max(maxStock - minStock, 1);
   const maxRemainingHouseStarts = Math.max(...chartPoints.map((point) => point.remainingHouseStarts), 1);
   const toStockY = (value: number) => padding.top + plotHeight - ((value - minStock) / stockRange) * plotHeight;
+  const clampPlotY = (value: number) => Math.min(padding.top + plotHeight, Math.max(padding.top, value));
   const positionedPoints: HouseTrendChartPoint[] = chartPoints.map((point) => ({
     ...point,
-    stockY: point.stockValue !== null ? toStockY(point.stockValue) : null,
-    projectedStockY: point.projectedStockValue !== null ? toStockY(point.projectedStockValue) : null,
-    houseY: padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight,
+    stockY: point.stockValue !== null ? clampPlotY(toStockY(point.stockValue)) : null,
+    projectedStockY: point.projectedStockValue !== null ? clampPlotY(toStockY(point.projectedStockValue)) : null,
+    houseY: clampPlotY(padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight),
   }));
 
   return {

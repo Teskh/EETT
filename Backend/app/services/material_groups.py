@@ -25,13 +25,12 @@ from app.services.erp import (
 from app.services.house_type_links import (
     build_mapped_house_comparison,
     expected_quantities_for_link,
-    ensure_production_house_links_initialized,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
     linked_projects_bom_fingerprint,
     link_missing_quantity_count,
     load_production_house_links_by_work_order,
-    sync_production_house_links,
+    refresh_production_house_links,
 )
 from app.services.production_dashboard import (
     build_individual_house_start_grid,
@@ -479,8 +478,7 @@ def get_material_dashboard_group_economic_metrics(
             end_date=requested_end_day.isoformat(),
             history_days=movement_window_days,
         )
-        ensure_production_house_links_initialized(session, settings)
-        sync_production_house_links(session, production["houses"])
+        refresh_production_house_links(session, settings, production["houses"])
         start_grid = build_individual_house_start_grid(production["houses"])
         links_by_key = load_production_house_links_by_work_order(
             session,

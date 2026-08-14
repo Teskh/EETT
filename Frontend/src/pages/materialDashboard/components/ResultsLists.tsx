@@ -1,7 +1,6 @@
-import { memo } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import type {
-  MaterialDashboardCeco,
   MaterialDashboardEconomicMetric,
   MaterialDashboardListRow,
   MaterialDashboardStockRiskMetric,
@@ -16,6 +15,12 @@ import {
   formatUnsignedPercent,
   isFiniteNumber,
 } from "../formatters";
+import {
+  collectExpandableCecoCodes,
+  getCecoSelectionState,
+  type CecoSelectionState,
+  type CecoTreeNode,
+} from "../cecoTree";
 import type { CecoFilterMode } from "../preferences";
 
 function ActiveRowMarker() {
@@ -291,73 +296,181 @@ export const GroupResultsList = memo(function GroupResultsList({
   );
 });
 
-export const CecoResultsList = memo(function CecoResultsList({
-  rows,
-  hasMore,
-  selectedCecoSet,
+function CecoSelectionCheckbox({ state, onChange }: { state: CecoSelectionState; onChange: () => void }) {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = state === "mixed";
+    }
+  }, [state]);
+
+  return (
+    <input
+      ref={checkboxRef}
+      type="checkbox"
+      checked={state === "checked"}
+      aria-checked={state === "mixed" ? "mixed" : state === "checked"}
+      onChange={onChange}
+      className="mt-1 flex-shrink-0"
+    />
+  );
+}
+
+const CecoTreeRow = memo(function CecoTreeRow({
+  node,
+  depth,
+  selectedLeafSet,
   cecoFilterMode,
+  expandedCodes,
+  onToggleExpanded,
   onToggle,
 }: {
-  rows: MaterialDashboardCeco[];
-  hasMore: boolean;
-  selectedCecoSet: Set<string>;
+  node: CecoTreeNode;
+  depth: number;
+  selectedLeafSet: ReadonlySet<string>;
   cecoFilterMode: CecoFilterMode;
-  onToggle: (code: string) => void;
+  expandedCodes: ReadonlySet<string>;
+  onToggleExpanded: (code: string) => void;
+  onToggle: (node: CecoTreeNode) => void;
 }) {
-  if (!rows.length) {
-    return <div className="py-6 text-sm text-zinc-500 text-center">No hay centros de costo coincidentes.</div>;
+  const selectionState = getCecoSelectionState(node, selectedLeafSet);
+  const hasSelection = selectionState !== "unchecked";
+  const excludeMode = cecoFilterMode === "exclude";
+  const expanded = expandedCodes.has(node.code);
+  const hasChildren = node.children.length > 0;
+  const scopeLabel = node.level === 1 ? "CECO" : node.level === 2 ? "Sub-CECO" : "Operativo";
+  const leafSummary = node.level < 3 ? ` · ${node.leafCodes.length} operativos` : "";
+  const statusSummary = node.active === false ? " · Inactivo" : "";
+
+  return (
+    <>
+      <div
+        className={`flex items-start gap-1.5 px-2 py-1 transition-colors ${
+          hasSelection
+            ? excludeMode
+              ? "bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20"
+              : "bg-accent-50 dark:bg-accent-500/10 hover:bg-accent-100 dark:hover:bg-accent-500/20"
+            : "hover:bg-zinc-100 dark:hover:bg-white/5"
+        }`}
+        style={{ paddingLeft: `${depth * 18 + 8}px` }}
+      >
+        <button
+          type="button"
+          disabled={!hasChildren}
+          onClick={() => onToggleExpanded(node.code)}
+          aria-label={hasChildren ? (expanded ? `Colapsar ${node.name || node.code}` : `Expandir ${node.name || node.code}`) : undefined}
+          className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center text-zinc-400 transition-colors enabled:hover:text-zinc-700 dark:enabled:hover:text-zinc-200 disabled:opacity-0"
+        >
+          {hasChildren ? (
+            <svg className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M7 4.5a1 1 0 0 1 1.6-.8l5.1 4a1 1 0 0 1 0 1.6l-5.1 4A1 1 0 0 1 7 12.5v-8Z" />
+            </svg>
+          ) : null}
+        </button>
+        <CecoSelectionCheckbox state={selectionState} onChange={() => onToggle(node)} />
+        <button type="button" onClick={() => onToggle(node)} className="min-w-0 flex-1 text-left">
+          <span
+            className={`block truncate text-[13px] font-medium leading-4 ${
+              hasSelection
+                ? excludeMode
+                  ? "text-rose-900 dark:text-rose-100"
+                  : "text-accent-900 dark:text-accent-100"
+                : "text-zinc-900 dark:text-white"
+            }`}
+          >
+            {node.name || node.code}
+          </span>
+          <span
+            className={`block truncate text-[9px] uppercase tracking-wider ${
+              hasSelection
+                ? excludeMode
+                  ? "text-rose-700 dark:text-rose-300"
+                  : "text-accent-700 dark:text-accent-300"
+                : "text-zinc-500"
+            }`}
+          >
+            {node.code} · {scopeLabel}{leafSummary}{statusSummary}
+          </span>
+        </button>
+      </div>
+      {expanded
+        ? node.children.map((child) => (
+            <CecoTreeRow
+              key={child.code}
+              node={child}
+              depth={depth + 1}
+              selectedLeafSet={selectedLeafSet}
+              cecoFilterMode={cecoFilterMode}
+              expandedCodes={expandedCodes}
+              onToggleExpanded={onToggleExpanded}
+              onToggle={onToggle}
+            />
+          ))
+        : null}
+    </>
+  );
+});
+
+export const CecoResultsList = memo(function CecoResultsList({
+  nodes,
+  selectedLeafSet,
+  cecoFilterMode,
+  onToggle,
+  searchActive,
+}: {
+  nodes: CecoTreeNode[];
+  selectedLeafSet: ReadonlySet<string>;
+  cecoFilterMode: CecoFilterMode;
+  onToggle: (node: CecoTreeNode) => void;
+  searchActive: boolean;
+}) {
+  const [expandedCodes, setExpandedCodes] = useState<Set<string>>(
+    () => new Set(nodes.filter((node) => node.children.length > 0).map((node) => node.code)),
+  );
+
+  useEffect(() => {
+    const expandableCodes = new Set(collectExpandableCecoCodes(nodes));
+    setExpandedCodes((current) => {
+      const next = new Set([...current].filter((code) => expandableCodes.has(code)));
+      if (searchActive) {
+        expandableCodes.forEach((code) => next.add(code));
+      } else if (!next.size) {
+        nodes.filter((node) => node.children.length > 0).forEach((node) => next.add(node.code));
+      }
+      const unchanged = next.size === current.size && [...next].every((code) => current.has(code));
+      return unchanged ? current : next;
+    });
+  }, [nodes, searchActive]);
+
+  if (!nodes.length) {
+    return <div className="py-6 text-center text-sm text-zinc-500">No hay centros de costo coincidentes.</div>;
   }
 
   return (
     <div className="space-y-1">
-      {rows.map((ceco) => {
-        const isSelected = selectedCecoSet.has(ceco.code);
-        const excludeMode = cecoFilterMode === "exclude";
-        return (
-          <label
-            key={ceco.code}
-            className={`flex cursor-pointer items-start gap-3 p-2.5 transition-colors ${
-              isSelected
-                ? excludeMode
-                  ? "bg-rose-50 dark:bg-rose-500/10 hover:bg-rose-100 dark:hover:bg-rose-500/20"
-                  : "bg-accent-50 dark:bg-accent-500/10 hover:bg-accent-100 dark:hover:bg-accent-500/20"
-                : "hover:bg-zinc-100 dark:hover:bg-white/5"
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => onToggle(ceco.code)}
-              className="mt-1 flex-shrink-0"
-            />
-            <span className="min-w-0 flex-1">
-              <span
-                className={`block text-sm font-medium truncate ${
-                  isSelected
-                    ? excludeMode
-                      ? "text-rose-900 dark:text-rose-100"
-                      : "text-accent-900 dark:text-accent-100"
-                    : "text-zinc-900 dark:text-white"
-                }`}
-              >
-                {ceco.name || ceco.code}
-              </span>
-              <span
-                className={`block text-[10px] uppercase tracking-wider ${
-                  isSelected
-                    ? excludeMode
-                      ? "text-rose-700 dark:text-rose-300"
-                      : "text-accent-700 dark:text-accent-300"
-                    : "text-zinc-500"
-                }`}
-              >
-                {ceco.code}
-              </span>
-            </span>
-          </label>
-        );
-      })}
-      {hasMore ? <div className="px-2 py-3 text-[11px] font-medium text-zinc-400">Desplázate para cargar más CECOs...</div> : null}
+      {nodes.map((node) => (
+        <CecoTreeRow
+          key={node.code}
+          node={node}
+          depth={0}
+          selectedLeafSet={selectedLeafSet}
+          cecoFilterMode={cecoFilterMode}
+          expandedCodes={expandedCodes}
+          onToggleExpanded={(code) =>
+            setExpandedCodes((current) => {
+              const next = new Set(current);
+              if (next.has(code)) {
+                next.delete(code);
+              } else {
+                next.add(code);
+              }
+              return next;
+            })
+          }
+          onToggle={onToggle}
+        />
+      ))}
     </div>
   );
 });

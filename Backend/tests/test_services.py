@@ -57,7 +57,9 @@ from app.services.microsoft_auth import MicrosoftUserProfile
 from app.services.dashboard import get_material_dashboard_economic_metrics, get_material_dashboard_history, get_recent_material_dashboard
 from app.services.dashboard import _add_business_days, _build_material_dashboard_detail, _count_business_days
 from app.services.erp import (
+    _build_cost_center_clause,
     _calculate_delivery_time_stats,
+    _cost_center_parent_code,
     _get_last_purchase_orders_for_products_batch,
     _get_lead_time_samples_for_product,
     _get_purchase_order_summaries_for_products_batch,
@@ -87,6 +89,35 @@ from app.services.projects import (
     refresh_instance_snapshot,
 )
 from app.ui import render_catalog_page, render_project_detail_page, render_projects_page
+
+
+class CecoHierarchyFilterTests(unittest.TestCase):
+    def test_parent_code_derivation_matches_erp_segments(self) -> None:
+        self.assertIsNone(_cost_center_parent_code("01-00-00", 1))
+        self.assertEqual(_cost_center_parent_code("01-01-00", 2), "01-00-00")
+        self.assertEqual(_cost_center_parent_code("01-01-01", 3), "01-01-00")
+
+    def test_include_clause_expands_parent_and_keeps_leaf_exact(self) -> None:
+        clause, params = _build_cost_center_clause(
+            "RTRIM(LTRIM(h.CodiCC))",
+            cost_centers=["01-00-00", "01-01-00", "01-01-01"],
+            excluded_cost_centers=[],
+        )
+
+        self.assertIn("RTRIM(LTRIM(h.CodiCC)) IN (?)", clause)
+        self.assertIn("LEFT(RTRIM(LTRIM(h.CodiCC)), 2) = ?", clause)
+        self.assertIn("LEFT(RTRIM(LTRIM(h.CodiCC)), 5) = ?", clause)
+        self.assertEqual(params, ["01-01-01", "01", "01-01"])
+
+    def test_exclude_clause_negates_parent_scope(self) -> None:
+        clause, params = _build_cost_center_clause(
+            "RTRIM(LTRIM(h.CodiCC))",
+            cost_centers=[],
+            excluded_cost_centers=["01-00-00"],
+        )
+
+        self.assertIn("AND NOT (LEFT(RTRIM(LTRIM(h.CodiCC)), 2) = ?)", clause)
+        self.assertEqual(params, ["01"])
 
 
 class ExportProjectionTests(unittest.TestCase):

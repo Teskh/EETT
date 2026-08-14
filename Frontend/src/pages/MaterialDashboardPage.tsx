@@ -35,7 +35,8 @@ import type {
   MaterialStudyGroupListResponse,
 } from "../lib/types";
 
-import { HouseLinksModal, type HouseLinksModalTab } from "./materialDashboard/components/HouseLinksModal";
+import { HouseLinksModal } from "./materialDashboard/components/HouseLinksModal";
+import { HouseStartsModal } from "./materialDashboard/components/HouseStartsModal";
 import { MovementHistoryCard } from "./materialDashboard/components/MovementHistoryCard";
 import { CecoResultsList, GroupResultsList, MaterialResultsList } from "./materialDashboard/components/ResultsLists";
 import {
@@ -57,6 +58,13 @@ import {
   toDateInputValue,
   type HouseRange,
 } from "./materialDashboard/dates";
+import {
+  buildCecoTree,
+  compressCecoSelections,
+  expandCecoSelections,
+  filterCecoTree,
+  type CecoTreeNode,
+} from "./materialDashboard/cecoTree";
 import { formatDate } from "./materialDashboard/formatters";
 import {
   loadCecoFilterPreferences,
@@ -128,7 +136,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [links, setLinks] = useState<ProductionHouseLink[]>([]);
   const [linksLoaded, setLinksLoaded] = useState(false);
   const [linksVersion, setLinksVersion] = useState(0);
-  const [linksModal, setLinksModal] = useState<{ open: boolean; tab: HouseLinksModalTab }>({ open: false, tab: "links" });
+  const [linksModalOpen, setLinksModalOpen] = useState(false);
+  const [startsModalRange, setStartsModalRange] = useState<HouseRange | null>(null);
 
   // UI state.
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
@@ -140,7 +149,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [visibleMaterialCount, setVisibleMaterialCount] = useState(LIST_PAGE_SIZE);
   const [visibleGroupCount, setVisibleGroupCount] = useState(LIST_PAGE_SIZE);
-  const [visibleCecoCount, setVisibleCecoCount] = useState(LIST_PAGE_SIZE);
   const [onlyEstimatedPerHouse, setOnlyEstimatedPerHouse] = useState(false);
 
   // ERP-wide material search (materials without recent movements).
@@ -151,9 +159,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
 
   const deferredMaterialSearch = useDeferredValue(materialSearch);
 
-  const normalizedSelectedCecoCodes = normalizeCecos(selectedCecos);
-  const selectedCecoSet = useMemo(() => new Set(normalizedSelectedCecoCodes), [normalizedSelectedCecoCodes]);
-
   const cecosResource = useDashboardResource<MaterialDashboardCeco[]>({
     cacheKey: CECO_CACHE_KEY,
     refreshNonce,
@@ -162,6 +167,30 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   });
   const cecos = useMemo(() => cecosResource.data ?? [], [cecosResource.data]);
   const cecoNameByCode = useMemo(() => new Map(cecos.map((ceco) => [ceco.code, ceco.name])), [cecos]);
+  const cecoTree = useMemo(() => buildCecoTree(cecos), [cecos]);
+  const cecoNodeByCode = useMemo(() => {
+    const nodes = new Map<string, CecoTreeNode>();
+    function visit(node: CecoTreeNode) {
+      nodes.set(node.code, node);
+      node.children.forEach(visit);
+    }
+    cecoTree.forEach(visit);
+    return nodes;
+  }, [cecoTree]);
+  const normalizedSelectedCecoCodes = useMemo(() => normalizeCecos(selectedCecos), [selectedCecos]);
+  const selectedCecoLeafCodes = useMemo(
+    () => expandCecoSelections(cecoTree, normalizedSelectedCecoCodes),
+    [cecoTree, normalizedSelectedCecoCodes],
+  );
+  const selectedCecoLeafSet = useMemo(() => new Set(selectedCecoLeafCodes), [selectedCecoLeafCodes]);
+  const selectedCecoScopes = useMemo(
+    () => compressCecoSelections(cecoTree, selectedCecoLeafCodes),
+    [cecoTree, selectedCecoLeafCodes],
+  );
+  const allCecoLeafCodes = useMemo(
+    () => normalizeCecos(cecoTree.flatMap((node) => node.leafCodes)),
+    [cecoTree],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -188,10 +217,17 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   // In "exclude" mode the API receives the complement of the selection.
   const normalizedSelectedCecos =
     cecoFilterMode === "exclude"
-      ? normalizeCecos(cecos.map((ceco) => ceco.code).filter((code) => !selectedCecoSet.has(code)))
-      : normalizedSelectedCecoCodes;
-  const cecoApiFilters = cecoFilterMode === "exclude" ? { excludedCecos: normalizedSelectedCecoCodes } : { cecos: normalizedSelectedCecoCodes };
-  const allCecosExcluded = cecos.length > 0 && normalizedSelectedCecos.length === 0;
+      ? selectedCecoLeafCodes.length === 0
+        ? []
+        : allCecoLeafCodes.filter((code) => !selectedCecoLeafSet.has(code))
+      : selectedCecoLeafCodes;
+  const cecoApiFilters =
+    cecoFilterMode === "exclude"
+      ? selectedCecoLeafCodes.length === 0
+        ? {}
+        : { excludedCecos: selectedCecoLeafCodes }
+      : { cecos: selectedCecoLeafCodes };
+  const allCecosExcluded = allCecoLeafCodes.length > 0 && normalizedSelectedCecos.length === 0;
 
   const currentDashboardMovementDays = inclusiveDaySpan(houseRange.startDate, houseRange.endDate);
   const latestHistoryDate = toDateInputValue(moveToPreviousBusinessDay(new Date()));
@@ -429,24 +465,25 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
     return { id, name };
   }, [links]);
 
-  // Drop selected CECOs that no longer exist in the ERP catalog.
+  // Canonicalize parent selections into their operational leaf CECOs once the ERP catalog is loaded.
   useEffect(() => {
-    if (!cecos.length) {
+    if (!cecoTree.length) {
       return;
     }
     const availableCodes = new Set(cecos.map((ceco) => ceco.code));
     setSelectedCecos((current) => {
-      const next = normalizeCecos(current.filter((code) => availableCodes.has(code)));
+      const validCodes = current.filter((code) => availableCodes.has(code));
+      const next = expandCecoSelections(cecoTree, validCodes);
       if (next.length === current.length && next.every((code, index) => code === current[index])) {
         return current;
       }
       return next;
     });
-  }, [cecos]);
+  }, [cecoTree, cecos]);
 
   useEffect(() => {
-    saveCecoFilterPreferences({ mode: cecoFilterMode, cecos: normalizeCecos(selectedCecos) });
-  }, [cecoFilterMode, selectedCecos]);
+    saveCecoFilterPreferences({ mode: cecoFilterMode, cecos: selectedCecoLeafCodes });
+  }, [cecoFilterMode, selectedCecoLeafCodes]);
 
   useEffect(() => {
     saveHouseViewPreferences({ houseViewMode, leadTimeMode, houseRange });
@@ -579,35 +616,38 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       });
   }, [currentGroupEconomicMetrics, groupData?.groups, groupEconomicMetricsById, normalizedMaterialSearch, sort]);
 
-  const filteredCecos = useMemo(() => {
-    const term = cecoSearch.trim().toLowerCase();
-    return cecos.filter((ceco) => {
-      if (!term) {
-        return true;
-      }
-      return ceco.code.toLowerCase().includes(term) || ceco.name.toLowerCase().includes(term);
-    });
-  }, [cecoSearch, cecos]);
+  const filteredCecoTree = useMemo(() => filterCecoTree(cecoTree, cecoSearch), [cecoSearch, cecoTree]);
 
   const shouldLimitMaterialRows = !normalizedMaterialSearch;
-  const shouldLimitCecos = !cecoSearch.trim();
   const visibleMaterialRows = shouldLimitMaterialRows ? rows.slice(0, visibleMaterialCount) : rows;
   const visibleGroupRows = shouldLimitMaterialRows ? groupRows.slice(0, visibleGroupCount) : groupRows;
-  const visibleCecos = shouldLimitCecos ? filteredCecos.slice(0, visibleCecoCount) : filteredCecos;
   const hasMoreMaterialRows = shouldLimitMaterialRows && visibleMaterialRows.length < rows.length;
   const hasMoreGroupRows = shouldLimitMaterialRows && visibleGroupRows.length < groupRows.length;
-  const hasMoreCecos = shouldLimitCecos && visibleCecos.length < filteredCecos.length;
 
-  const shouldCollapseSelectedCecos = normalizedSelectedCecoCodes.length > MAX_COLLAPSED_SELECTED_CECOS;
+  const shouldCollapseSelectedCecos = selectedCecoScopes.length > MAX_COLLAPSED_SELECTED_CECOS;
   const visibleSelectedCecoCodes =
     showAllSelectedCecos || !shouldCollapseSelectedCecos
-      ? normalizedSelectedCecoCodes
-      : normalizedSelectedCecoCodes.slice(0, MAX_COLLAPSED_SELECTED_CECOS);
+      ? selectedCecoScopes
+      : selectedCecoScopes.slice(0, MAX_COLLAPSED_SELECTED_CECOS);
 
-  function toggleCecoSelection(code: string) {
-    setSelectedCecos((current) =>
-      normalizeCecos(current.includes(code) ? current.filter((item) => item !== code) : [...current, code]),
-    );
+  function toggleCecoSelection(target: string | CecoTreeNode) {
+    const node = typeof target === "string" ? cecoNodeByCode.get(target) : target;
+    const leafCodes = node?.leafCodes ?? [typeof target === "string" ? target : target.code];
+    if (!leafCodes.length) {
+      return;
+    }
+    setSelectedCecos((current) => {
+      const selectedLeaves = new Set(expandCecoSelections(cecoTree, normalizeCecos(current)));
+      const shouldSelect = leafCodes.some((code) => !selectedLeaves.has(code));
+      leafCodes.forEach((code) => {
+        if (shouldSelect) {
+          selectedLeaves.add(code);
+        } else {
+          selectedLeaves.delete(code);
+        }
+      });
+      return normalizeCecos([...selectedLeaves]);
+    });
   }
 
   function handleReload() {
@@ -694,10 +734,6 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
   }, [currentDashboardKey, normalizedMaterialSearch, sort.direction, sort.key]);
 
   useEffect(() => {
-    setVisibleCecoCount(LIST_PAGE_SIZE);
-  }, [cecoFilterMode, cecoSearch, cecos.length]);
-
-  useEffect(() => {
     if (!shouldCollapseSelectedCecos && showAllSelectedCecos) {
       setShowAllSelectedCecos(false);
     }
@@ -737,7 +773,7 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           </div>
 
-            <SidebarTabBar activeTab={activeTab} onTabChange={handleSidebarTabChange} selectedCecoCount={normalizedSelectedCecoCodes.length} />
+            <SidebarTabBar activeTab={activeTab} onTabChange={handleSidebarTabChange} selectedCecoCount={selectedCecoScopes.length} />
         </div>
 
         <div className="flex-1 overflow-hidden flex flex-col">
@@ -863,52 +899,57 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="space-y-4 border-b border-black/5 bg-white/55 p-4 dark:border-white/5 dark:bg-white/[0.015] lg:p-5">
-                <input
-                  value={cecoSearch}
-                  onChange={(event) => setCecoSearch(event.target.value)}
-                  aria-label="Buscar centro de costo"
-                  className="h-10 w-full border border-black/10 bg-white px-4 text-sm text-zinc-900 outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
-                  placeholder="Buscar CECO..."
-                />
-                <div className="flex justify-end">
-                  <button type="button" onClick={handleResetCecoFilter} className={SIDEBAR_BUTTON_CLASSES}>
-                    Reiniciar filtro CECO
+              <div className="border-b border-black/5 bg-white/55 px-3 py-3 dark:border-white/5 dark:bg-white/[0.015] lg:px-4 lg:py-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={cecoSearch}
+                    onChange={(event) => setCecoSearch(event.target.value)}
+                    aria-label="Buscar centro de costo"
+                    className="h-9 min-w-0 flex-1 border border-black/10 bg-white px-3 text-[13px] text-zinc-900 outline-none transition-colors focus:border-accent-500 focus:ring-1 focus:ring-accent-500 dark:border-white/10 dark:bg-black/20 dark:text-white"
+                    placeholder="Buscar CECO..."
+                  />
+                  <button
+                    type="button"
+                    onClick={handleResetCecoFilter}
+                    className="inline-flex h-9 shrink-0 items-center justify-center border border-black/10 bg-white px-3 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:border-black/15 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:bg-white/10"
+                    title="Reiniciar filtro CECO"
+                    aria-label="Reiniciar filtro CECO"
+                  >
+                    Reiniciar
                   </button>
                 </div>
 
-                <CecoFilterModeToggle mode={cecoFilterMode} onChange={setCecoFilterMode} />
+                <div className="mt-2">
+                  <CecoFilterModeToggle mode={cecoFilterMode} onChange={setCecoFilterMode} />
+                </div>
 
-                <p className="text-xs leading-5 text-zinc-500">
+                <p className="mt-2 text-[11px] leading-4 text-zinc-500">
                   {cecoFilterMode === "exclude"
-                    ? "Selecciona CECOs para ocultarlos del panel."
-                    : "Selecciona los únicos CECOs que deben permanecer visibles en el panel."}
+                    ? "Selecciona para ocultar CECOs completos o sus subniveles."
+                    : "Selecciona los CECOs que deben permanecer visibles."}
                 </p>
 
-                <SelectedCecoChips
-                  allCodes={normalizedSelectedCecoCodes}
-                  visibleCodes={visibleSelectedCecoCodes}
-                  mode={cecoFilterMode}
-                  cecoNameByCode={cecoNameByCode}
-                  collapsible={shouldCollapseSelectedCecos}
-                  showAll={showAllSelectedCecos}
-                  onToggleShowAll={setShowAllSelectedCecos}
-                  onToggleCeco={toggleCecoSelection}
-                />
+                <div className="mt-2">
+                  <SelectedCecoChips
+                    allCodes={selectedCecoScopes}
+                    visibleCodes={visibleSelectedCecoCodes}
+                    mode={cecoFilterMode}
+                    cecoNameByCode={cecoNameByCode}
+                    collapsible={shouldCollapseSelectedCecos}
+                    showAll={showAllSelectedCecos}
+                    onToggleShowAll={setShowAllSelectedCecos}
+                    onToggleCeco={toggleCecoSelection}
+                  />
+                </div>
               </div>
 
-              <div
-                className="flex-1 overflow-y-auto px-2 lg:px-4 py-2"
-                onScroll={(event) =>
-                  maybeLoadMoreRows(event.currentTarget, visibleCecos.length, filteredCecos.length, setVisibleCecoCount)
-                }
-              >
+              <div className="flex-1 overflow-y-auto px-2 py-2 lg:px-4">
                 <CecoResultsList
-                  rows={visibleCecos}
-                  hasMore={hasMoreCecos}
-                  selectedCecoSet={selectedCecoSet}
+                  nodes={filteredCecoTree}
+                  selectedLeafSet={selectedCecoLeafSet}
                   cecoFilterMode={cecoFilterMode}
                   onToggle={toggleCecoSelection}
+                  searchActive={Boolean(cecoSearch.trim())}
                 />
               </div>
             </div>
@@ -935,7 +976,8 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
           history={selectedHistoryLike}
           houseViewMode={houseViewMode}
           onHouseViewModeChange={setHouseViewMode}
-          onOpenLinksModal={(tab) => setLinksModal({ open: true, tab })}
+          onOpenLinksModal={() => setLinksModalOpen(true)}
+          onOpenStartsModal={setStartsModalRange}
           leadTimeMode={leadTimeMode}
           onLeadTimeModeChange={setLeadTimeMode}
           houseRange={houseRange}
@@ -960,12 +1002,16 @@ export function MaterialDashboardPage({ canEditGroups = false }: { canEditGroups
       </main>
 
       <HouseLinksModal
-        open={linksModal.open}
+        open={linksModalOpen}
         canEdit={canEditGroups}
-        range={houseRange}
-        initialTab={linksModal.tab}
-        onClose={() => setLinksModal((current) => ({ ...current, open: false }))}
+        onClose={() => setLinksModalOpen(false)}
         onSaved={() => setLinksVersion((current) => current + 1)}
+      />
+
+      <HouseStartsModal
+        open={startsModalRange !== null}
+        range={startsModalRange || houseRange}
+        onClose={() => setStartsModalRange(null)}
       />
 
       {canEditGroups ? (

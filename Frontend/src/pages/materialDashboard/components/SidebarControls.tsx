@@ -197,18 +197,18 @@ export function SidebarTabBar({
 
 export function CecoFilterModeToggle({ mode, onChange }: { mode: CecoFilterMode; onChange: (mode: CecoFilterMode) => void }) {
   const options: Array<{ id: CecoFilterMode; label: string }> = [
-    { id: "exclude", label: "Todos excepto seleccionados" },
+    { id: "exclude", label: "Excluir seleccionados" },
     { id: "include", label: "Solo seleccionados" },
   ];
   return (
-    <div className="border border-black/10 bg-zinc-50 p-1 dark:border-white/10 dark:bg-white/5">
-      <div className="grid grid-cols-2 gap-1">
+    <div className="border border-black/10 bg-zinc-50 p-0.5 dark:border-white/10 dark:bg-white/5">
+      <div className="grid grid-cols-2 gap-0.5">
         {options.map((option) => (
           <button
             key={option.id}
             type="button"
             onClick={() => onChange(option.id)}
-            className={`px-3 py-2 text-xs font-semibold transition-colors ${
+            className={`h-8 min-w-0 truncate whitespace-nowrap px-2 text-[11px] font-semibold transition-colors ${
               mode === option.id
                 ? "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-sm"
                 : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -245,7 +245,7 @@ export function SelectedCecoChips({
     return null;
   }
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       <div className="flex items-center justify-between gap-3">
         <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500">
           {mode === "exclude" ? "Ocultos" : "Incluidos"}
@@ -260,20 +260,20 @@ export function SelectedCecoChips({
           </button>
         ) : null}
       </div>
-      <div className="flex flex-wrap gap-1.5">
+      <div className={`flex flex-wrap content-start gap-1 ${showAll ? "max-h-20 overflow-y-auto pr-1" : ""}`}>
         {visibleCodes.map((code) => (
           <button
             key={code}
             type="button"
             onClick={() => onToggleCeco(code)}
-            className={`flex items-center gap-1 px-2 py-1 text-xs font-semibold transition-colors ${
+            className={`flex max-w-full items-center gap-0.5 whitespace-nowrap px-1.5 py-0.5 text-[11px] font-semibold leading-4 transition-colors ${
               mode === "exclude"
                 ? "border border-rose-500/30 bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-500/20"
                 : "border border-accent-500/30 bg-accent-50 dark:bg-accent-500/10 text-accent-700 dark:text-accent-300 hover:bg-accent-100 dark:hover:bg-accent-500/20"
             }`}
           >
-            {cecoNameByCode.get(code) || code}
-            <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <span className="max-w-[220px] truncate">{cecoNameByCode.get(code) || code}</span>
+            <svg className="h-2.5 w-2.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -282,7 +282,7 @@ export function SelectedCecoChips({
           <button
             type="button"
             onClick={() => onToggleShowAll(true)}
-            className="border border-dashed border-black/10 bg-white/70 px-2.5 py-1 text-xs font-semibold text-zinc-500 transition-colors hover:border-black/20 hover:text-zinc-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400 dark:hover:border-white/20 dark:hover:text-zinc-200"
+            className="border border-dashed border-black/10 bg-white/70 px-1.5 py-0.5 text-[11px] font-semibold leading-4 text-zinc-500 transition-colors hover:border-black/20 hover:text-zinc-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400 dark:hover:border-white/20 dark:hover:text-zinc-200"
           >
             +{allCodes.length - visibleCodes.length} más
           </button>

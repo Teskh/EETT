@@ -26,21 +26,9 @@ export function MovementBreakdownList({
     return <MovementBreakdownSkeleton />;
   }
 
-  const totalQuantity = movements.reduce((sum, movement) => sum + (Number(movement.quantity) || 0), 0);
-  const uniqueCecos = new Set(movements.map((movement) => movement.ceco).filter(Boolean)).size;
-
   return (
-    <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <h4 className="text-[10px] font-bold uppercase tracking-[0.25em] text-zinc-500">Desglose de Movimientos</h4>
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(movements.length, 0)} movs.</span>
-          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(uniqueCecos, 0)} CECOs</span>
-          <span className="rounded-full border border-black/10 px-2.5 py-1 dark:border-white/10">{formatNumber(totalQuantity)} cant.</span>
-        </div>
-      </div>
-
-      <div className="mt-3 flex h-[260px] flex-col overflow-hidden border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
+    <div className="mt-3">
+      <div className="flex h-[260px] flex-col overflow-hidden border border-black/10 bg-zinc-50/70 dark:border-white/10 dark:bg-white/[0.03]">
         {movements.length ? (
           <>
             <div className="grid gap-3 border-b border-black/5 bg-zinc-100/50 px-4 py-2 text-[10px] font-bold uppercase tracking-[0.1em] text-zinc-500 dark:border-white/5 dark:bg-white/[0.02] md:grid-cols-[minmax(0,1fr)_auto] md:items-center">

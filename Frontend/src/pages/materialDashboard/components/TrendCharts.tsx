@@ -39,10 +39,20 @@ function SelectionClipPath({ id, frame, edges }: { id: string; frame: ChartFrame
       <clipPath id={id}>
         <rect
           x={Math.min(edges.start.x, edges.end.x)}
-          y={0}
+          y={frame.padding.top}
           width={Math.max(Math.abs(edges.end.x - edges.start.x), 0.001)}
-          height={frame.height}
+          height={frame.plotHeight}
         />
+      </clipPath>
+    </defs>
+  );
+}
+
+function PlotClipPath({ id, frame }: { id: string; frame: ChartFrame }) {
+  return (
+    <defs>
+      <clipPath id={id}>
+        <rect x={frame.padding.left} y={frame.padding.top} width={frame.width - frame.padding.left - frame.padding.right} height={frame.plotHeight} />
       </clipPath>
     </defs>
   );
@@ -114,6 +124,7 @@ export function StockTrendChart({
       {...pointerHandlers}
     >
       <title>Evolución del stock de material</title>
+      <PlotClipPath id="stock-plot-clip" frame={chart} />
       <SelectionClipPath id="stock-selection-clip" frame={chart} edges={selectionEdges} />
       <rect
         x={chart.padding.left}
@@ -141,16 +152,9 @@ export function StockTrendChart({
         );
       })}
       <SelectionRegion frame={chart} edges={selectionEdges} fill="rgba(245, 158, 11, 0.12)" stroke="rgba(245, 158, 11, 0.55)" />
-      <path
-        d={chart.path}
-        fill="none"
-        stroke="rgb(245 158 11)"
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={dimmed}
-        className="transition-opacity duration-300"
-      />
+      <g clipPath="url(#stock-plot-clip)" opacity={dimmed} className="transition-opacity duration-300">
+        <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
       {selectionBounds ? (
         <g clipPath="url(#stock-selection-clip)">
           <path d={chart.path} fill="none" stroke="rgb(245 158 11)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -289,6 +293,7 @@ export function HouseTrendChart({
       {...pointerHandlers}
     >
       <title>Comparación de stock e inicios de vivienda</title>
+      <PlotClipPath id="house-plot-clip" frame={chart} />
       <SelectionClipPath id="house-selection-clip" frame={chart} edges={selectionEdges} />
       <rect
         x={chart.padding.left}
@@ -319,7 +324,7 @@ export function HouseTrendChart({
         );
       })}
       <SelectionRegion frame={chart} edges={selectionEdges} fill="rgba(51, 65, 85, 0.08)" stroke="rgba(51, 65, 85, 0.45)" />
-      <g opacity={dimmed} className="transition-opacity duration-300">
+      <g clipPath="url(#house-plot-clip)" opacity={dimmed} className="transition-opacity duration-300">
         <HouseSeriesPaths chart={chart} strokeWidth={3} />
       </g>
       {selectionBounds ? (

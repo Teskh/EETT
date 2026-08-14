@@ -37,11 +37,10 @@ from app.services.house_type_links import (
     build_mapped_house_comparison,
     get_project_expected_quantity_maps,
     house_type_links_fingerprint,
-    ensure_production_house_links_initialized,
     linked_projects_bom_fingerprint,
     link_missing_quantity_count,
     load_production_house_links_by_work_order,
-    sync_production_house_links,
+    refresh_production_house_links,
 )
 from app.services.production_dashboard import (
     build_individual_house_start_grid,
@@ -49,7 +48,7 @@ from app.services.production_dashboard import (
 )
 
 
-MATERIAL_DASHBOARD_CACHE_VERSION = 8
+MATERIAL_DASHBOARD_CACHE_VERSION = 9
 MATERIAL_DASHBOARD_CACHE_KIND_CECOS = "cecos"
 MATERIAL_DASHBOARD_CACHE_KIND_LIST = "list"
 MATERIAL_DASHBOARD_CACHE_KIND_DETAIL = "detail"
@@ -246,8 +245,7 @@ def get_material_dashboard_mapped_house_comparison(
         end_date=end_date.isoformat() if end_date else None,
         history_days=history_days,
     )
-    ensure_production_house_links_initialized(session, settings)
-    sync_production_house_links(session, production["houses"])
+    refresh_production_house_links(session, settings, production["houses"])
     start_grid = build_individual_house_start_grid(production["houses"])
     links_by_key = load_production_house_links_by_work_order(
         session,
@@ -295,8 +293,7 @@ def get_production_house_starts_with_links(
         end_date=end_date.isoformat() if end_date else None,
         history_days=history_days,
     )
-    ensure_production_house_links_initialized(session, settings)
-    sync_production_house_links(session, production["houses"])
+    refresh_production_house_links(session, settings, production["houses"])
     links_by_key = load_production_house_links_by_work_order(
         session,
         [house["work_order_id"] for house in production["houses"]],
@@ -815,8 +812,7 @@ def get_material_dashboard_economic_metrics(
             end_date=requested_end_day.isoformat(),
             history_days=movement_window_days,
         )
-        ensure_production_house_links_initialized(session, settings)
-        sync_production_house_links(session, production["houses"])
+        refresh_production_house_links(session, settings, production["houses"])
         start_grid = build_individual_house_start_grid(production["houses"])
         links_by_key = load_production_house_links_by_work_order(
             session,
@@ -1063,7 +1059,7 @@ def get_material_dashboard_cost_centers(
     return _load_material_dashboard_cache(
         session,
         cache_kind=MATERIAL_DASHBOARD_CACHE_KIND_CECOS,
-        cache_key=_dashboard_cache_key({"scope": "all"}),
+        cache_key=_dashboard_cache_key({"scope": "all", "schema": "hierarchical-v1"}),
         ttl=MATERIAL_DASHBOARD_CACHE_TTL_CECOS,
         loader=lambda: {"cecos": get_cost_centers(settings)},
         force_refresh=force_refresh,

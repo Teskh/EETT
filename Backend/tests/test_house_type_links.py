@@ -138,6 +138,60 @@ class IndividualHouseStartGridTests(unittest.TestCase):
         self.assertEqual(grid[0]["house_starts"], 1)
 
 
+class ProductionHouseSnapshotSyncTests(unittest.TestCase):
+    def test_unchanged_snapshot_does_not_dirty_existing_row(self) -> None:
+        from datetime import datetime, timezone
+        from unittest.mock import MagicMock, patch
+
+        from sqlalchemy import inspect
+        from sqlalchemy.orm import make_transient_to_detached
+
+        from app.models import ProductionHouseLink
+        from app.services.house_type_links import sync_production_house_links
+
+        last_seen_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        existing = ProductionHouseLink(
+            id=1,
+            production_work_order_id=701,
+            production_project_name="Conjunto Norte",
+            house_identifier="Casa 7",
+            production_house_type_id=54,
+            production_house_type_name="T54",
+            production_sub_type_id=None,
+            production_sub_type_name=None,
+            planned_start_date=date(2026, 8, 20),
+            planned_sequence=7,
+            start_date=None,
+            last_seen_at=last_seen_at,
+        )
+        make_transient_to_detached(existing)
+        session = MagicMock()
+        snapshot = [
+            {
+                "work_order_id": 701,
+                "production_project_name": "Conjunto Norte",
+                "house_identifier": "Casa 7",
+                "house_type_id": 54,
+                "house_type_name": "T54",
+                "sub_type_id": None,
+                "sub_type_name": None,
+                "planned_start_date": "2026-08-20",
+                "planned_sequence": 7,
+                "start_date": None,
+            }
+        ]
+
+        with patch(
+            "app.services.house_type_links.load_production_house_links",
+            return_value=[existing],
+        ):
+            sync_production_house_links(session, snapshot)
+
+        self.assertEqual(existing.last_seen_at, last_seen_at)
+        self.assertFalse(inspect(existing).modified)
+        session.flush.assert_called_once_with()
+
+
 class MappedComparisonTests(unittest.TestCase):
     def build(self, **overrides):
         params = {
@@ -224,6 +278,45 @@ class MappedComparisonTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["mapped_projects"], [{"project_id": 10, "project_name": "Casa 54"}])
+
+    def test_expected_breakdown_groups_production_types_by_app_target(self) -> None:
+        result = self.build(
+            start_grid=[
+                {
+                    "date": "2026-06-01",
+                    "house_type_id": 1,
+                    "house_type_name": "T54",
+                    "sub_type_id": None,
+                    "sub_type_name": None,
+                    "house_starts": 2,
+                },
+                {
+                    "date": "2026-06-01",
+                    "house_type_id": 2,
+                    "house_type_name": "T54 Alternativa",
+                    "sub_type_id": None,
+                    "sub_type_name": None,
+                    "house_starts": 3,
+                },
+            ],
+            links_by_key={
+                (1, None): GENERAL_LINK,
+                (2, None): {
+                    "production_house_type_id": 2,
+                    "production_sub_type_id": None,
+                    "project_id": 10,
+                    "project_subtype_id": None,
+                },
+            },
+        )
+
+        self.assertEqual(len(result["expected_breakdown"]), 1)
+        row = result["expected_breakdown"][0]
+        self.assertEqual(row["mapped_project_id"], 10)
+        self.assertEqual(row["mapped_project_subtype_id"], None)
+        self.assertEqual(row["house_starts"], 5)
+        self.assertEqual(row["total_expected_material_quantity"], 10.0)
+        self.assertEqual(row["expected_quantity_per_house"], 2.0)
 
     def test_incomplete_bom_link_still_contributes_the_quantities_defined_so_far(self) -> None:
         expected_maps = {
@@ -354,6 +447,91 @@ class HouseTypeLinkCrudTests(unittest.TestCase):
                         {"production_house_type_id": 1, "project_id": 1},
                     ],
                 )
+
+    def test_unchanged_production_snapshot_does_not_update_row(self) -> None:
+        from sqlalchemy import text
+
+        from app.services.house_type_links import sync_production_house_links
+
+        snapshot = [
+            {
+                "work_order_id": 701,
+                "production_project_name": "Conjunto Norte",
+                "house_identifier": "Casa 7",
+                "house_type_id": 54,
+                "house_type_name": "T54",
+                "sub_type_id": None,
+                "sub_type_name": None,
+                "planned_start_date": "2026-08-20",
+                "planned_sequence": 7,
+                "start_date": None,
+            }
+        ]
+
+        with self.session_factory() as session:
+            sync_production_house_links(session, snapshot)
+            session.commit()
+            first_version = session.scalar(
+                text(
+                    "SELECT xmin::text FROM production_house_links "
+                    "WHERE production_work_order_id = 701"
+                )
+            )
+
+            sync_production_house_links(session, snapshot)
+            session.commit()
+            second_version = session.scalar(
+                text(
+                    "SELECT xmin::text FROM production_house_links "
+                    "WHERE production_work_order_id = 701"
+                )
+            )
+
+        self.assertEqual(second_version, first_version)
+
+    def test_refresh_skips_when_another_snapshot_sync_is_running(self) -> None:
+        from sqlalchemy import select, text
+
+        from app.models import ProductionHouseLink
+        from app.services.house_type_links import (
+            _PRODUCTION_HOUSE_LINKS_SYNC_LOCK_ID,
+            refresh_production_house_links,
+        )
+
+        snapshot = [
+            {
+                "work_order_id": 702,
+                "production_project_name": "Conjunto Sur",
+                "house_identifier": "Casa 8",
+                "house_type_id": 54,
+                "house_type_name": "T54",
+            }
+        ]
+
+        with self.engine.connect() as blocker:
+            transaction = blocker.begin()
+            blocker.execute(
+                text("SELECT pg_advisory_xact_lock(:lock_id)"),
+                {"lock_id": _PRODUCTION_HOUSE_LINKS_SYNC_LOCK_ID},
+            )
+            try:
+                with self.session_factory() as session:
+                    refreshed = refresh_production_house_links(
+                        session,
+                        settings=None,
+                        houses=snapshot,
+                        full_snapshot=True,
+                    )
+                    self.assertFalse(refreshed)
+                    self.assertIsNone(
+                        session.scalar(
+                            select(ProductionHouseLink).where(
+                                ProductionHouseLink.production_work_order_id == 702
+                            )
+                        )
+                    )
+            finally:
+                transaction.rollback()
 
 
 if __name__ == "__main__":

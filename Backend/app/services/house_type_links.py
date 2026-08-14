@@ -6,7 +6,8 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -14,6 +15,7 @@ from app.models import (
     ProductionHouseTypeLink,
     Project,
     ProjectBomEntry,
+    ProjectInstance,
     ProjectStatus,
     ProjectSubtype,
     User,
@@ -28,6 +30,10 @@ from app.services.effective_bom import (
 # Key used to resolve a produced house against the mapping: sub-type rows win,
 # rows with production_sub_type_id None act as the house type's general mapping.
 LinkKey = tuple[int, int | None]
+
+# Synchronizing a Production II snapshot is shared work. Dashboard requests run
+# concurrently, so only one of them should write the snapshot at a time.
+_PRODUCTION_HOUSE_LINKS_SYNC_LOCK_ID = 7_341_889_247
 
 
 def serialize_house_type_link(
@@ -161,31 +167,43 @@ def sync_production_house_links(
 
     for work_order_id, house in observed_by_id.items():
         link = existing_by_id.get(work_order_id)
-        if link is None:
+        is_new = link is None
+        if is_new:
             link = ProductionHouseLink(production_work_order_id=work_order_id)
             session.add(link)
             existing_by_id[work_order_id] = link
             new_links.append(link)
 
-        link.production_project_name = str(house.get("production_project_name") or "")
-        link.house_identifier = str(house.get("house_identifier") or "").strip() or None
-        link.production_house_type_id = int(house.get("house_type_id") or 0)
-        link.production_house_type_name = str(house.get("house_type_name") or "")
+        snapshot_changed = is_new
+
+        snapshot_values: dict[str, Any] = {
+            "production_project_name": str(house.get("production_project_name") or ""),
+            "house_identifier": str(house.get("house_identifier") or "").strip() or None,
+            "production_house_type_id": int(house.get("house_type_id") or 0),
+            "production_house_type_name": str(house.get("house_type_name") or ""),
+        }
         subtype_raw = house.get("sub_type_id")
-        link.production_sub_type_id = int(subtype_raw) if subtype_raw is not None else None
-        link.production_sub_type_name = str(house.get("sub_type_name") or "").strip() or None
+        snapshot_values["production_sub_type_id"] = int(subtype_raw) if subtype_raw is not None else None
+        snapshot_values["production_sub_type_name"] = str(house.get("sub_type_name") or "").strip() or None
         planned_date = _coerce_production_date(house.get("planned_start_date"))
         if planned_date is not None or link.planned_start_date is None:
-            link.planned_start_date = planned_date
+            snapshot_values["planned_start_date"] = planned_date
         sequence_raw = house.get("planned_sequence")
         if sequence_raw is not None or link.planned_sequence is None:
-            link.planned_sequence = int(sequence_raw) if sequence_raw is not None else None
+            snapshot_values["planned_sequence"] = int(sequence_raw) if sequence_raw is not None else None
         start_value = house.get("start_date")
         if start_value is not None:
-            link.start_date = _coerce_production_date(start_value)
-        link.last_seen_at = now
+            snapshot_values["start_date"] = _coerce_production_date(start_value)
 
-    session.flush()
+        for attribute, value in snapshot_values.items():
+            if getattr(link, attribute) != value:
+                setattr(link, attribute, value)
+                snapshot_changed = True
+        # Avoid turning every dashboard read into an UPDATE of every house.
+        # This timestamp now advances when the persisted snapshot actually
+        # changes (and is initialized for every newly observed house).
+        if snapshot_changed:
+            link.last_seen_at = now
 
     for link in new_links:
         legacy = resolve_house_type_link(
@@ -229,6 +247,62 @@ def ensure_production_house_links_initialized(
 
     production = get_production_houses(settings)
     sync_production_house_links(session, production["houses"])
+
+
+def refresh_production_house_links(
+    session: Session,
+    settings: Any,
+    houses: Sequence[Mapping[str, Any]],
+    *,
+    full_snapshot: bool = False,
+) -> bool:
+    """Persist a Production II snapshot in a short, serialized transaction.
+
+    Dashboard calculations can safely call this helper concurrently. On
+    PostgreSQL, one request performs the refresh while the others immediately
+    continue with the last committed snapshot instead of waiting on row locks.
+    The caller's longer calculation transaction never owns the sync locks.
+    """
+
+    bind = session.get_bind()
+    if bind.dialect.name != "postgresql":
+        if not full_snapshot:
+            ensure_production_house_links_initialized(session, settings)
+        sync_production_house_links(session, houses)
+        session.commit()
+        return True
+
+    # End any read transaction opened earlier in the request. Reusing this
+    # session avoids checking out a second pooled connection while every
+    # concurrent dashboard request may already hold one.
+    session.commit()
+    try:
+        acquired = bool(
+            session.scalar(
+                text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+                {"lock_id": _PRODUCTION_HOUSE_LINKS_SYNC_LOCK_ID},
+            )
+        )
+        if not acquired:
+            session.commit()
+            return False
+
+        # A manual mapping can briefly touch one of the same rows. Bound that
+        # wait so a refresh falls back to the committed snapshot instead of
+        # consuming the application's broader statement timeout.
+        session.execute(text("SET LOCAL lock_timeout = '1s'"))
+        if not full_snapshot:
+            ensure_production_house_links_initialized(session, settings)
+        sync_production_house_links(session, houses)
+        session.commit()
+        session.expire_all()
+        return True
+    except OperationalError as exc:
+        session.rollback()
+        message = str(exc).lower()
+        if "lock timeout" in message or "canceling statement due to" in message:
+            return False
+        raise
 
 
 def serialize_production_house_link(
@@ -440,6 +514,8 @@ def get_project_expected_quantity_maps(
         .where(Project.id.in_(unique_ids))
         .options(
             selectinload(Project.bom_entries).selectinload(ProjectBomEntry.material),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.category),
+            selectinload(Project.bom_entries).selectinload(ProjectBomEntry.instance).selectinload(ProjectInstance.component),
             selectinload(Project.subtypes).selectinload(ProjectSubtype.parent),
             selectinload(Project.material_occurrence_modes),
         )
@@ -520,6 +596,69 @@ def study_quantity_for_link(
     return total
 
 
+def study_instance_breakdown_for_link(
+    link: ProductionHouseTypeLink | Mapping[str, Any],
+    expected_maps: Mapping[int, Mapping[str, Any]],
+    sku_factors: Mapping[str, float],
+) -> list[dict[str, Any]]:
+    """Return the selected study quantity per app project instance."""
+
+    project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
+    project_subtype_id = link.get("project_subtype_id") if isinstance(link, Mapping) else link.project_subtype_id
+    expected_map = expected_maps.get(project_id, {})
+    instance_quantities = expected_map.get("instance_quantities", {})
+    sources = list(instance_quantities.get("general", []))
+    if project_subtype_id is not None:
+        by_subtype = instance_quantities.get("by_subtype", {})
+        sources.extend(by_subtype.get(project_subtype_id, by_subtype.get(str(project_subtype_id), [])))
+
+    normalized_factors = {
+        str(sku).strip().upper(): float(factor)
+        for sku, factor in sku_factors.items()
+        if str(sku).strip() and float(factor or 0.0) != 0.0
+    }
+    by_instance: dict[int, dict[str, Any]] = {}
+    for source in sources:
+        quantities = source.get("quantities", {})
+        matched = False
+        contribution = 0.0
+        for sku, factor in normalized_factors.items():
+            if sku not in quantities:
+                continue
+            matched = True
+            contribution += float(quantities.get(sku) or 0.0) * factor
+        if not matched:
+            continue
+
+        instance_id = int(source["instance_id"])
+        row = by_instance.setdefault(
+            instance_id,
+            {
+                "instance_id": instance_id,
+                "instance_name": str(source.get("instance_name") or ""),
+                "category_name": source.get("category_name"),
+                "component_name": source.get("component_name"),
+                "quantity": 0.0,
+            },
+        )
+        row["quantity"] += contribution
+
+    return [
+        {
+            **row,
+            "quantity": round(float(row["quantity"]), 4),
+        }
+        for row in sorted(
+            by_instance.values(),
+            key=lambda item: (
+                (item["category_name"] or "").lower(),
+                (item["instance_name"] or "").lower(),
+                item["instance_id"],
+            ),
+        )
+    ]
+
+
 def build_mapped_house_comparison(
     *,
     movements: Sequence[Mapping[str, Any]],
@@ -548,6 +687,7 @@ def build_mapped_house_comparison(
     }
 
     per_house_quantity_cache: dict[tuple[int, int | None], float] = {}
+    instance_breakdown_cache: dict[tuple[int, int | None], list[dict[str, Any]]] = {}
     starts_by_day: dict[str, dict[str, float]] = defaultdict(
         lambda: {
             "house_starts": 0,
@@ -596,11 +736,12 @@ def build_mapped_house_comparison(
             continue
 
         project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
-        project_subtype_id = (
+        project_subtype_raw = (
             link.get("project_subtype_id")
             if isinstance(link, Mapping)
             else link.project_subtype_id
         )
+        project_subtype_id = int(project_subtype_raw) if project_subtype_raw is not None else None
         actual_key = (house_type_id, sub_type_id, project_id, project_subtype_id)
 
         # A link with undefined quantities still describes part of the house:
@@ -632,14 +773,25 @@ def build_mapped_house_comparison(
         if expected_map is not None:
             project_name = str(expected_map.get("project_name") or "")
             mapped_projects[project_id] = project_name
+        resolved_key = (project_id, project_subtype_id)
+        if resolved_key not in instance_breakdown_cache:
+            instance_breakdown_cache[resolved_key] = study_instance_breakdown_for_link(
+                link,
+                expected_maps,
+                normalized_factors,
+            )
         bucket["mapped_house_starts"] += count
         if missing_count > 0:
             bucket["partial_house_starts"] += count
         expected_quantity = expected_per_house * count
         bucket["expected_quantity"] += expected_quantity
 
+        mapped_project_subtype_name = None
+        if expected_map is not None and project_subtype_id is not None:
+            mapped_project_subtype_name = expected_map.get("subtype_paths", {}).get(project_subtype_id)
+
         breakdown = expected_breakdown_by_day[day_key].setdefault(
-            actual_key,
+            resolved_key,
             {
                 "house_type_id": house_type_id,
                 "house_type_name": str(row.get("house_type_name") or ""),
@@ -651,11 +803,14 @@ def build_mapped_house_comparison(
                 "mapped_project_id": project_id,
                 "mapped_project_name": project_name,
                 "mapped_project_subtype_id": project_subtype_id,
+                "mapped_project_subtype_name": mapped_project_subtype_name,
+                "instance_breakdown": instance_breakdown_cache[resolved_key],
                 "missing_quantity_count": missing_count,
             },
         )
         breakdown["house_starts"] += count
         breakdown["total_expected_material_quantity"] += expected_quantity
+        breakdown["missing_quantity_count"] = max(int(breakdown["missing_quantity_count"]), missing_count)
 
     movement_by_day = {
         str(point.get("date")): round(float(point.get("quantity") or 0.0), 4) for point in movements
@@ -668,7 +823,7 @@ def build_mapped_house_comparison(
     cumulative_mapped_house_starts = 0
     cumulative_partial_house_starts = 0
     cumulative_expected = 0.0
-    total_expected_breakdown: dict[LinkKey, dict[str, Any]] = {}
+    total_expected_breakdown: dict[tuple[int, int | None], dict[str, Any]] = {}
     latest_house_start_date: str | None = None
     for offset in range(window_days):
         current_day = start_day + timedelta(days=offset)
@@ -696,7 +851,11 @@ def build_mapped_house_comparison(
             total_row["house_starts"] += int(row["house_starts"])
             total_row["total_expected_material_quantity"] += float(row["total_expected_material_quantity"])
         day_breakdown.sort(
-            key=lambda row: (-int(row["house_starts"]), row["house_type_name"], row["sub_type_name"] or "")
+            key=lambda row: (
+                -int(row["house_starts"]),
+                row.get("mapped_project_name") or row["house_type_name"],
+                row.get("mapped_project_subtype_name") or "",
+            )
         )
         house_starts = int(bucket["house_starts"])
         if house_starts > 0:
@@ -748,7 +907,11 @@ def build_mapped_house_comparison(
             }
             for row in total_expected_breakdown.values()
         ),
-        key=lambda row: (-int(row["house_starts"]), row["house_type_name"], row["sub_type_name"] or ""),
+        key=lambda row: (
+            -int(row["house_starts"]),
+            row.get("mapped_project_name") or row["house_type_name"],
+            row.get("mapped_project_subtype_name") or "",
+        ),
     )
 
     return {

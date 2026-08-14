@@ -96,6 +96,9 @@ export type MaterialDashboardDetailData = MaterialDashboardDetail & {
 export type MaterialDashboardCeco = {
   code: string;
   name: string;
+  level: number;
+  parent_code: string | null;
+  active: boolean;
 };
 
 export type MaterialDashboardCecoResponse = {
@@ -401,6 +404,14 @@ export type MaterialDashboardUnmappedStarts = {
   missing_quantity_count: number;
 };
 
+export type MaterialDashboardExpectedInstance = {
+  instance_id: number;
+  instance_name: string;
+  category_name: string | null;
+  component_name: string | null;
+  quantity: number;
+};
+
 export type MaterialDashboardExpectedBreakdown = {
   house_type_id: number;
   house_type_name: string;
@@ -412,6 +423,8 @@ export type MaterialDashboardExpectedBreakdown = {
   mapped_project_id: number;
   mapped_project_name: string;
   mapped_project_subtype_id: number | null;
+  mapped_project_subtype_name?: string | null;
+  instance_breakdown?: MaterialDashboardExpectedInstance[];
   /** Undefined quantities left in the linked BOM; > 0 makes the row a lower bound. */
   missing_quantity_count: number;
 };

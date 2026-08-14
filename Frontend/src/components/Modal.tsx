@@ -5,11 +5,12 @@ type ModalProps = PropsWithChildren<{
   open: boolean;
   title: ReactNode;
   kicker: ReactNode;
+  kickerIcon?: ReactNode;
   onClose: () => void;
   panelClassName?: string;
 }>;
 
-export function Modal({ open, title, kicker, onClose, panelClassName, children }: ModalProps) {
+export function Modal({ open, title, kicker, kickerIcon = <i className="ph-bold ph-pencil-simple" />, onClose, panelClassName, children }: ModalProps) {
   useEffect(() => {
     if (!open) {
       return;
@@ -60,7 +61,7 @@ export function Modal({ open, title, kicker, onClose, panelClassName, children }
         <div className="flex items-start justify-between border-b border-black/10 dark:border-white/10 pb-4 mb-6">
           <div>
             <p className="text-[10px] font-bold text-accent-600 dark:text-accent-500 uppercase tracking-widest mb-1 flex items-center gap-2">
-              <i className="ph-bold ph-pencil-simple" /> {kicker}
+              {kickerIcon} {kicker}
             </p>
             <h3 className="text-xl font-bold text-zinc-900 dark:text-white">{title}</h3>
           </div>

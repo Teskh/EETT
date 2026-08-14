@@ -208,7 +208,7 @@ from app.services.house_type_links import (
     list_link_target_projects,
     replace_house_type_links,
     serialize_production_house_link,
-    sync_production_house_links,
+    refresh_production_house_links,
 )
 from app.services.erp import erp_search_available, search_erp_material_candidates
 from app.services.material_units import (
@@ -3058,8 +3058,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             production = get_production_houses(request.app.state.settings)
             observed_ids = [int(house["work_order_id"]) for house in production["houses"]]
-            sync_production_house_links(session, production["houses"])
-            session.flush()
+            refresh_production_house_links(
+                session,
+                request.app.state.settings,
+                production["houses"],
+                full_snapshot=True,
+            )
             session.expire_all()
             links_by_id = load_production_house_links_by_work_order(session, observed_ids)
             links = [links_by_id[work_order_id] for work_order_id in observed_ids if work_order_id in links_by_id]

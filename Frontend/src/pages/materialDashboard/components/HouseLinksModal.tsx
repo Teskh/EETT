@@ -1,19 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, FunnelSimple, Info, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { Modal } from "../../../components/Modal";
 import { ApiError, api } from "../../../lib/api";
 import type { ProductionHouseLink, ProductionHouseLinksBundle } from "../../../lib/types";
-import type { HouseRange } from "../dates";
 import { formatDate } from "../formatters";
-
-export type HouseLinksModalTab = "links" | "starts";
 
 type Props = {
   open: boolean;
   canEdit: boolean;
-  range: HouseRange;
-  initialTab: HouseLinksModalTab;
   onClose: () => void;
   onSaved: () => void;
 };
@@ -121,27 +116,21 @@ function searchText(house: ProductionHouseLink) {
     .toLocaleLowerCase("es");
 }
 
-export function HouseLinksModal({ open, canEdit, initialTab, onClose, onSaved }: Props) {
+export function HouseLinksModal({ open, canEdit, onClose, onSaved }: Props) {
   const [bundle, setBundle] = useState<ProductionHouseLinksBundle | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [lifecycle, setLifecycle] = useState<LifecycleFilter>(initialTab === "starts" ? "started" : "all");
+  const [lifecycle, setLifecycle] = useState<LifecycleFilter>("all");
   const [mapping, setMapping] = useState<MappingFilter>("all");
   const [houseType, setHouseType] = useState<number | "all">("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [subtypeId, setSubtypeId] = useState<number | null>(null);
-  const initialTabRef = useRef(initialTab);
-
   useEffect(() => {
     if (!open) return;
-    if (initialTabRef.current !== initialTab) {
-      initialTabRef.current = initialTab;
-      setLifecycle(initialTab === "starts" ? "started" : "all");
-    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -165,7 +154,7 @@ export function HouseLinksModal({ open, canEdit, initialTab, onClose, onSaved }:
     return () => {
       cancelled = true;
     };
-  }, [open, initialTab]);
+  }, [open]);
 
   const types = useMemo(() => {
     const values = new Map<number, string>();

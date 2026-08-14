@@ -59,8 +59,8 @@ import {
 import { useChartSelection } from "../useChartSelection";
 import type { HouseViewMode } from "../preferences";
 
-import type { HouseLinksModalTab } from "./HouseLinksModal";
 import { MovementBreakdownList } from "./MovementBreakdownList";
+import { ExpectedBreakdownModal } from "./ExpectedBreakdownModal";
 import { ProcurementMetricsPanel } from "./ProcurementMetricsPanel";
 import { TrendChartSkeleton } from "./Skeletons";
 import { StockRiskPanel } from "./StockRiskPanel";
@@ -99,50 +99,115 @@ function HeaderStatDivider() {
 }
 
 function getExpectedBreakdownLabel(row: MaterialDashboardExpectedBreakdown) {
-  return row.sub_type_name ? `${row.house_type_name} · ${row.sub_type_name}` : row.house_type_name;
+  const projectName = row.mapped_project_name || row.house_type_name;
+  const subtypeName = row.mapped_project_subtype_name
+    || (row.mapped_project_subtype_id !== null ? row.sub_type_name : null);
+  return subtypeName ? `${projectName} · ${subtypeName}` : projectName;
+}
+
+function getExpectedBreakdownKey(row: MaterialDashboardExpectedBreakdown) {
+  return `${row.mapped_project_id}-${row.mapped_project_subtype_id ?? "general"}`;
+}
+
+function ExpectedBreakdownRow({
+  row,
+  digits,
+  unitLabel,
+  onOpenModal,
+}: {
+  row: MaterialDashboardExpectedBreakdown;
+  digits: number;
+  unitLabel?: string | null;
+  onOpenModal: () => void;
+}) {
+  const instances = row.instance_breakdown || [];
+
+  return (
+    <div className="group/expected-row relative">
+      <button
+        type="button"
+        onClick={onOpenModal}
+        className="grid w-full grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3 rounded px-1 py-0.5 text-left text-xs transition-colors hover:bg-zinc-100 dark:hover:bg-white/[0.05]"
+        aria-label={`Ver detalle de ${getExpectedBreakdownLabel(row)}`}
+      >
+        <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-100" title={getExpectedBreakdownLabel(row)}>
+          {getExpectedBreakdownLabel(row)}
+        </span>
+        <span className="font-mono text-zinc-500 dark:text-zinc-400">{formatNumber(row.house_starts, 0)} viv.</span>
+        <span className="font-mono text-zinc-900 dark:text-white">{formatNumber(row.expected_quantity_per_house, digits)}/viv.</span>
+      </button>
+
+      {instances.length ? (
+        <div className="pointer-events-none absolute right-0 top-full z-50 mt-1 w-72 translate-y-1 rounded-lg border border-black/10 bg-zinc-950 p-2.5 text-left opacity-0 shadow-xl shadow-black/20 transition-all duration-150 group-hover/expected-row:translate-y-0 group-hover/expected-row:opacity-100 group-focus-within/expected-row:translate-y-0 group-focus-within/expected-row:opacity-100 dark:border-white/15">
+          <div className="mb-1.5 flex items-center justify-between gap-2 border-b border-white/10 pb-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-400">Instancias</span>
+            <span className="text-[10px] text-zinc-500">cantidad / vivienda</span>
+          </div>
+          <div className="space-y-1.5">
+            {instances.map((instance) => (
+              <div key={instance.instance_id} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2 text-[11px]">
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-zinc-100" title={instance.instance_name}>{instance.instance_name}</span>
+                  <span className="block truncate text-[10px] text-zinc-500">
+                    {[instance.category_name, instance.component_name].filter(Boolean).join(" · ") || "Sin contexto"}
+                  </span>
+                </span>
+                <span className="font-mono text-zinc-200">
+                  {formatNumber(instance.quantity, digits)}{unitLabel ? ` ${unitLabel}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function ExpectedBreakdownTooltip({
   breakdown,
   digits,
+  unitLabel,
+  onOpenModal,
 }: {
   breakdown: MaterialDashboardExpectedBreakdown[];
   digits: number;
+  unitLabel?: string | null;
+  onOpenModal: () => void;
 }) {
   if (!breakdown.length) {
     return null;
   }
   const visibleRows = breakdown.slice(0, 8);
   const hiddenCount = breakdown.length - visibleRows.length;
-  const incompleteRows = breakdown.filter((row) => (row.missing_quantity_count || 0) > 0);
 
   return (
-    <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-80 translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/estimate:translate-y-0 group-hover/estimate:opacity-100 group-focus-within/estimate:translate-y-0 group-focus-within/estimate:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
+    <div className="pointer-events-none absolute right-0 top-full z-40 mt-2 w-80 translate-y-1 rounded-lg border border-black/10 bg-white p-3 text-left opacity-0 shadow-xl shadow-black/10 ring-1 ring-black/[0.03] transition-all duration-150 group-hover/estimate:pointer-events-auto group-hover/estimate:translate-y-0 group-hover/estimate:opacity-100 group-focus-within/estimate:pointer-events-auto group-focus-within/estimate:translate-y-0 group-focus-within/estimate:opacity-100 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/30 dark:ring-white/[0.04]">
       <div className="mb-2 flex items-center justify-between gap-3 border-b border-black/5 pb-2 dark:border-white/10">
         <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Promedio ponderado</span>
-        <span className="text-[10px] font-semibold text-zinc-400">viv. vinculadas</span>
+        <button
+          type="button"
+          onClick={onOpenModal}
+          className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent-700 transition-colors hover:text-accent-900 dark:text-accent-300 dark:hover:text-accent-200"
+        >
+          Ver todo <i className="ph-bold ph-arrow-square-out" aria-hidden="true" />
+        </button>
       </div>
       <div className="space-y-1.5">
         {visibleRows.map((row) => (
-          <div
-            key={`${row.house_type_id}-${row.sub_type_id ?? "general"}`}
-            className="grid grid-cols-[1fr_auto_auto] items-baseline gap-3 text-xs"
-          >
-            <span className="min-w-0 truncate font-medium text-zinc-800 dark:text-zinc-100" title={getExpectedBreakdownLabel(row)}>
-              {(row.missing_quantity_count || 0) > 0 ? <span className="mr-1 text-amber-600 dark:text-amber-400">⚠</span> : null}
-              {getExpectedBreakdownLabel(row)}
-            </span>
-            <span className="font-mono text-zinc-500 dark:text-zinc-400">{formatNumber(row.house_starts, 0)} viv.</span>
-            <span className="font-mono text-zinc-900 dark:text-white">{formatNumber(row.expected_quantity_per_house, digits)}/viv.</span>
-          </div>
+          <ExpectedBreakdownRow
+            key={getExpectedBreakdownKey(row)}
+            row={row}
+            digits={digits}
+            unitLabel={unitLabel}
+            onOpenModal={onOpenModal}
+          />
         ))}
       </div>
-      {hiddenCount > 0 ? <div className="mt-2 text-[11px] text-zinc-500">+{hiddenCount} tipos mas</div> : null}
-      {incompleteRows.length ? (
-        <div className="mt-2 border-t border-black/5 pt-2 text-[11px] leading-4 text-amber-700 dark:border-white/10 dark:text-amber-400">
-          ⚠ {incompleteRows.length === 1 ? "Un tipo tiene" : `${incompleteRows.length} tipos tienen`} cantidades sin definir: suman
-          solo lo ya definido, por lo que el estimado es un piso.
-        </div>
+      {hiddenCount > 0 ? (
+        <button type="button" onClick={onOpenModal} className="mt-2 text-[11px] font-medium text-accent-700 hover:text-accent-900 dark:text-accent-300 dark:hover:text-accent-200">
+          +{hiddenCount} tipos más · abrir detalle
+        </button>
       ) : null}
     </div>
   );
@@ -216,6 +281,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   houseViewMode,
   onHouseViewModeChange,
   onOpenLinksModal,
+  onOpenStartsModal,
   leadTimeMode,
   onLeadTimeModeChange,
   houseRange,
@@ -236,7 +302,8 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   history: DashboardHistoryLike | null;
   houseViewMode: HouseViewMode;
   onHouseViewModeChange: (mode: HouseViewMode) => void;
-  onOpenLinksModal: (tab: HouseLinksModalTab) => void;
+  onOpenLinksModal: () => void;
+  onOpenStartsModal: (range: HouseRange) => void;
   leadTimeMode: LeadTimeMode;
   onLeadTimeModeChange: (mode: LeadTimeMode) => void;
   houseRange: HouseRange;
@@ -257,6 +324,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const [isEditingLeadTimeMode, setIsEditingLeadTimeMode] = useState(false);
   const [priceDisplayMode, setPriceDisplayMode] = useState<PriceDisplayMode>("average");
   const [draftRange, setDraftRange] = useState<HouseRange>(houseRange);
+  const [expectedBreakdownModalOpen, setExpectedBreakdownModalOpen] = useState(false);
   const selectedGroup = isGroupRow(selected) ? selected : null;
   const groupSelection = Boolean(selectedGroup);
 
@@ -342,6 +410,9 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
     selectionBounds && activeChart
       ? { start: activeChart.points[selectionBounds.startIndex], end: activeChart.points[selectionBounds.endIndex] }
       : null;
+  const startsRange: HouseRange = selectionEdges
+    ? { startDate: selectionEdges.start.date, endDate: selectionEdges.end.date }
+    : houseRange;
   const hoveredStockPoint = stockRangeChart && hoveredPointIndex !== null ? stockRangeChart.points[hoveredPointIndex] || null : null;
   const hoveredHousePoint = houseChart && hoveredPointIndex !== null ? houseChart.points[hoveredPointIndex] || null : null;
   const isCustomSelection = Boolean(selectionBounds && selectionBounds.startIndex !== selectionBounds.endIndex);
@@ -388,17 +459,23 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const expectedConsumptionTotal = hasExpectedComparison
     ? houseSummary?.projectedMaterialConsumed ?? houseComparisonInRange?.total_expected_material_quantity ?? null
     : null;
-  const housesProducedInRange = houseSummary?.housesProduced ?? houseComparisonInRange?.total_house_starts ?? null;
-  const unmappedStartsInRange = houseComparisonInRange?.total_unmapped_house_starts ?? 0;
+  const housesProducedInRange = isCustomSelection
+    ? houseSummary?.housesProduced ?? 0
+    : houseComparisonInRange?.total_house_starts ?? houseSummary?.housesProduced ?? null;
+  const mappedHousesProducedInRange = isCustomSelection
+    ? houseSummary?.mappedHousesProduced ?? 0
+    : houseComparisonInRange?.total_mapped_house_starts ?? houseSummary?.mappedHousesProduced ?? 0;
+  const unmappedStartsInRange = Math.max((housesProducedInRange ?? 0) - mappedHousesProducedInRange, 0);
   // Houses linked to a project whose BOM still has undefined quantities: their
   // consumption is counted with what is defined so far, so the estimate is a
   // lower bound rather than a gap in the analysis.
-  const partialStartsInRange =
-    houseSummary?.partialHousesProduced ?? houseComparisonInRange?.total_partial_house_starts ?? 0;
-  const partialMissingQuantityCount = (houseComparisonInRange?.partial_summary || []).reduce(
-    (total, row) => total + (row.missing_quantity_count || 0),
-    0,
-  );
+  const partialStartsInRange = isCustomSelection
+    ? houseSummary?.partialHousesProduced ?? 0
+    : houseComparisonInRange?.total_partial_house_starts ?? 0;
+  const projectedProjectNames = (houseComparisonInRange?.mapped_projects || []).map((project) => project.project_name);
+  const projectedProjectTitle = projectedProjectNames.length
+    ? `Vinculación: ${projectedProjectNames.join(", ")}`
+    : "Stock proyectado según vinculación";
   const purchaseOrders = detail && "purchase_orders" in detail ? detail.purchase_orders : [];
   const purchasePriceStats = groupSelection ? null : getPurchaseOrderPriceStats(purchaseOrders);
   // Stock-out risk uses the same consumption rates as the purchase order
@@ -463,6 +540,9 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
   const filteredHouseMovementDetails = (history?.movement_details || []).filter((movement) =>
     isDateWithinRange(movement.date, activeMovementRangeStart, activeMovementRangeEnd),
   );
+  const movementQuantityTotal = filteredHouseMovementDetails.reduce((sum, movement) => sum + (Number(movement.quantity) || 0), 0);
+  const movementCecoCount = new Set(filteredHouseMovementDetails.map((movement) => movement.ceco).filter(Boolean)).size;
+  const movementMetricsReady = Boolean(history || historyError);
 
   // Range edits stay in draftRange until the range is complete: picking a
   // start date alone must not reload the dashboard (the end date comes next).
@@ -568,18 +648,30 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           {housesMode && projectedConsumptionPerHouse !== null ? (
             <>
               <HeaderStatDivider />
-              <div className="group/estimate relative text-right" tabIndex={0}>
-                <HeaderStatLabel>
-                  <span className="inline-flex items-center gap-1">
-                    Est./Vivienda
-                    {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
-                  </span>
-                </HeaderStatLabel>
-                <div className="flex items-baseline justify-end gap-1.5 text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">
-                  <span>{formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}</span>
-                  {selectedUnitLabel ? <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{selectedUnitLabel}</span> : null}
-                </div>
-                <ExpectedBreakdownTooltip breakdown={projectedConsumptionBreakdown} digits={houseMetricDigits} />
+              <div className="group/estimate relative text-right">
+                <button
+                  type="button"
+                  onClick={() => setExpectedBreakdownModalOpen(true)}
+                  className="block rounded px-1 text-right transition-colors hover:bg-zinc-100/80 focus:outline-none focus:ring-2 focus:ring-accent-500/30 dark:hover:bg-white/[0.04]"
+                  aria-label="Abrir desglose del estimado por vivienda"
+                >
+                  <HeaderStatLabel>
+                    <span className="inline-flex items-center gap-1">
+                      Est./Vivienda
+                      {projectedConsumptionBreakdown.length ? <i className="ph-bold ph-info text-[11px] text-zinc-400" /> : null}
+                    </span>
+                  </HeaderStatLabel>
+                  <div className="flex items-baseline justify-end gap-1.5 text-2xl font-medium tracking-tight text-zinc-900 dark:text-white">
+                    <span>{formatNumber(projectedConsumptionPerHouse, houseMetricDigits)}</span>
+                    {selectedUnitLabel ? <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">{selectedUnitLabel}</span> : null}
+                  </div>
+                </button>
+                <ExpectedBreakdownTooltip
+                  breakdown={projectedConsumptionBreakdown}
+                  digits={houseMetricDigits}
+                  unitLabel={selectedUnitLabel}
+                  onOpenModal={() => setExpectedBreakdownModalOpen(true)}
+                />
               </div>
             </>
           ) : null}
@@ -725,7 +817,7 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
                 </div>
                 <button
                   type="button"
-                  onClick={() => onOpenLinksModal("links")}
+                  onClick={onOpenLinksModal}
                   className="inline-flex h-8 items-center gap-1.5 border border-black/10 bg-white px-3 text-xs font-medium text-zinc-600 shadow-sm transition-colors hover:border-accent-500/50 hover:text-accent-700 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300 dark:hover:text-accent-300"
                   title="Ver y editar la vinculación de tipos de vivienda con proyectos, y revisar los inicios del rango"
                 >
@@ -821,58 +913,83 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
             </details>
           ) : null}
 
-          {housesMode ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-              <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
-                <span className="block h-0.5 w-6 rounded-full bg-amber-500" />
-                <span>Stock de material</span>
+          {housesMode || movementMetricsReady ? (
+            <div
+              role={housesMode ? "list" : undefined}
+              aria-label={housesMode ? "Leyenda del gráfico" : "Resumen de movimientos"}
+              className="mt-3 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5 border-y border-black/[0.07] py-1.5 text-[11px] text-zinc-500 dark:border-white/10"
+            >
+              {housesMode ? (
+                <>
+                  <div role="listitem" className="inline-flex shrink-0 items-center gap-1.5">
+                    <span className="block h-0.5 w-5 rounded-full bg-amber-500" />
+                    <span>Stock</span>
+                  </div>
+                  {hasExpectedComparison ? (
+                    <div role="listitem" className="inline-flex min-w-0 items-center gap-1.5" title={projectedProjectTitle}>
+                      <span className="block h-0.5 w-5 shrink-0 rounded-full bg-emerald-500" />
+                      <span className="truncate">Proyectado</span>
+                      {projectedProjectNames.length ? (
+                        <span className="shrink-0 text-zinc-400">
+                          · {projectedProjectNames.length} {projectedProjectNames.length === 1 ? "proyecto" : "proyectos"}
+                        </span>
+                      ) : null}
+                      <i className="ph-bold ph-info shrink-0 text-[11px] text-zinc-400" aria-hidden="true" />
+                    </div>
+                  ) : null}
+                  <div role="listitem" className="inline-flex shrink-0 items-center gap-1.5">
+                    <span className="block h-0.5 w-5 rounded-full bg-slate-700 dark:bg-slate-300" />
+                    <span>Inicios restantes</span>
+                  </div>
+                </>
+              ) : null}
+              <div className="ml-auto flex min-w-0 flex-wrap items-center gap-1.5">
+                {movementMetricsReady ? (
+                  <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-zinc-500" aria-label="Resumen de movimientos">
+                    <span className="rounded-full border border-black/10 px-2 py-0.5 dark:border-white/10">
+                      {formatNumber(filteredHouseMovementDetails.length, 0)} movs.
+                    </span>
+                    <span className="rounded-full border border-black/10 px-2 py-0.5 dark:border-white/10">
+                      {formatNumber(movementCecoCount, 0)} CECOs
+                    </span>
+                    <span className="rounded-full border border-black/10 px-2 py-0.5 dark:border-white/10">
+                      {formatNumber(movementQuantityTotal)} cant.
+                    </span>
+                  </div>
+                ) : null}
+                {housesMode && !hasExpectedComparison && houseComparisonInRange ? (
+                  <button
+                    type="button"
+                    onClick={onOpenLinksModal}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                  >
+                    <i className="ph-bold ph-warning" aria-hidden="true" />
+                    Sin vinculación configurada
+                  </button>
+                ) : null}
+                {housesMode && unmappedStartsInRange > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenStartsModal(startsRange)}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                    title="Estas viviendas cuentan como inicios pero no aportan consumo estimado"
+                  >
+                    <i className="ph-bold ph-warning" aria-hidden="true" />
+                    {unmappedStartsInRange} {unmappedStartsInRange === 1 ? "inicio sin vincular" : "inicios sin vincular"}
+                  </button>
+                ) : null}
+                {housesMode && partialStartsInRange > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenStartsModal(startsRange)}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                    title="Ver los inicios del rango seleccionado"
+                  >
+                    <i className="ph-bold ph-warning" aria-hidden="true" />
+                    {partialStartsInRange} {partialStartsInRange === 1 ? "inicio" : "inicios"}
+                  </button>
+                ) : null}
               </div>
-              {hasExpectedComparison ? (
-                <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
-                  <span className="block h-0.5 w-6 rounded-full bg-emerald-500" />
-                  <span>
-                    Stock proyectado según vinculación
-                    {houseComparisonInRange?.mapped_projects.length
-                      ? ` (${houseComparisonInRange.mapped_projects.map((project) => project.project_name).join(", ")})`
-                      : ""}
-                  </span>
-                </div>
-              ) : null}
-              <div className="flex items-center gap-2 bg-zinc-100/70 px-2.5 py-1.5 dark:bg-white/[0.04]">
-                <span className="block h-0.5 w-6 rounded-full bg-slate-700 dark:bg-slate-300" />
-                <span>Inicios de vivienda restantes</span>
-              </div>
-              {!hasExpectedComparison && houseComparisonInRange ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenLinksModal("links")}
-                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-                >
-                  ⚠ Sin vinculación configurada
-                </button>
-              ) : null}
-              {unmappedStartsInRange > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenLinksModal("starts")}
-                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-                  title="Estas viviendas cuentan como inicios pero no aportan consumo estimado"
-                >
-                  ⚠ {unmappedStartsInRange} {unmappedStartsInRange === 1 ? "inicio sin vincular" : "inicios sin vincular"}
-                </button>
-              ) : null}
-              {partialStartsInRange > 0 ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenLinksModal("starts")}
-                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
-                  title={`Estas viviendas sí aportan consumo estimado, pero su proyecto vinculado aún tiene ${
-                    partialMissingQuantityCount || "algunas"
-                  } cantidades sin definir: el consumo estimado es un piso, no el total.`}
-                >
-                  ⚠ {partialStartsInRange} {partialStartsInRange === 1 ? "inicio con BOM incompleta" : "inicios con BOM incompleta"}
-                </button>
-              ) : null}
             </div>
           ) : null}
 
@@ -906,6 +1023,15 @@ export const MovementHistoryCard = memo(function MovementHistoryCard({
           />
         </div>
       </div>
+
+      <ExpectedBreakdownModal
+        open={expectedBreakdownModalOpen}
+        breakdown={projectedConsumptionBreakdown}
+        digits={houseMetricDigits}
+        unitLabel={selectedUnitLabel}
+        range={startsRange}
+        onClose={() => setExpectedBreakdownModalOpen(false)}
+      />
     </section>
   );
 });

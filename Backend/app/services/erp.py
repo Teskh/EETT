@@ -142,7 +142,7 @@ def search_erp_material_candidates(query: str, settings: Settings, *, limit: int
         return []
 
 
-def get_cost_centers(settings: Settings) -> list[dict[str, str]]:
+def get_cost_centers(settings: Settings) -> list[dict[str, Any]]:
     try:
         with _open_connection(settings) as connection:
             cursor = connection.cursor()
@@ -150,21 +150,27 @@ def get_cost_centers(settings: Settings) -> list[dict[str, str]]:
                 """
                 SELECT
                     RTRIM(LTRIM(CodiCC)) AS Code,
-                    RTRIM(LTRIM(DescCC)) AS Name
+                    RTRIM(LTRIM(DescCC)) AS Name,
+                    NivelCC AS Level,
+                    RTRIM(LTRIM(Activo)) AS Active
                 FROM softland.cwtccos
                 WHERE RTRIM(LTRIM(CodiCC)) <> ''
-                ORDER BY Name
+                ORDER BY CodiCC
                 """
             )
-            centers: list[dict[str, str]] = []
+            centers: list[dict[str, Any]] = []
             for row in cursor.fetchall():
                 code = (getattr(row, "Code", None) or "").strip()
                 if not code:
                     continue
+                level = int(getattr(row, "Level", None) or 1)
                 centers.append(
                     {
                         "code": code,
                         "name": (getattr(row, "Name", None) or "").strip(),
+                        "level": level,
+                        "parent_code": _cost_center_parent_code(code, level),
+                        "active": (getattr(row, "Active", None) or "").strip().lower() == "s",
                     }
                 )
             return centers
@@ -1426,6 +1432,52 @@ def _normalize_cost_centers(cost_centers: Sequence[str] | None) -> list[str]:
     return [str(value).strip() for value in cost_centers or [] if value is not None and str(value).strip()]
 
 
+def _cost_center_parent_code(code: str, level: int) -> str | None:
+    parts = code.strip().split("-")
+    if level <= 1 or len(parts) != 3 or any(not part for part in parts):
+        return None
+    if level == 2:
+        return f"{parts[0]}-00-00"
+    return f"{parts[0]}-{parts[1]}-00"
+
+
+def _cost_center_scope_prefix(code: str) -> tuple[int, str] | None:
+    parts = code.strip().split("-")
+    if len(parts) != 3 or any(not part for part in parts):
+        return None
+    if parts[1] == "00" and parts[2] == "00":
+        return 2, parts[0]
+    if parts[2] == "00":
+        return 5, f"{parts[0]}-{parts[1]}"
+    return None
+
+
+def _build_cost_center_scope_predicates(
+    column_name: str,
+    cost_centers: Sequence[str],
+) -> tuple[list[str], list[object]]:
+    exact_codes: list[str] = []
+    scope_predicates: list[str] = []
+    scope_params: list[object] = []
+    for code in cost_centers:
+        scope = _cost_center_scope_prefix(code)
+        if scope is None:
+            exact_codes.append(code)
+            continue
+        prefix_length, prefix_value = scope
+        scope_predicates.append(f"LEFT({column_name}, {prefix_length}) = ?")
+        scope_params.append(prefix_value)
+    predicates: list[str] = []
+    params: list[object] = []
+    if exact_codes:
+        placeholders = ",".join(["?"] * len(exact_codes))
+        predicates.append(f"{column_name} IN ({placeholders})")
+        params.extend(exact_codes)
+    predicates.extend(scope_predicates)
+    params.extend(scope_params)
+    return predicates, params
+
+
 def _build_cost_center_clause(
     column_name: str,
     *,
@@ -1433,11 +1485,11 @@ def _build_cost_center_clause(
     excluded_cost_centers: Sequence[str],
 ) -> tuple[str, list[object]]:
     if cost_centers:
-        placeholders = ",".join(["?"] * len(cost_centers))
-        return f"\n          AND {column_name} IN ({placeholders})", list(cost_centers)
+        predicates, params = _build_cost_center_scope_predicates(column_name, cost_centers)
+        return f"\n          AND ({' OR '.join(predicates)})", params
     if excluded_cost_centers:
-        placeholders = ",".join(["?"] * len(excluded_cost_centers))
-        return f"\n          AND {column_name} NOT IN ({placeholders})", list(excluded_cost_centers)
+        predicates, params = _build_cost_center_scope_predicates(column_name, excluded_cost_centers)
+        return f"\n          AND NOT ({' OR '.join(predicates)})", params
     return "", []
 
 

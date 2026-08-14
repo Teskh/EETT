@@ -132,6 +132,72 @@ def effective_occurrence_rows(project: Project) -> list[dict[str, Any]]:
     return rows
 
 
+def build_project_instance_quantity_map(project: Project) -> dict[str, Any]:
+    """Build effective material quantities grouped by project instance.
+
+    The comparison dashboard needs to explain an app-level project/subtype
+    total without exposing the production system's house-type vocabulary. Keep
+    only defined factory quantities here; the selected subtype is combined with
+    the general bucket later when a production link is resolved.
+    """
+
+    general: dict[int, dict[str, Any]] = {}
+    by_subtype: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
+
+    for effective_row in effective_occurrence_rows(project):
+        entry = effective_row["entry"]
+        material = entry.material
+        instance = entry.instance
+        quantity = effective_row["quantity"]
+        if material is None or instance is None or quantity is None:
+            continue
+
+        sku = str(material.sku or "").strip().upper()
+        if not sku:
+            continue
+
+        subtype = effective_row["subtype"]
+        bucket = general if subtype is None else by_subtype[int(subtype.id)]
+        instance_row = bucket.setdefault(
+            int(instance.id),
+            {
+                "instance_id": int(instance.id),
+                "instance_name": str(instance.name or ""),
+                "category_name": instance.category.name if instance.category else None,
+                "component_name": instance.component.name if instance.component else None,
+                "quantities": {},
+            },
+        )
+        instance_row["quantities"][sku] = float(instance_row["quantities"].get(sku, 0.0)) + float(quantity)
+
+    def serialize(bucket: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(
+            [
+                {
+                    **row,
+                    "quantities": {
+                        sku: round(float(quantity), 4)
+                        for sku, quantity in row["quantities"].items()
+                    },
+                }
+                for row in bucket.values()
+            ],
+            key=lambda row: (
+                (row["category_name"] or "").lower(),
+                (row["instance_name"] or "").lower(),
+                row["instance_id"],
+            ),
+        )
+
+    return {
+        "general": serialize(general),
+        "by_subtype": {
+            subtype_id: serialize(bucket)
+            for subtype_id, bucket in by_subtype.items()
+        },
+    }
+
+
 def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
     """Build the effective per-house BOM used by every production comparison.
 
@@ -191,6 +257,7 @@ def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
         "by_subtype": {subtype_id: dict(quantities) for subtype_id, quantities in by_subtype.items()},
         "missing_by_subtype": resolved_missing,
         "subtype_paths": {subtype.id: subtype_path(subtype) for subtype in variants},
+        "instance_quantities": build_project_instance_quantity_map(project),
     }
 
 

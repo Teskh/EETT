@@ -919,6 +919,9 @@ class MaterialDashboardDetailResponse(MaterialDashboardDetailModel):
 class MaterialDashboardCecoModel(BaseModel):
     code: str
     name: str
+    level: int = Field(default=1, ge=1)
+    parent_code: str | None = None
+    active: bool = True
 
 
 class MaterialDashboardCecoResponse(BaseModel):
@@ -1182,6 +1185,14 @@ class MaterialDashboardGroupEconomicMetricsResponse(BaseModel):
     generated_at: str
 
 
+class MaterialDashboardExpectedInstanceModel(BaseModel):
+    instance_id: int
+    instance_name: str
+    category_name: str | None = None
+    component_name: str | None = None
+    quantity: float
+
+
 class MaterialDashboardExpectedBreakdownModel(BaseModel):
     house_type_id: int
     house_type_name: str
@@ -1193,6 +1204,8 @@ class MaterialDashboardExpectedBreakdownModel(BaseModel):
     mapped_project_id: int
     mapped_project_name: str
     mapped_project_subtype_id: int | None = None
+    mapped_project_subtype_name: str | None = None
+    instance_breakdown: list[MaterialDashboardExpectedInstanceModel] = Field(default_factory=list)
     missing_quantity_count: int = 0
 
 
