@@ -745,15 +745,16 @@ def _expected_source_quantities_for_members(
             legacy = links_by_key.get((int(row.get("house_type_id") or 0), subtype_id))
             if legacy is None:
                 legacy = links_by_key.get((int(row.get("house_type_id") or 0), None))
+            legacy_project_id = legacy.get("project_id") if isinstance(legacy, Mapping) else None
             link = (
                 SimpleNamespace(
-                    project_id=int(legacy["project_id"]),
+                    project_id=int(legacy_project_id),
                     project_subtype_id=legacy.get("project_subtype_id"),
                 )
-                if isinstance(legacy, Mapping)
-                else legacy
-            )
-        if link is None:
+                if legacy_project_id is not None
+                else None
+            ) if isinstance(legacy, Mapping) else legacy
+        if link is None or link.project_id is None:
             continue
         link_key = (link.project_id, link.project_subtype_id)
         if link_key not in per_link_quantities:
@@ -811,7 +812,10 @@ def _count_mapped_house_starts(start_grid: list[dict], links_by_key: dict, expec
     return sum(
         int(row.get("house_starts") or 0)
         for row in start_grid
-        if links_by_key.get(int(row["work_order_id"])) is not None
+        if (
+            (link := links_by_key.get(int(row["work_order_id"]))) is not None
+            and link.project_id is not None
+        )
     )
 
 
@@ -820,7 +824,7 @@ def _count_partial_house_starts(start_grid: list[dict], links_by_key: dict, expe
     total = 0
     for row in start_grid:
         link = links_by_key.get(int(row["work_order_id"]))
-        if link is not None and link_missing_quantity_count(link, expected_maps) > 0:
+        if link is not None and link.project_id is not None and link_missing_quantity_count(link, expected_maps) > 0:
             total += int(row.get("house_starts") or 0)
     return total
 

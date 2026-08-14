@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 from datetime import date
+from types import SimpleNamespace
 
 from app.services.house_type_links import (
     _fingerprint_part_sort_key,
@@ -370,6 +371,31 @@ class MappedComparisonTests(unittest.TestCase):
         self.assertEqual(result["total_expected_material_quantity"], 0.0)
         self.assertIsNone(result["expected_material_per_mapped_house"])
         self.assertEqual(sum(row["house_starts"] for row in result["unmapped_summary"]), 6)
+
+    def test_persisted_unmapped_link_is_treated_as_unmapped(self) -> None:
+        result = self.build(
+            start_grid=[
+                {
+                    "date": "2026-06-01",
+                    "work_order_id": 130,
+                    "house_type_id": 1,
+                    "house_type_name": "T54",
+                    "sub_type_id": None,
+                    "sub_type_name": None,
+                    "house_starts": 1,
+                }
+            ],
+            links_by_key={
+                130: SimpleNamespace(project_id=None, project_subtype_id=None)
+            },
+            expected_maps={},
+        )
+
+        self.assertEqual(result["total_house_starts"], 1)
+        self.assertEqual(result["total_mapped_house_starts"], 0)
+        self.assertEqual(result["total_expected_material_quantity"], 0.0)
+        self.assertEqual(result["unmapped_summary"][0]["house_starts"], 1)
+        self.assertEqual(result["unmapped_summary"][0]["reason"], "unmapped")
 
 
 class HouseTypeLinkCrudTests(unittest.TestCase):

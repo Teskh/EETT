@@ -308,10 +308,10 @@ def get_production_house_starts_with_links(
     partial_count = 0
     for house in production["houses"]:
         link = links_by_key.get(int(house["work_order_id"]))
-        missing_count = link_missing_quantity_count(link, expected_maps) if link is not None else 0
+        mapped = link is not None and link.project_id is not None
+        missing_count = link_missing_quantity_count(link, expected_maps) if mapped else 0
         # An incomplete BOM still contributes the quantities defined so far, so
         # the house counts as mapped and is flagged rather than dropped.
-        mapped = link is not None
         if mapped:
             mapped_count += 1
             if missing_count > 0:
@@ -328,7 +328,7 @@ def get_production_house_starts_with_links(
                 else None,
                 "mapped_via_sub_type": False,
                 "mapping_source": link.mapping_source if link else None,
-                "mapping_issue": "incomplete_bom" if link is not None and missing_count > 0 else None,
+                "mapping_issue": "incomplete_bom" if mapped and missing_count > 0 else None,
                 "missing_quantity_count": missing_count,
             }
         )

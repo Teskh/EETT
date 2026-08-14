@@ -677,8 +677,8 @@ def build_mapped_house_comparison(
     that resolves to a link, including links whose BOM still has undefined
     quantities: those contribute the quantities defined so far and are reported
     in ``partial_summary`` so the UI can warn that the figure is a lower bound.
-    Houses with no link at all contribute nothing and land in
-    ``unmapped_summary``."""
+    Houses with no link, or with a persisted link whose project is undefined,
+    contribute nothing and land in ``unmapped_summary``."""
 
     normalized_factors = {
         str(sku).strip().upper(): float(factor)
@@ -719,7 +719,12 @@ def build_mapped_house_comparison(
             else resolve_house_type_link(links_by_key, house_type_id, sub_type_id)
         )
         source_key: LinkKey = (house_type_id, sub_type_id)
-        if link is None:
+        project_id_raw = (
+            link.get("project_id")
+            if isinstance(link, Mapping)
+            else link.project_id
+        ) if link is not None else None
+        if project_id_raw is None:
             summary = unmapped_by_key.setdefault(
                 source_key,
                 {
@@ -735,7 +740,7 @@ def build_mapped_house_comparison(
             summary["house_starts"] += count
             continue
 
-        project_id = int(link["project_id"] if isinstance(link, Mapping) else link.project_id)
+        project_id = int(project_id_raw)
         project_subtype_raw = (
             link.get("project_subtype_id")
             if isinstance(link, Mapping)
