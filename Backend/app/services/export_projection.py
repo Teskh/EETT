@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.models import Project, ProjectInstance
+from app.services.subtype_compaction import compact_subtype_rows
 
 
 def material_exists_in_instance(material: dict[str, Any]) -> bool:
@@ -124,9 +125,11 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
 
                 for bom_entry in material.get("bom_entries", []):
                     subtype_name = bom_entry.get("subtype") or "General"
+                    subtype_id = bom_entry.get("subtype_id")
                     subtype_entry = material_entry["subtypes"].setdefault(
-                        subtype_name,
+                        (subtype_id, subtype_name),
                         {
+                            "subtype_id": subtype_id,
                             "subtype": subtype_name,
                             "quantity_total": 0.0,
                             "has_numeric_quantity": False,
@@ -181,9 +184,11 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
                 },
             )
             subtype_name = auxiliary.get("subtype") or "General"
+            subtype_id = auxiliary.get("subtype_id")
             subtype_entry = material_entry["subtypes"].setdefault(
-                subtype_name,
+                (subtype_id, subtype_name),
                 {
+                    "subtype_id": subtype_id,
                     "subtype": subtype_name,
                     "quantity_total": 0.0,
                     "has_numeric_quantity": False,
@@ -206,7 +211,18 @@ def build_detailed_material_export_sections(project_data: dict[str, Any], *, qua
                 quantity = None
             else:
                 continue
-            rows.append({"subtype": subtype_entry["subtype"], "quantity": quantity})
+            rows.append(
+                {
+                    "subtype_id": subtype_entry["subtype_id"],
+                    "subtype": subtype_entry["subtype"],
+                    "quantity": quantity,
+                }
+            )
+        rows = compact_subtype_rows(
+            rows,
+            project_data.get("subtypes", []),
+            signature=lambda row: ("blank", None) if row["quantity"] is None else ("value", row["quantity"]),
+        )
 
         if rows:
             aggregated_materials.append(
@@ -344,7 +360,7 @@ def build_full_technical_export_sections(
                         media_gallery_dir=media_gallery_dir,
                         include_image=settings["image"],
                     ),
-                    "materials": _technical_materials(serialized_instance, settings),
+                    "materials": _technical_materials(serialized_instance, settings, project_data.get("subtypes", [])),
                 }
             )
 
@@ -699,14 +715,23 @@ def _resolve_media_path(
     return None
 
 
-def _technical_materials(instance: dict[str, Any], settings: dict[str, Any]) -> list[dict[str, Any]]:
+def _technical_materials(
+    instance: dict[str, Any],
+    settings: dict[str, Any],
+    subtype_nodes: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     if not settings["include_materials"]:
         return []
 
     materials: list[dict[str, Any]] = []
     for material in iter_existing_instance_materials(instance):
         display_rows = []
-        for bom_entry in material.get("bom_entries", []):
+        bom_entries = compact_subtype_rows(
+            list(material.get("bom_entries", [])),
+            subtype_nodes or [],
+            signature=lambda row: _bom_quantity_signature(row, "effective_quantity", "effective_quantity_state", "quantity", "quantity_state"),
+        )
+        for bom_entry in bom_entries:
             state = bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state"))
             value = bom_entry.get("effective_quantity", bom_entry.get("quantity"))
             if state == "zero":
@@ -728,3 +753,18 @@ def _technical_materials(instance: dict[str, Any], settings: dict[str, Any]) -> 
             }
         )
     return materials
+
+
+def _bom_quantity_signature(
+    row: dict[str, Any],
+    quantity_key: str,
+    state_key: str,
+    fallback_quantity_key: str,
+    fallback_state_key: str,
+) -> tuple[str | None, float | None]:
+    state = row.get(state_key, row.get(fallback_state_key))
+    value = row.get(quantity_key, row.get(fallback_quantity_key))
+    return (
+        state,
+        round(float(value), 9) if value is not None else None,
+    )

@@ -8,6 +8,15 @@ import { SearchField } from "../components/SearchField";
 import { ApiError, api } from "../lib/api";
 import { toAppPath } from "../lib/basePath";
 import { matchesSearchText, normalizeSearchText, searchTreeBranchMatches } from "../lib/search";
+import {
+  allExpandableSubtypeIds,
+  analyzeSubtypeBranches,
+  defaultExpandedSubtypeIds,
+  flattenSubtypeTree,
+  isSubtypeRowVisible,
+  resolveSubtypeQuantities,
+  type FlatSubtype,
+} from "../lib/subtypeRows";
 import type {
   AttributeValueInput,
   AvailableComponent,
@@ -24,7 +33,6 @@ import type {
   ProjectComment,
   ProjectDetailData,
   ProjectInstance,
-  ProjectSubtype,
   UpdateProjectOccurrenceRequest,
   UpdateProjectInstanceRequest,
   UsageOccurrence,
@@ -82,7 +90,6 @@ type InstanceFormPayload = {
 };
 
 type CategoryNode = ProjectCategorySection & { children: CategoryNode[] };
-type FlatSubtype = { id: number; name: string; depth: number };
 type MaterialRowDraft = {
   subtype_id: number | null;
   quantity: string;
@@ -216,13 +223,6 @@ export function projectTreeMatches(node: CategoryNode, term: string): boolean {
   return searchTreeBranchMatches(node, term, (current) => [
     current.name,
     ...current.instances.flatMap((instance) => [instance.name, instance.short_name]),
-  ]);
-}
-
-function flattenSubtypeTree(subtypes: ProjectSubtype[], depth = 0): FlatSubtype[] {
-  return subtypes.flatMap((subtype) => [
-    ...(subtype.kind === "variant" ? [{ id: subtype.id, name: subtype.path || subtype.name, depth }] : []),
-    ...flattenSubtypeTree(subtype.children, depth + 1),
   ]);
 }
 
@@ -360,6 +360,17 @@ function buildDraftDisplayRows(
   const bySubtypeId = new Map(material.bom_entries.map((entry) => [entry.subtype_id, entry]));
 
   if (mode === "per_subtype") {
+    const parsedEntries = subtypeOptions.map((subtype) => {
+      const draftRow = draftRows.find((row) => row.subtype_id === subtype.id);
+      return {
+        subtype_id: subtype.id,
+        quantity: parseDisplayNumber(draftRow?.quantity ?? ""),
+        assembly_quantity: parseDisplayNumber(draftRow?.assembly_quantity ?? ""),
+        inheritance_mode: draftRow?.inheritance_mode || ("override" as const),
+      };
+    });
+    const effectiveBySubtypeId = resolveSubtypeQuantities(parsedEntries, subtypeOptions);
+    const subtypeNamesById = new Map(subtypeOptions.map((subtype) => [subtype.id, subtype.name]));
     return subtypeOptions.map((subtype) => {
       const draftRow = draftRows.find((row) => row.subtype_id === subtype.id) || {
         subtype_id: subtype.id,
@@ -370,6 +381,8 @@ function buildDraftDisplayRows(
       const persisted = bySubtypeId.get(subtype.id);
       const quantity = parseDisplayNumber(draftRow.quantity);
       const assemblyQuantity = parseDisplayNumber(draftRow.assembly_quantity);
+      const effective = effectiveBySubtypeId.get(subtype.id);
+      const inheritedSourceId = effective?.quantitySourceId ?? effective?.assemblyQuantitySourceId ?? null;
       return {
         subtype_id: subtype.id,
         subtype: subtype.name,
@@ -377,15 +390,17 @@ function buildDraftDisplayRows(
         inheritance_mode: draftRow.inheritance_mode,
         quantity,
         quantity_state: quantityStateForValue(quantity),
-        effective_quantity: persisted?.effective_quantity ?? quantity,
-        effective_quantity_state: persisted?.effective_quantity_state ?? quantityStateForValue(quantity),
+        effective_quantity: effective?.quantity ?? null,
+        effective_quantity_state: quantityStateForValue(effective?.quantity ?? null),
         assembly_quantity: assemblyQuantity,
         assembly_quantity_state: quantityStateForValue(assemblyQuantity),
-        effective_assembly_quantity: persisted?.effective_assembly_quantity ?? assemblyQuantity,
-        effective_assembly_quantity_state:
-          persisted?.effective_assembly_quantity_state ?? quantityStateForValue(assemblyQuantity),
-        inherited_from_subtype_id: persisted?.inherited_from_subtype_id ?? null,
-        inherited_from_subtype: persisted?.inherited_from_subtype ?? null,
+        effective_assembly_quantity: effective?.assemblyQuantity ?? null,
+        effective_assembly_quantity_state: quantityStateForValue(effective?.assemblyQuantity ?? null),
+        inherited_from_subtype_id: inheritedSourceId === subtype.id ? null : inheritedSourceId,
+        inherited_from_subtype:
+          inheritedSourceId === null || inheritedSourceId === subtype.id
+            ? null
+            : subtypeNamesById.get(inheritedSourceId) || null,
         unit: material.unit,
         calculation_mode: persisted?.calculation_mode || "manual",
         calculation_formula: persisted?.calculation_formula || null,
@@ -1113,6 +1128,7 @@ function renderOccurrenceSummary(
   options?: {
     primaryLabel?: string;
     showRelationshipType?: boolean;
+    onClick?: () => void;
   },
 ) {
   const primaryLabel = options?.primaryLabel || getOccurrencePrimaryLabel(occurrence);
@@ -1122,7 +1138,20 @@ function renderOccurrenceSummary(
       key={`${occurrence.relationship_type}-${primaryLabel}-${index}`}
       className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 text-xs"
     >
-      <span className="font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</span>
+      {options?.onClick ? (
+        <button
+          type="button"
+          onClick={options.onClick}
+          className="inline-flex items-center gap-1 font-semibold text-accent-700 underline decoration-accent-500/30 underline-offset-2 transition-colors hover:text-accent-600 dark:text-accent-400 dark:hover:text-accent-300"
+          aria-label={`Ir a ${primaryLabel}`}
+          title={`Ir a ${primaryLabel}`}
+        >
+          {primaryLabel}
+          <i className="ph-bold ph-arrow-up-right text-[10px]" aria-hidden="true" />
+        </button>
+      ) : (
+        <span className="font-semibold text-zinc-900 dark:text-zinc-100">{primaryLabel}</span>
+      )}
       {options?.showRelationshipType !== false ? (
         <span className="text-[10px] uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500">
           {translateRelationshipType(occurrence.relationship_type)}
@@ -1756,6 +1785,9 @@ function MaterialOccurrenceEditor({
   const [draftMode, setDraftMode] = useState(material.mode);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedSubtypeIds, setExpandedSubtypeIds] = useState<Set<number>>(() =>
+    material.mode === "per_subtype" ? defaultExpandedSubtypeIds(material.bom_entries, subtypeOptions) : new Set(),
+  );
   const serverSignatureRef = useRef(buildMaterialDraftSignature(material.mode, buildDraftRows(material.bom_entries)));
   const saveQueueRef = useRef<{
     inFlight: boolean;
@@ -1766,6 +1798,16 @@ function MaterialOccurrenceEditor({
   });
   const draftSignature = buildMaterialDraftSignature(draftMode, draftRows);
   const displayRows = buildDraftDisplayRows(draftMode, draftRows, material, subtypeOptions);
+  const isPerSubtype = draftMode === "per_subtype";
+  const subtypeBranches = analyzeSubtypeBranches(displayRows, subtypeOptions);
+  const requiredExpandedKey = [...subtypeBranches]
+    .filter(([, branch]) => !branch.uniform)
+    .map(([subtypeId]) => subtypeId)
+    .sort((left, right) => left - right)
+    .join(",");
+  const visibleRows = displayRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => isSubtypeRowVisible(row.subtype_id, subtypeOptions, expandedSubtypeIds));
 
   // Unidad / Fuente / Fórmula are almost always identical across rows of a
   // material. When uniform, surface them once in a slim meta strip instead of
@@ -1790,6 +1832,23 @@ function MaterialOccurrenceEditor({
       setError(null);
     }
   }, [material]);
+
+  useEffect(() => {
+    if (!isPerSubtype || !requiredExpandedKey) {
+      return;
+    }
+    const requiredIds = requiredExpandedKey.split(",").map(Number);
+    setExpandedSubtypeIds((current) => {
+      if (requiredIds.every((subtypeId) => current.has(subtypeId))) {
+        return current;
+      }
+      const next = new Set(current);
+      for (const subtypeId of requiredIds) {
+        next.add(subtypeId);
+      }
+      return next;
+    });
+  }, [isPerSubtype, requiredExpandedKey]);
 
   async function pumpSaveQueue(mode: string, rows: MaterialRowDraft[]) {
     if (saveQueueRef.current.inFlight) {
@@ -1852,10 +1911,10 @@ function MaterialOccurrenceEditor({
       : [{ subtype_id: null, quantity: "", assembly_quantity: "", inheritance_mode: "override" as const }];
     setDraftMode(nextMode);
     setDraftRows(nextRows);
+    setExpandedSubtypeIds(nextChecked ? allExpandableSubtypeIds(subtypeOptions) : new Set());
     persistIfChanged(nextRows, nextMode);
   }
 
-  const isPerSubtype = draftMode === "per_subtype";
   const rowTint =
     material.source_status === "missing"
       ? "bg-red-50/30 dark:bg-red-950/10"
@@ -2063,14 +2122,52 @@ function MaterialOccurrenceEditor({
         </td>
       </tr>
       {isPerSubtype
-        ? displayRows.map((row, index) => (
+        ? visibleRows.map(({ row, index }) => (
             <tr
               key={`${material.material_key}-${row.subtype_id ?? "general"}-${index}`}
               className={`${quantityClass(row.quantity)} hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors`}
             >
               <td className="px-2 py-1">
-                <div style={{ paddingLeft: `${14 + row.subtype_depth * 14}px` }} className="font-medium text-zinc-800 dark:text-zinc-300">
-                  {row.subtype}
+                <div
+                  style={{ paddingLeft: `${14 + row.subtype_depth * 14}px` }}
+                  className="flex items-center gap-1 font-medium text-zinc-800 dark:text-zinc-300"
+                >
+                  {row.subtype_id !== null && subtypeBranches.has(row.subtype_id) ? (
+                    <button
+                      type="button"
+                      aria-expanded={expandedSubtypeIds.has(row.subtype_id)}
+                      aria-label={`${expandedSubtypeIds.has(row.subtype_id) ? "Colapsar" : "Expandir"} subtipos de ${row.subtype}`}
+                      title={expandedSubtypeIds.has(row.subtype_id) ? "Colapsar subtipos" : "Expandir subtipos"}
+                      onClick={() => {
+                        setExpandedSubtypeIds((current) => {
+                          const next = new Set(current);
+                          if (next.has(row.subtype_id as number)) {
+                            next.delete(row.subtype_id as number);
+                          } else {
+                            next.add(row.subtype_id as number);
+                          }
+                          return next;
+                        });
+                      }}
+                      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-black/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white"
+                    >
+                      <i
+                        className={`ph-bold ${expandedSubtypeIds.has(row.subtype_id) ? "ph-caret-down" : "ph-caret-right"} text-[10px]`}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : (
+                    <span className="inline-block h-4 w-4 shrink-0" />
+                  )}
+                  <span>{row.subtype}</span>
+                  {row.subtype_id !== null &&
+                  subtypeBranches.has(row.subtype_id) &&
+                  !expandedSubtypeIds.has(row.subtype_id) ? (
+                    <span className="rounded-full bg-zinc-100 px-1.5 py-px text-[9px] font-normal text-zinc-500 dark:bg-white/10 dark:text-zinc-400">
+                      {subtypeBranches.get(row.subtype_id)?.descendantCount} subtipos{" "}
+                      {subtypeBranches.get(row.subtype_id)?.uniform ? "iguales" : "ocultos"}
+                    </span>
+                  ) : null}
                 </div>
                 {row.inherited_from_subtype ? (
                   <div style={{ paddingLeft: `${14 + row.subtype_depth * 14}px` }} className="text-[9px] text-zinc-500">
@@ -2610,6 +2707,8 @@ function InstanceCard({
   expandAll,
   instance,
   focused,
+  incomingOccurrenceSourceIds,
+  onSelectInstance,
   readOnly,
   subtypeOptions,
   targetOptions,
@@ -2633,6 +2732,8 @@ function InstanceCard({
   instance: ProjectInstance;
   expandAll: boolean | null;
   focused: boolean;
+  incomingOccurrenceSourceIds: ReadonlyMap<number, number>;
+  onSelectInstance: (instanceId: number) => void;
   readOnly: boolean;
   subtypeOptions: FlatSubtype[];
   targetOptions: TargetOption[];
@@ -2846,12 +2947,14 @@ function InstanceCard({
                     <i className="ph-bold ph-arrow-bend-up-left text-zinc-600" /> Referenciado aquí
                   </h6>
                   <ul className="max-h-44 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
-                    {instance.incoming_occurrences.map((occurrence, index) =>
-                      renderOccurrenceSummary(occurrence, index, {
+                    {instance.incoming_occurrences.map((occurrence, index) => {
+                      const sourceInstanceId = incomingOccurrenceSourceIds.get(occurrence.id);
+                      return renderOccurrenceSummary(occurrence, index, {
                         primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index, instance.incoming_occurrences),
                         showRelationshipType: false,
-                      }),
-                    )}
+                        onClick: sourceInstanceId === undefined ? undefined : () => onSelectInstance(sourceInstanceId),
+                      });
+                    })}
                   </ul>
                 </div>
               ) : null}
@@ -3623,7 +3726,14 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         type: instance.type,
       })),
   );
-
+  const incomingOccurrenceSourceIds = new Map<number, number>();
+  for (const category of data.categories) {
+    for (const sourceInstance of category.instances) {
+      for (const occurrence of sourceInstance.outgoing_occurrences) {
+        incomingOccurrenceSourceIds.set(occurrence.id, sourceInstance.id);
+      }
+    }
+  }
   function selectInstance(instanceId: number) {
     pendingInstanceScrollRef.current = instanceId;
     setFocusedInstanceId(instanceId);
@@ -3695,6 +3805,8 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
                         instance={instance}
                         focused={focusedInstanceId === instance.id}
                         expandAll={allItemsExpanded}
+                        incomingOccurrenceSourceIds={incomingOccurrenceSourceIds}
+                        onSelectInstance={selectInstance}
                         readOnly={readOnly}
                         subtypeOptions={flatSubtypeOptions}
                         targetOptions={targetOptions.filter(
