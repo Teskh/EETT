@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 export function SearchField({
   value,
   onChange,
-  placeholder = "Buscar categorías, ítems o accesorios...",
+  placeholder = "Buscar categorías, ítems, accesorios o SKU de material...",
 }: {
   value: string;
   onChange: (value: string) => void;

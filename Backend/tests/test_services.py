@@ -367,6 +367,9 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertIn("Windows", child_names)
         windows_node = next(child for child in data["tree"][0]["children"] if child["name"] == "Windows")
         self.assertTrue(any(component["name"] == "Sliding Window" for component in windows_node["components"]))
+        doors_node = next(child for child in data["tree"][0]["children"] if child["name"] == "Doors")
+        entry_door = next(component for component in doors_node["components"] if component["name"] == "Entry Door")
+        self.assertIn("MAT-001", entry_door["material_skus"])
 
     def test_catalog_create_helpers_persist_new_records(self) -> None:
         with self.session_factory() as session:

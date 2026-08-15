@@ -714,6 +714,7 @@ export type CatalogTreeComponent = {
   name: string;
   short_name: string | null;
   type: string;
+  material_skus: string[];
 };
 
 export type CatalogTreeNode = {

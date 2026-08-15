@@ -160,7 +160,9 @@ function ProjectCategoryTree({
         .filter((node) => projectTreeMatches(node, filterTerm))
         .map((node) => {
           const matchingInstances = normalizeSearchText(filterTerm)
-            ? node.instances.filter((instance) => matchesSearchText(filterTerm, instance.name, instance.short_name))
+            ? node.instances.filter((instance) =>
+                matchesSearchText(filterTerm, instance.name, instance.short_name, ...instance.materials.map((material) => material.sku)),
+              )
             : [];
           return (
             <li key={node.id}>
@@ -222,7 +224,11 @@ function ProjectCategoryTree({
 export function projectTreeMatches(node: CategoryNode, term: string): boolean {
   return searchTreeBranchMatches(node, term, (current) => [
     current.name,
-    ...current.instances.flatMap((instance) => [instance.name, instance.short_name]),
+    ...current.instances.flatMap((instance) => [
+      instance.name,
+      instance.short_name,
+      ...instance.materials.map((material) => material.sku),
+    ]),
   ]);
 }
 
@@ -1204,6 +1210,39 @@ function getSyncStatusMeta(status: string) {
   }
 }
 
+function translateMaterialSourceLabel(sourceStatus: string, sourceLabel: string | null | undefined) {
+  if (sourceStatus === "manual") {
+    return "Agregado directamente a esta instancia.";
+  }
+
+  if (sourceStatus === "missing") {
+    return "Definido en el catálogo, pero no agregado a esta instancia.";
+  }
+
+  if (sourceStatus === "stale") {
+    const staleTranslations: Record<string, string> = {
+      "Catalog material rule was removed after this project row was created.": "La regla de material del catálogo fue eliminada después de crear esta fila del proyecto.",
+      "Catalog material rule no longer applies to this instance.": "La regla de material del catálogo ya no aplica a esta instancia.",
+    };
+    if (sourceLabel && staleTranslations[sourceLabel]) {
+      return staleTranslations[sourceLabel];
+    }
+    return "La regla de material del catálogo está desactualizada para esta instancia.";
+  }
+
+  return sourceLabel || null;
+}
+
+function translateMaterialSourceStatus(status: string) {
+  const translations: Record<string, string> = {
+    manual: "Manual",
+    missing: "Faltante",
+    stale: "Desactualizado",
+  };
+
+  return translations[status] || status;
+}
+
 function translateRelationshipType(type: string) {
   const translations: Record<string, string> = {
     applied_to: "Aplicado a",
@@ -1925,24 +1964,24 @@ function MaterialOccurrenceEditor({
   const statusBadge =
     material.source_status === "manual" ? (
       <span
-        title={material.source_label || "Material agregado manualmente"}
+        title={translateMaterialSourceLabel(material.source_status, material.source_label) || "Material agregado manualmente"}
         className="flex items-center gap-1 px-1.5 py-px rounded-full border border-sky-200 dark:border-sky-500/20 bg-sky-50 dark:bg-sky-500/10 text-[9px] font-semibold tracking-wide text-sky-700 dark:text-sky-300"
       >
         <i className="ph-bold ph-hand-pointing" /> Manual
       </span>
     ) : material.source_status === "missing" ? (
       <span
-        title={material.source_label || "Material faltante en el catálogo"}
+        title={translateMaterialSourceLabel(material.source_status, material.source_label) || "Material faltante en el catálogo"}
         className="flex items-center gap-1 px-1.5 py-px rounded-full border border-red-200 dark:border-red-500/20 bg-red-50 dark:bg-red-500/10 text-[9px] font-semibold tracking-wide text-red-700 dark:text-red-300"
       >
         <i className="ph-bold ph-warning" /> Faltante
       </span>
     ) : material.source_status !== "catalog" ? (
       <span
-        title={material.source_label || undefined}
+        title={translateMaterialSourceLabel(material.source_status, material.source_label) || undefined}
         className="flex items-center gap-1 px-1.5 py-px rounded-full border border-amber-200 dark:border-amber-500/20 bg-amber-50 dark:bg-amber-500/10 text-[9px] font-semibold tracking-wide text-amber-700 dark:text-amber-300"
       >
-        {material.source_status}
+        {translateMaterialSourceStatus(material.source_status)}
       </span>
     ) : null;
 
@@ -2163,7 +2202,7 @@ function MaterialOccurrenceEditor({
                   {row.subtype_id !== null &&
                   subtypeBranches.has(row.subtype_id) &&
                   !expandedSubtypeIds.has(row.subtype_id) ? (
-                    <span className="rounded-full bg-zinc-100 px-1.5 py-px text-[9px] font-normal text-zinc-500 dark:bg-white/10 dark:text-zinc-400">
+                    <span className="text-[9px] font-normal text-zinc-400 dark:text-zinc-500">
                       {subtypeBranches.get(row.subtype_id)?.descendantCount} subtipos{" "}
                       {subtypeBranches.get(row.subtype_id)?.uniform ? "iguales" : "ocultos"}
                     </span>

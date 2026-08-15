@@ -29,12 +29,14 @@ const deeplyNestedCatalog: CatalogTreeNode = {
               name: "Manilla Tubular Negra",
               short_name: "MTN-01",
               type: "accessory",
+              material_skus: ["MAT-MANILLA-01"],
             },
             {
               id: 11,
               name: "Cartón Corrugado",
               short_name: null,
               type: "item",
+              material_skus: [],
             },
           ],
           children: [],
@@ -52,6 +54,10 @@ describe("catalog tree search", () => {
   it("matches items and accessories by full or short name", () => {
     expect(treeMatches(deeplyNestedCatalog, "manilla tubular")).toBe(true);
     expect(treeMatches(deeplyNestedCatalog, "mtn-01")).toBe(true);
+  });
+
+  it("matches items and accessories by material SKU", () => {
+    expect(treeMatches(deeplyNestedCatalog, "mat-manilla-01")).toBe(true);
   });
 
   it("excludes branches without a category or component match", () => {

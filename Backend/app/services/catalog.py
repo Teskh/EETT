@@ -605,6 +605,7 @@ def _serialize_category_node(
                 "name": component.name,
                 "short_name": component.short_name,
                 "type": component.component_type.value,
+                "material_skus": sorted({rule.material.sku for rule in component.material_rules}, key=str.casefold),
             }
             for component in sorted(category.components, key=lambda item: item.name.casefold())
         ],

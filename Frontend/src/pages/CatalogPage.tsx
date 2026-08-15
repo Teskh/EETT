@@ -78,13 +78,13 @@ function formatCondition(rule: CatalogMaterialRule) {
 }
 
 function componentMatches(component: CatalogTreeComponent, term: string): boolean {
-  return matchesSearchText(term, component.name, component.short_name);
+  return matchesSearchText(term, component.name, component.short_name, ...component.material_skus);
 }
 
 export function treeMatches(node: CatalogTreeNode, term: string): boolean {
   return searchTreeBranchMatches(node, term, (current) => [
     current.name,
-    ...current.components.flatMap((component) => [component.name, component.short_name]),
+    ...current.components.flatMap((component) => [component.name, component.short_name, ...component.material_skus]),
   ]);
 }
 
@@ -528,6 +528,7 @@ function toTreeComponent(component: CatalogComponent): CatalogTreeComponent {
     name: component.name,
     short_name: component.short_name,
     type: component.type,
+    material_skus: [...new Set(component.material_rules.map((rule) => rule.sku))].sort(),
   };
 }
 
