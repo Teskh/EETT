@@ -1403,10 +1403,12 @@ def create_project_instance_occurrence(
     if instance is None:
         return None
 
+    normalized_context_label = _normalize_occurrence_context_label(context_label, target_instance_id)
+
     occurrence = ProjectInstanceOccurrence(
         source_instance=instance,
         relationship_type=(relationship_type or "").strip() or "uses",
-        context_label=(context_label or "").strip() or None,
+        context_label=normalized_context_label,
         context_notes=None,
         sort_order=(instance.outgoing_occurrences[-1].sort_order + 1) if instance.outgoing_occurrences else 1,
     )
@@ -1471,9 +1473,11 @@ def update_project_instance_occurrence(
     if occurrence is None:
         return None
 
+    normalized_context_label = _normalize_occurrence_context_label(context_label, target_instance_id)
+
     previous_snapshot = _occurrence_snapshot(occurrence)
     occurrence.relationship_type = (relationship_type or "").strip() or occurrence.relationship_type or "uses"
-    occurrence.context_label = (context_label or "").strip() or None
+    occurrence.context_label = normalized_context_label
     occurrence.context_notes = None
     _replace_occurrence_target(
         session,
@@ -2884,6 +2888,13 @@ def _replace_occurrence_target(
             sort_order=1,
         )
     )
+
+
+def _normalize_occurrence_context_label(context_label: str | None, target_instance_id: int | None) -> str | None:
+    normalized_context_label = (context_label or "").strip() or None
+    if target_instance_id is None and normalized_context_label is None:
+        raise ValueError("An application requires a target item or a location description.")
+    return normalized_context_label
 
 
 def _replace_occurrence_attribute_values(

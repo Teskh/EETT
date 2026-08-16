@@ -919,7 +919,7 @@ function InstanceFormModal({
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Descripción Corta</label>
+          <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">Descripción Comercial</label>
           <textarea
             value={shortDescription}
             onChange={(event) => setShortDescription(event.target.value)}
@@ -1101,8 +1101,12 @@ function LinkedAccessoryCategoryModal({
   );
 }
 
+function getOccurrenceDestinationMode(occurrence?: UsageOccurrence): "item" | "location" {
+  return occurrence?.targets[0] ? "item" : "location";
+}
+
 function getOccurrencePrimaryLabel(occurrence: UsageOccurrence) {
-  return occurrence.context_label || occurrence.targets[0]?.instance_name || "Ocurrencia de uso";
+  return occurrence.targets[0]?.instance_name || occurrence.context_label || "Aplicación sin destino";
 }
 
 function getIncomingOccurrencePrimaryLabel(
@@ -1125,7 +1129,7 @@ function getIncomingOccurrencePrimaryLabel(
   const ordinalFallbackIndex = matchingLinks.length ? occurrenceOrdinal : index;
   const fallbackLink = matchingLinks[ordinalFallbackIndex] || instance.linked_accessories[index];
 
-  return matchingLink?.name || fallbackLink?.name || occurrence.context_label || "Ocurrencia de uso";
+  return matchingLink?.name || fallbackLink?.name || occurrence.context_label || "Aplicación sin destino";
 }
 
 function renderOccurrenceSummary(
@@ -1134,10 +1138,15 @@ function renderOccurrenceSummary(
   options?: {
     primaryLabel?: string;
     showRelationshipType?: boolean;
+    showContextLabel?: boolean;
     onClick?: () => void;
   },
 ) {
   const primaryLabel = options?.primaryLabel || getOccurrencePrimaryLabel(occurrence);
+  const targetName = occurrence.targets[0]?.instance_name || null;
+  const secondaryContext = options?.showContextLabel !== false && targetName && occurrence.context_label !== targetName
+    ? occurrence.context_label
+    : null;
 
   return (
     <li
@@ -1162,6 +1171,9 @@ function renderOccurrenceSummary(
         <span className="text-[10px] uppercase tracking-widest font-mono text-zinc-400 dark:text-zinc-500">
           {translateRelationshipType(occurrence.relationship_type)}
         </span>
+      ) : null}
+      {secondaryContext ? (
+        <span className="text-[11px] text-zinc-500 dark:text-zinc-400">· {secondaryContext}</span>
       ) : null}
       {occurrence.attributes.length ? (
         <span className="font-mono text-[10px] text-zinc-500 dark:text-zinc-400">
@@ -1260,7 +1272,7 @@ function translateProjectDetailLabel(label: string | null | undefined) {
     name: "Nombre",
     "short name": "Nombre comercial",
     description: "Descripción",
-    "short description": "Descripción corta",
+    "short description": "Descripción comercial",
     installation: "Instalación",
     text: "Texto",
     number: "Número",
@@ -1585,23 +1597,33 @@ function OccurrenceEditorCard({
   onDelete?: () => Promise<void>;
   saveLabel: string;
 }) {
-  const [contextLabel, setContextLabel] = useState(occurrence?.context_label || "");
+  const initialDestinationMode = getOccurrenceDestinationMode(occurrence);
+  const [destinationMode, setDestinationMode] = useState<"item" | "location">(initialDestinationMode);
+  const [itemContextLabel, setItemContextLabel] = useState(initialDestinationMode === "item" ? occurrence?.context_label || "" : "");
+  const [locationLabel, setLocationLabel] = useState(initialDestinationMode === "location" ? occurrence?.context_label || "" : "");
   const [targetInstanceId, setTargetInstanceId] = useState<string>(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
   const [attributes, setAttributes] = useState<EditableAttribute[]>(() => buildOccurrenceAttributeDrafts(instance, occurrence));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setContextLabel(occurrence?.context_label || "");
+    const nextDestinationMode = getOccurrenceDestinationMode(occurrence);
+    setDestinationMode(nextDestinationMode);
+    setItemContextLabel(nextDestinationMode === "item" ? occurrence?.context_label || "" : "");
+    setLocationLabel(nextDestinationMode === "location" ? occurrence?.context_label || "" : "");
     setTargetInstanceId(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
     setAttributes(buildOccurrenceAttributeDrafts(instance, occurrence));
     setError(null);
   }, [instance, occurrence]);
 
   async function handleSave() {
-    const trimmedContextLabel = contextLabel.trim();
-    if (!targetInstanceId && !trimmedContextLabel) {
-      setError("Selecciona un ítem vinculado o ingresa una ubicación libre.");
+    const trimmedContextLabel = (destinationMode === "item" ? itemContextLabel : locationLabel).trim();
+    if (destinationMode === "item" && !targetInstanceId) {
+      setError("Selecciona el ítem de destino.");
+      return;
+    }
+    if (destinationMode === "location" && !trimmedContextLabel) {
+      setError("Describe la ubicación o el elemento donde se aplica el accesorio.");
       return;
     }
 
@@ -1610,22 +1632,22 @@ function OccurrenceEditorCard({
     try {
       await onSave({
         relationship_type: occurrence?.relationship_type || "uses",
-        context_label: targetInstanceId ? null : trimmedContextLabel || null,
-        target_instance_id: targetInstanceId ? Number(targetInstanceId) : null,
+        context_label: trimmedContextLabel || null,
+        target_instance_id: destinationMode === "item" ? Number(targetInstanceId) : null,
         attribute_values: attributes.map((attribute) => ({
           name: attribute.name,
           value: (attribute.value || "").trim() || null,
         })),
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar el uso.");
+      setError(err instanceof Error ? err.message : "No se pudo guardar la aplicación.");
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete() {
-    if (!onDelete || !window.confirm("¿Eliminar este uso?")) {
+    if (!onDelete || !window.confirm("¿Eliminar esta aplicación?")) {
       return;
     }
     setSaving(true);
@@ -1633,47 +1655,86 @@ function OccurrenceEditorCard({
     try {
       await onDelete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo eliminar el uso.");
+      setError(err instanceof Error ? err.message : "No se pudo eliminar la aplicación.");
       setSaving(false);
     }
   }
 
   return (
     <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="flex flex-col gap-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ítem Vinculado</label>
-          <select
-            value={targetInstanceId}
-            onChange={(event) => {
-              setTargetInstanceId(event.target.value);
-              if (event.target.value) {
-                setContextLabel("");
-              }
-            }}
-            className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
-          >
-            <option value="">Sin ítem vinculado</option>
-            {targetOptions.map((target) => (
-              <option key={target.instance_id} value={target.instance_id}>
-                {target.instance_name} ({target.category_name})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ubicación Libre</label>
-          <input
-            value={contextLabel}
-            disabled={Boolean(targetInstanceId)}
-            onChange={(event) => setContextLabel(event.target.value)}
-            placeholder="Ej. unión entre muro de cocina y cielo"
-            className="w-full rounded border border-black/10 dark:border-white/10 bg-white disabled:bg-zinc-100 dark:bg-black/30 dark:disabled:bg-white/5 px-2 py-1.5 text-sm disabled:text-zinc-500"
-          />
-          <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
-            {targetInstanceId ? "Limpia el ítem vinculado para escribir una ubicación libre." : "Usa esto cuando el uso no apunta a un ítem del proyecto."}
+      <div className="space-y-3">
+        <fieldset className="space-y-1.5">
+          <legend className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">¿Dónde se aplica?</legend>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${destinationMode === "item" ? "border-accent-500/60 bg-accent-500/10" : "border-black/10 bg-white dark:border-white/10 dark:bg-black/20"}`}>
+              <input
+                type="radio"
+                name={`occurrence-destination-${instance.id}-${occurrence?.id || "new"}`}
+                checked={destinationMode === "item"}
+                onChange={() => setDestinationMode("item")}
+                className="mt-0.5"
+              />
+              <span>
+                <strong className="block text-zinc-900 dark:text-zinc-100">A un ítem del proyecto</strong>
+                <span className="text-[11px] text-zinc-500">Puerta, muro, artefacto u otro ítem existente.</span>
+              </span>
+            </label>
+            <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${destinationMode === "location" ? "border-accent-500/60 bg-accent-500/10" : "border-black/10 bg-white dark:border-white/10 dark:bg-black/20"}`}>
+              <input
+                type="radio"
+                name={`occurrence-destination-${instance.id}-${occurrence?.id || "new"}`}
+                checked={destinationMode === "location"}
+                onChange={() => setDestinationMode("location")}
+                className="mt-0.5"
+              />
+              <span>
+                <strong className="block text-zinc-900 dark:text-zinc-100">En otra ubicación</strong>
+                <span className="text-[11px] text-zinc-500">Lugar o elemento que no existe como ítem del proyecto.</span>
+              </span>
+            </label>
           </div>
-        </div>
+        </fieldset>
+
+        {destinationMode === "item" ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ítem de destino</label>
+              <select
+                value={targetInstanceId}
+                onChange={(event) => setTargetInstanceId(event.target.value)}
+                className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+              >
+                <option value="">Seleccionar ítem…</option>
+                {targetOptions.map((target) => (
+                  <option key={target.instance_id} value={target.instance_id}>
+                    {target.instance_name} ({target.category_name})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+                Detalle de la aplicación <span className="normal-case tracking-normal font-normal">(opcional)</span>
+              </label>
+              <input
+                value={itemContextLabel}
+                onChange={(event) => setItemContextLabel(event.target.value)}
+                placeholder="Ej. hoja izquierda o cara exterior"
+                className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ubicación o elemento</label>
+            <input
+              value={locationLabel}
+              onChange={(event) => setLocationLabel(event.target.value)}
+              placeholder="Ej. unión entre muro de cocina y cielo"
+              className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
+            />
+          </div>
+        )}
       </div>
 
       {attributes.length ? (
@@ -1744,65 +1805,172 @@ function OccurrenceEditorCard({
 
 function UsageManager({
   instance,
+  readOnly,
   targetOptions,
   onCreateOccurrence,
   onUpdateOccurrence,
   onDeleteOccurrence,
 }: {
   instance: ProjectInstance;
+  readOnly: boolean;
   targetOptions: TargetOption[];
   onCreateOccurrence: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onUpdateOccurrence: (occurrenceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onDeleteOccurrence: (occurrenceId: number) => Promise<void>;
 }) {
-  const [creating, setCreating] = useState(false);
+  const [editingOccurrenceId, setEditingOccurrenceId] = useState<number | "new" | null>(null);
+  const editingOccurrence = editingOccurrenceId === "new"
+    ? undefined
+    : instance.outgoing_occurrences.find((occurrence) => occurrence.id === editingOccurrenceId);
+  const attributeColumns = instance.usage_attribute_definitions.reduce<string[]>((columns, definition) => {
+    if (!columns.includes(definition.name)) {
+      columns.push(definition.name);
+    }
+    return columns;
+  }, []);
+  for (const occurrence of instance.outgoing_occurrences) {
+    for (const attribute of occurrence.attributes) {
+      if (!attributeColumns.includes(attribute.name)) {
+        attributeColumns.push(attribute.name);
+      }
+    }
+  }
+  const visibleAttributeColumns = attributeColumns.slice(0, 4);
+  const overflowAttributeColumns = attributeColumns.slice(4);
 
   return (
-    <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4">
-      <div className="flex items-center justify-between gap-3 mb-3">
+    <div className="rounded-lg border border-black/10 bg-white dark:border-white/10 dark:bg-black/20">
+      <div className="flex items-center justify-between gap-3 rounded-t-lg border-b border-black/10 px-3 py-2 dark:border-white/10">
         <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-          <i className="ph-bold ph-flow-arrow text-zinc-600" /> Usos
+          <i className="ph-bold ph-flow-arrow text-zinc-600" /> Aplicaciones
+          <span className="font-mono text-[10px] font-normal tracking-normal text-zinc-400">{instance.outgoing_occurrences.length}</span>
         </h6>
-        <button
-          type="button"
-          onClick={() => setCreating((current) => !current)}
-          className="px-3 py-1.5 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-xs font-semibold"
-        >
-          {creating ? "Cancelar" : "Agregar uso"}
-        </button>
+        {!readOnly ? (
+          <button
+            type="button"
+            onClick={() => setEditingOccurrenceId("new")}
+            className="inline-flex items-center gap-1 rounded border border-black/10 bg-zinc-50 px-2 py-1 text-[11px] font-semibold text-zinc-700 hover:border-accent-500/50 hover:text-zinc-900 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300 dark:hover:text-white"
+          >
+            <i className="ph-bold ph-plus" /> Agregar
+          </button>
+        ) : null}
       </div>
 
-      <div className="space-y-3">
-        {instance.outgoing_occurrences.map((occurrence) => (
-          <OccurrenceEditorCard
-            key={occurrence.id}
-            instance={instance}
-            occurrence={occurrence}
-            targetOptions={targetOptions}
-            saveLabel="Guardar uso"
-            onSave={(payload) => onUpdateOccurrence(occurrence.id, payload)}
-            onDelete={() => onDeleteOccurrence(occurrence.id)}
-          />
-        ))}
+      {instance.outgoing_occurrences.length ? (
+        <div>
+          <table className="w-full table-fixed border-collapse text-left text-xs">
+            <thead className="bg-zinc-50 text-[10px] uppercase tracking-wider text-zinc-500 dark:bg-white/5">
+              <tr>
+                <th className="w-[30%] border-b border-black/10 px-3 py-1.5 font-semibold dark:border-white/10">Destino</th>
+                {visibleAttributeColumns.map((name) => (
+                  <th key={name} className="whitespace-nowrap border-b border-l border-black/10 px-3 py-1.5 font-semibold dark:border-white/10">
+                    {name}
+                  </th>
+                ))}
+                {overflowAttributeColumns.length ? (
+                  <th className="w-16 border-b border-l border-black/10 px-2 py-1.5 text-center font-semibold dark:border-white/10">Otros</th>
+                ) : null}
+                {!readOnly ? <th className="w-9 border-b border-l border-black/10 px-1.5 py-1.5 dark:border-white/10"><span className="sr-only">Acciones</span></th> : null}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-black/10 dark:divide-white/10">
+              {instance.outgoing_occurrences.map((occurrence) => {
+                const targetName = occurrence.targets[0]?.instance_name || null;
+                const primaryDestination = targetName || occurrence.context_label || "Aplicación sin destino";
+                const detail = targetName && occurrence.context_label !== targetName ? occurrence.context_label : null;
+                return (
+                  <tr key={occurrence.id} className="group hover:bg-zinc-50/80 dark:hover:bg-white/[0.04]">
+                    <td className="max-w-80 px-3 py-1.5 text-zinc-900 dark:text-zinc-100">
+                      <div className="flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                        <i
+                          className={`ph-bold ${targetName ? "ph-cube" : "ph-map-pin"} shrink-0 text-[11px] text-zinc-400`}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate font-semibold" title={primaryDestination}>{primaryDestination}</span>
+                        {detail ? <span className="truncate text-zinc-500" title={detail}>· {detail}</span> : null}
+                      </div>
+                    </td>
+                    {visibleAttributeColumns.map((name) => {
+                      const value = occurrence.attributes.find((attribute) => attribute.name === name)?.value;
+                      return (
+                        <td key={`${occurrence.id}-${name}`} className="max-w-52 whitespace-nowrap border-l border-black/10 px-3 py-1.5 font-mono text-[11px] text-zinc-600 dark:border-white/10 dark:text-zinc-300">
+                          <span className="block truncate" title={value || undefined}>{value || "—"}</span>
+                        </td>
+                      );
+                    })}
+                    {overflowAttributeColumns.length ? (
+                      <td className="relative border-l border-black/10 px-2 py-1 text-center dark:border-white/10">
+                        <details className="relative inline-block text-left">
+                          <summary className="cursor-pointer list-none rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold text-accent-700 hover:bg-accent-500/10 dark:text-accent-400">
+                            +{overflowAttributeColumns.length}
+                          </summary>
+                          <div className="absolute right-0 top-full z-30 mt-1 w-56 border border-black/10 bg-white p-2 shadow-lg dark:border-white/10 dark:bg-zinc-900">
+                            {overflowAttributeColumns.map((name) => {
+                              const value = occurrence.attributes.find((attribute) => attribute.name === name)?.value;
+                              return (
+                                <div key={`${occurrence.id}-overflow-${name}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 border-b border-black/5 py-1 text-[11px] last:border-0 dark:border-white/10">
+                                  <span className="truncate text-zinc-500" title={name}>{name}</span>
+                                  <span className="truncate text-right font-mono text-zinc-900 dark:text-zinc-100" title={value || undefined}>{value || "—"}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </details>
+                      </td>
+                    ) : null}
+                    {!readOnly ? (
+                      <td className="border-l border-black/10 px-1.5 py-1 dark:border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => setEditingOccurrenceId(occurrence.id)}
+                          className="flex h-6 w-6 items-center justify-center rounded text-zinc-400 hover:bg-black/5 hover:text-accent-700 dark:hover:bg-white/10 dark:hover:text-accent-400"
+                          aria-label={`Editar aplicación en ${primaryDestination}`}
+                          title="Editar aplicación"
+                        >
+                          <i className="ph-bold ph-pencil-simple" aria-hidden="true" />
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="px-3 py-2 text-xs text-zinc-500">
+          Sin aplicaciones. El accesorio permanece independiente.
+        </div>
+      )}
 
-        {creating ? (
+      {!readOnly && editingOccurrenceId !== null ? (
+        <Modal
+          open
+          title={editingOccurrenceId === "new" ? "Agregar aplicación" : "Editar aplicación"}
+          kicker={instance.name}
+          onClose={() => setEditingOccurrenceId(null)}
+          panelClassName="max-w-4xl"
+        >
           <OccurrenceEditorCard
             instance={instance}
+            occurrence={editingOccurrence}
             targetOptions={targetOptions}
-            saveLabel="Crear uso"
+            saveLabel={editingOccurrenceId === "new" ? "Crear aplicación" : "Guardar aplicación"}
             onSave={async (payload) => {
-              await onCreateOccurrence(payload);
-              setCreating(false);
+              if (editingOccurrenceId === "new") {
+                await onCreateOccurrence(payload);
+              } else {
+                await onUpdateOccurrence(editingOccurrenceId, payload);
+              }
+              setEditingOccurrenceId(null);
+            }}
+            onDelete={editingOccurrenceId === "new" ? undefined : async () => {
+              await onDeleteOccurrence(editingOccurrenceId);
+              setEditingOccurrenceId(null);
             }}
           />
-        ) : null}
-
-        {!instance.outgoing_occurrences.length && !creating ? (
-          <div className="text-center py-4 text-xs text-zinc-500 font-mono border border-dashed border-black/10 dark:border-white/10 rounded">
-            Aún no hay usos definidos.
-          </div>
-        ) : null}
-      </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -2802,6 +2970,12 @@ function InstanceCard({
   const installationSync = getScalarSyncField(syncPreview, "installation");
   const attributeSchemaSync = syncPreview?.attribute_schema ?? null;
   const primaryMedia = instance.media[0] || null;
+  const displayedAttributeGroups = instance.type === "accessory"
+    ? instance.attributes.filter((group) => !group.application_label)
+    : instance.attributes;
+  const missingAttributes = attributeSchemaSync?.differences.filter((item) => item.status === "missing_in_instance") || [];
+  const extraAttributes = new Set(attributeSchemaSync?.differences.filter((item) => item.status === "extra_in_instance").map((item) => item.name) || []);
+  const showAttributePanel = displayedAttributeGroups.length > 0 || missingAttributes.length > 0;
 
   useEffect(() => {
     if (!readOnly && expanded && !syncPreview && !syncPreviewLoading) {
@@ -2910,7 +3084,7 @@ function InstanceCard({
       {expanded ? (
         <div className="border-t border-black/5 dark:border-white/5 bg-white dark:bg-black/40 p-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <div className="space-y-6">
+            <div className={`space-y-6 ${showAttributePanel ? "" : "lg:col-span-2"}`}>
               <div>
                 <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                   <i className="ph-bold ph-info text-zinc-600" /> Información
@@ -2943,15 +3117,15 @@ function InstanceCard({
                 </div>
                 <div className="mb-3">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción Corta</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Descripción Comercial</span>
                     {!readOnly ? <SyncIndicatorButton
                       status={shortDescriptionSync?.status}
-                      title="Ver detalles de sincronización de la descripción corta"
+                      title="Ver detalles de sincronización de la descripción comercial"
                       onClick={() => onOpenSyncModal("short_description")}
                     /> : null}
                   </div>
                   <p className={`text-xs ${shortDescriptionSync?.status === "customized" ? "text-sky-800 dark:text-sky-200 relative pl-3 before:absolute before:left-0 before:top-1 before:w-1.5 before:h-1.5 before:rounded-full before:bg-sky-400" : "text-zinc-600 dark:text-zinc-400"}`}>
-                    {instance.short_description || "Sin descripción corta."}
+                    {instance.short_description || "Sin descripción comercial."}
                   </p>
                 </div>
                 <div className="flex items-center gap-4 text-xs font-mono">
@@ -2961,18 +3135,10 @@ function InstanceCard({
                 </div>
               </div>
 
-              {instance.type === "accessory" && !readOnly ? (
-                <UsageManager
-                  instance={instance}
-                  targetOptions={targetOptions}
-                  onCreateOccurrence={onCreateOccurrence}
-                  onUpdateOccurrence={onUpdateOccurrence}
-                  onDeleteOccurrence={onDeleteOccurrence}
-                />
-              ) : instance.outgoing_occurrences.length ? (
+              {instance.type !== "accessory" && instance.outgoing_occurrences.length ? (
                 <div>
                   <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Resumen de usos
+                    <i className="ph-bold ph-flow-arrow text-zinc-600" /> Resumen de aplicaciones
                   </h6>
                   <ul className="max-h-44 overflow-y-auto divide-y divide-black/5 dark:divide-white/5">
                     {instance.outgoing_occurrences.map((occurrence, index) => renderOccurrenceSummary(occurrence, index))}
@@ -2991,6 +3157,7 @@ function InstanceCard({
                       return renderOccurrenceSummary(occurrence, index, {
                         primaryLabel: getIncomingOccurrencePrimaryLabel(instance, occurrence, index, instance.incoming_occurrences),
                         showRelationshipType: false,
+                        showContextLabel: false,
                         onClick: sourceInstanceId === undefined ? undefined : () => onSelectInstance(sourceInstanceId),
                       });
                     })}
@@ -3011,10 +3178,10 @@ function InstanceCard({
               </div>
             </div>
 
-            <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
+            {showAttributePanel ? <div className="bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded-lg p-4">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                  <i className="ph-bold ph-list-dashes text-zinc-600" /> Atributos
+                  <i className="ph-bold ph-list-dashes text-zinc-600" /> {instance.type === "accessory" ? "Atributos base" : "Atributos"}
                 </h5>
                 {!readOnly ? <SyncIndicatorButton
                   status={attributeSchemaSync?.status}
@@ -3023,14 +3190,9 @@ function InstanceCard({
                 /> : null}
               </div>
               
-              {(() => {
-                const missingAttributes = attributeSchemaSync?.differences.filter((item) => item.status === "missing_in_instance") || [];
-                const extraAttributes = new Set(attributeSchemaSync?.differences.filter((item) => item.status === "extra_in_instance").map(d => d.name) || []);
-
-                return (
-                  <>
-                    {instance.attributes.length ? (
-                      instance.attributes.map((group) => (
+              <>
+                    {displayedAttributeGroups.length ? (
+                      displayedAttributeGroups.map((group) => (
                         <div key={`${instance.id}-${group.name}`} className="mb-4 last:mb-0">
                           <h5 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
                             <i className="ph-bold ph-list-dashes text-zinc-600" /> {translateProjectDetailLabel(group.name)}
@@ -3076,11 +3238,22 @@ function InstanceCard({
                         </table>
                       </div>
                     )}
-                  </>
-                );
-              })()}
-            </div>
+              </>
+            </div> : null}
           </div>
+
+          {instance.type === "accessory" ? (
+            <div className="mb-6">
+              <UsageManager
+                instance={instance}
+                readOnly={readOnly}
+                targetOptions={targetOptions}
+                onCreateOccurrence={onCreateOccurrence}
+                onUpdateOccurrence={onUpdateOccurrence}
+                onDeleteOccurrence={onDeleteOccurrence}
+              />
+            </div>
+          ) : null}
 
           {!readOnly ? <div className="border-t border-black/10 dark:border-white/10 pt-4">
             <button
@@ -3633,7 +3806,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         );
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "No se pudo crear el uso.";
+      const message = err instanceof ApiError ? err.message : "No se pudo crear la aplicación.";
       setError(message);
       throw err;
     }
@@ -3653,7 +3826,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         );
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "No se pudo actualizar el uso.";
+      const message = err instanceof ApiError ? err.message : "No se pudo actualizar la aplicación.";
       setError(message);
       throw err;
     }
@@ -3665,7 +3838,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
       await api.deleteProjectOccurrence(projectId, instanceId, occurrenceId);
       setData((current) => (current ? removeOccurrenceFromProject(current, instanceId, occurrenceId) : current));
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : "No se pudo eliminar el uso.";
+      const message = err instanceof ApiError ? err.message : "No se pudo eliminar la aplicación.";
       setError(message);
       throw err;
     }

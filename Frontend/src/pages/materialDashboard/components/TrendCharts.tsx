@@ -39,9 +39,9 @@ function SelectionClipPath({ id, frame, edges }: { id: string; frame: ChartFrame
       <clipPath id={id}>
         <rect
           x={Math.min(edges.start.x, edges.end.x)}
-          y={frame.padding.top}
+          y={0}
           width={Math.max(Math.abs(edges.end.x - edges.start.x), 0.001)}
-          height={frame.plotHeight}
+          height={frame.height}
         />
       </clipPath>
     </defs>
@@ -293,7 +293,6 @@ export function HouseTrendChart({
       {...pointerHandlers}
     >
       <title>Comparación de stock e inicios de vivienda</title>
-      <PlotClipPath id="house-plot-clip" frame={chart} />
       <SelectionClipPath id="house-selection-clip" frame={chart} edges={selectionEdges} />
       <rect
         x={chart.padding.left}
@@ -324,7 +323,7 @@ export function HouseTrendChart({
         );
       })}
       <SelectionRegion frame={chart} edges={selectionEdges} fill="rgba(51, 65, 85, 0.08)" stroke="rgba(51, 65, 85, 0.45)" />
-      <g clipPath="url(#house-plot-clip)" opacity={dimmed} className="transition-opacity duration-300">
+      <g opacity={dimmed} className="transition-opacity duration-300">
         <HouseSeriesPaths chart={chart} strokeWidth={3} />
       </g>
       {selectionBounds ? (

@@ -392,7 +392,7 @@ function ComponentCard({ component, focused, onComponentSaved, onComponentDelete
                   value={form.short_description || ""}
                   onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))}
                   rows={2}
-                  placeholder="Descripción corta"
+                  placeholder="Descripción comercial"
                   className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
                 />
                 <textarea
@@ -810,7 +810,7 @@ function AddComponentModal({ open, onClose, form, setForm, saving, onSubmit }: {
             <input value={form.unit_type || ""} onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))} placeholder="Unidad (m2, set)" className="w-1/2 bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
           </div>
           <textarea value={form.description || ""} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} rows={2} placeholder="Descripción" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
-          <textarea value={form.short_description || ""} onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))} rows={2} placeholder="Descripción corta" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
+          <textarea value={form.short_description || ""} onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))} rows={2} placeholder="Descripción comercial" className="description-textarea w-full bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-sm font-semibold text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-white/5 transition-colors">Cancelar</button>

@@ -81,6 +81,7 @@ from app.services.material_groups import (
     update_material_study_group,
 )
 from app.services.projects import (
+    _normalize_occurrence_context_label,
     _visible_project_subtype_rows,
     create_project_instance,
     get_instance_sync_preview,
@@ -313,6 +314,16 @@ class ExportProjectionTests(unittest.TestCase):
             for row_index in range(2, totals.max_row + 1)
         }
         self.assertEqual(quantities_by_subtype, {"Premium": 5, "Standard": 3})
+
+
+class OccurrenceDestinationValidationTests(unittest.TestCase):
+    def test_requires_a_target_item_or_location(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires a target item or a location description"):
+            _normalize_occurrence_context_label("   ", None)
+
+    def test_preserves_optional_detail_for_a_targeted_application(self) -> None:
+        self.assertEqual(_normalize_occurrence_context_label("  Hoja izquierda  ", 12), "Hoja izquierda")
+        self.assertIsNone(_normalize_occurrence_context_label(None, 12))
 
 
 class ServiceLayerTests(unittest.TestCase):
@@ -1142,6 +1153,19 @@ class ServiceLayerTests(unittest.TestCase):
         assert caulking_instance is not None
         assert toilet_instance is not None
 
+        invalid_response = self.client.post(
+            f"/api/v1/projects/2/instances/{caulking_instance.id}/occurrences",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "relationship_type": "seals",
+                "context_label": "   ",
+                "target_instance_id": None,
+                "attribute_values": [],
+            },
+        )
+        self.assertEqual(invalid_response.status_code, 422)
+        self.assertEqual(invalid_response.json()["detail"], "An application requires a target item or a location description.")
+
         create_response = self.client.post(
             f"/api/v1/projects/2/instances/{caulking_instance.id}/occurrences",
             headers={"X-Spec-Sheets-User": "editor"},
@@ -1165,6 +1189,7 @@ class ServiceLayerTests(unittest.TestCase):
         caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
         created_occurrence = next(item for item in caulking_payload["outgoing_occurrences"] if item["id"] == occurrence_id)
         self.assertEqual(created_occurrence["targets"][0]["instance_id"], toilet_instance.id)
+        self.assertEqual(created_occurrence["context_label"], "Mirror splashback return")
         self.assertEqual(created_occurrence["attributes"][1]["name"], "Applicability")
 
         update_response = self.client.put(

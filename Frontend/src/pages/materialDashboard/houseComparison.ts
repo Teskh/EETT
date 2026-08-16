@@ -186,23 +186,35 @@ export function buildHouseComparisonChart(
       x,
       stockValue: stockValueByDay.get(pointTime) ?? null,
       projectedStockValue: projectedPoint?.projectedStockValue ?? null,
-      remainingHouseStarts: Math.max(totalHouseStarts - (point.cumulative_house_starts - point.house_starts), 0),
+      // Stock values represent the end of each day, so keep the house series
+      // on the same boundary: starts remaining after that day's starts.
+      remainingHouseStarts: Math.max(totalHouseStarts - point.cumulative_house_starts, 0),
     };
   });
   const combinedStockValues = chartPoints.flatMap((point) =>
     [point.stockValue, point.projectedStockValue].filter((value): value is number => value !== null),
   );
-  const maxStock = Math.max(...combinedStockValues, stockAxisCeiling ?? Number.NEGATIVE_INFINITY, 1);
-  const minStock = Math.max(finalStock, 0);
+  const projectedStockValues = chartPoints
+    .map((point) => point.projectedStockValue)
+    .filter((value): value is number => value !== null);
+  const projectedStart = projectedStockValues[0] ?? null;
+  const projectedEnd = projectedStockValues[projectedStockValues.length - 1] ?? null;
+  const hasProjectedReference = projectedStart !== null && projectedEnd !== null && projectedStart > projectedEnd;
+  // In house-comparison mode the expected curve is the reference. Its first
+  // and last values define the axis so it always runs from the top-left to the
+  // bottom-right. Actual stock shares that frame and is free to deviate.
+  const maxStock = hasProjectedReference
+    ? projectedStart
+    : Math.max(...combinedStockValues, stockAxisCeiling ?? Number.NEGATIVE_INFINITY, 1);
+  const minStock = hasProjectedReference ? projectedEnd : Math.max(finalStock, 0);
   const stockRange = Math.max(maxStock - minStock, 1);
   const maxRemainingHouseStarts = Math.max(...chartPoints.map((point) => point.remainingHouseStarts), 1);
   const toStockY = (value: number) => padding.top + plotHeight - ((value - minStock) / stockRange) * plotHeight;
-  const clampPlotY = (value: number) => Math.min(padding.top + plotHeight, Math.max(padding.top, value));
   const positionedPoints: HouseTrendChartPoint[] = chartPoints.map((point) => ({
     ...point,
-    stockY: point.stockValue !== null ? clampPlotY(toStockY(point.stockValue)) : null,
-    projectedStockY: point.projectedStockValue !== null ? clampPlotY(toStockY(point.projectedStockValue)) : null,
-    houseY: clampPlotY(padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight),
+    stockY: point.stockValue !== null ? toStockY(point.stockValue) : null,
+    projectedStockY: point.projectedStockValue !== null ? toStockY(point.projectedStockValue) : null,
+    houseY: padding.top + plotHeight - (point.remainingHouseStarts / maxRemainingHouseStarts) * plotHeight,
   }));
 
   return {
