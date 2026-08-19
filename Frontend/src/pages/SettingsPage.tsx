@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
-import type { BackupRecord, BackupSettings } from "../lib/types";
+import type { BackupRecord, BackupSettings, DatabaseSyncStatus } from "../lib/types";
 import { UsersPage } from "./UsersPage";
 
 type SettingsPageProps = {
@@ -33,6 +33,13 @@ function formatDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function isLoopbackHostname() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname.toLowerCase());
+}
+
 function BackupPanel() {
   const [settings, setSettings] = useState<BackupSettings | null>(null);
   const [draft, setDraft] = useState<BackupSettings | null>(null);
@@ -44,6 +51,9 @@ function BackupPanel() {
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const localSyncVisible = isLoopbackHostname();
+  const [syncStatus, setSyncStatus] = useState<DatabaseSyncStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   async function refresh(showSpinner = true) {
     if (showSpinner) {
@@ -55,6 +65,17 @@ function BackupPanel() {
       setSettings(nextSettings);
       setDraft(nextSettings);
       setBackups(nextBackups);
+      if (localSyncVisible) {
+        try {
+          setSyncStatus(await api.getDatabaseSyncStatus());
+        } catch (err) {
+          setSyncStatus({
+            available: false,
+            source_url: "",
+            reason: err instanceof ApiError ? err.message : "No se pudo comprobar la conexion con produccion.",
+          });
+        }
+      }
     } catch (err) {
       setMessage(err instanceof ApiError ? err.message : "No se pudieron cargar las copias.");
     } finally {
@@ -140,6 +161,27 @@ function BackupPanel() {
       setRestoring(null);
     }
   }
+  async function syncFromProduction() {
+    const confirmation = window.prompt(
+      "Esto reemplazara toda la base de datos local con produccion. Se creara una copia de control primero. Escribe SINCRONIZAR para continuar.",
+    );
+    if (confirmation !== "SINCRONIZAR") {
+      return;
+    }
+    setSyncing(true);
+    setMessage(null);
+    try {
+      const response = await api.syncDatabaseFromProduction();
+      window.alert(
+        `Sincronizacion completa. La copia de control es "${response.checkpoint_backup.filename}". La aplicacion se recargara.`,
+      );
+      window.location.reload();
+    } catch (err) {
+      setMessage(err instanceof ApiError ? err.message : "No se pudo sincronizar la base desde produccion.");
+      setSyncing(false);
+    }
+  }
+
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -181,6 +223,34 @@ function BackupPanel() {
             </div>
           </div>
         </section>
+        {localSyncVisible ? (
+          <section className="liquid-glass rounded-2xl border border-accent-500/25 p-6">
+            <div className="flex flex-wrap items-start justify-between gap-5">
+              <div className="max-w-2xl">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent-700 dark:text-accent-400">Entorno local</p>
+                <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Sincronizar desde produccion</h2>
+                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  Descarga la base actual de produccion, crea una copia de control de tu base local y la reemplaza de forma atomica.
+                </p>
+                <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                  Solo sincroniza PostgreSQL; los archivos de la galeria multimedia no se copian.
+                </p>
+                {syncStatus?.source_url ? <p className="mt-3 break-all font-mono text-xs text-zinc-500">{syncStatus.source_url}</p> : null}
+                {syncStatus?.reason ? <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">{syncStatus.reason}</p> : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => void syncFromProduction()}
+                disabled={syncing || !syncStatus?.available}
+                className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-zinc-900 px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-zinc-950"
+              >
+                <i className={`ph-bold ${syncing ? "ph-spinner animate-spin" : "ph-cloud-arrow-down"}`} />
+                {syncing ? "Sincronizando..." : syncStatus ? "Sincronizar ahora" : "Comprobando..."}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
 
         <section className="liquid-glass rounded-2xl p-6">
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">

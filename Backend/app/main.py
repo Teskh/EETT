@@ -15,6 +15,7 @@ from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, R
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, selectinload, sessionmaker
+from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api_models import (
@@ -29,6 +30,8 @@ from app.api_models import (
     BackupRestoreResponse,
     BackupSettingsModel,
     BackupSettingsUpdateRequest,
+    DatabaseSyncResponse,
+    DatabaseSyncStatusModel,
     CatalogCategoryCreateRequest,
     CatalogCategoryDeletionImpactModel,
     CatalogCategoryUpdateRequest,
@@ -123,6 +126,7 @@ from app.database import create_engine_for_url, schema_is_ready, session_scope
 from app.models import Project, ProjectComment, ProjectExportJob
 from app.seed import seed_demo_data_if_empty
 from app.services import backups as backup_service
+from app.services import database_sync as database_sync_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
     attach_microsoft_identity,
@@ -332,6 +336,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.state.settings = settings
     app.state.engine = engine
+    app.state.database_sync_lock = asyncio.Lock()
     app.state.session_factory = session_factory
     app.add_middleware(
         SessionMiddleware,
@@ -1186,6 +1191,95 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return result
+
+    @app.get("/api/v1/database-sync/status", response_model=DatabaseSyncStatusModel)
+    async def database_sync_status_api(request: Request, current_user=Depends(get_actor_user)):
+        require_user_admin(current_user)
+        require_page_read(current_user, "settings")
+        client_host = request.client.host if request.client else None
+        status = database_sync_service.sync_status(
+            request.app.state.settings,
+            request_host=request.url.hostname,
+            client_host=client_host,
+        )
+        if not database_sync_service.is_local_sync_request(
+            request.app.state.settings,
+            request_host=request.url.hostname,
+            client_host=client_host,
+        ):
+            raise HTTPException(status_code=404, detail="Database sync is available only on localhost.")
+        return status
+
+    @app.post("/api/v1/database-sync", response_model=DatabaseSyncResponse)
+    async def sync_database_from_production_api(
+        request: Request,
+        x_spec_sheets_user: Annotated[str | None, Header()] = None,
+    ):
+        client_host = request.client.host if request.client else None
+        status = database_sync_service.sync_status(
+            request.app.state.settings,
+            request_host=request.url.hostname,
+            client_host=client_host,
+        )
+        if not database_sync_service.is_local_sync_request(
+            request.app.state.settings,
+            request_host=request.url.hostname,
+            client_host=client_host,
+        ):
+            raise HTTPException(status_code=404, detail="Database sync is available only on localhost.")
+
+        with session_scope(request.app.state.session_factory) as session:
+            current_user = get_current_user(
+                session,
+                session_username=request.session.get("username"),
+                trusted_username=x_spec_sheets_user,
+                allow_trusted_username=request.app.state.settings.allow_trusted_user_header,
+            )
+            require_guest_request_access(current_user, method=request.method, path=request.url.path)
+            require_user_admin(current_user)
+            require_page_edit(current_user, "settings")
+
+        if not status["available"]:
+            raise HTTPException(status_code=503, detail=status["reason"])
+
+        async with request.app.state.database_sync_lock:
+            request.app.state.engine.dispose()
+            try:
+                result = await asyncio.to_thread(
+                    database_sync_service.sync_from_production,
+                    request.app.state.settings,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            finally:
+                request.app.state.engine.dispose()
+        return result
+
+    @app.post("/api/v1/database-sync/export")
+    async def export_database_for_sync_api(
+        request: Request,
+        x_spec_sheets_sync_token: Annotated[str | None, Header(alias=database_sync_service.SYNC_TOKEN_HEADER)] = None,
+    ):
+        sync_settings = request.app.state.settings
+        configured_token = sync_settings.database_sync_token
+        if sync_settings.environment.strip().lower() != "production" or not configured_token:
+            raise HTTPException(status_code=404, detail="Not found")
+        if not x_spec_sheets_sync_token or not secrets.compare_digest(x_spec_sheets_sync_token, configured_token):
+            raise HTTPException(status_code=401, detail="Invalid database sync token")
+
+        async with request.app.state.database_sync_lock:
+            try:
+                dump_path = await asyncio.to_thread(database_sync_service.create_export_dump, sync_settings)
+            except (ValueError, RuntimeError) as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return FileResponse(
+            dump_path,
+            filename=dump_path.name,
+            media_type="application/octet-stream",
+            background=BackgroundTask(database_sync_service.remove_export_dump, dump_path),
+        )
 
     @app.get("/api/v1/catalog", response_model=CatalogResponse)
     async def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):

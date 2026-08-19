@@ -709,6 +709,17 @@ export type BackupRestoreResponse = {
   pruned: string[];
 };
 
+export type DatabaseSyncStatus = {
+  available: boolean;
+  source_url: string;
+  reason?: string | null;
+};
+
+export type DatabaseSyncResponse = BackupRestoreResponse & {
+  downloaded_size_bytes: number;
+  source_url: string;
+};
+
 export type CatalogTreeComponent = {
   id: number;
   name: string;

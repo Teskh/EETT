@@ -133,6 +133,22 @@ class BackupRestoreResponse(BaseModel):
     pruned: list[str] = Field(default_factory=list)
 
 
+class DatabaseSyncStatusModel(BaseModel):
+    available: bool
+    source_url: str
+    reason: str | None = None
+
+
+class DatabaseSyncResponse(BaseModel):
+    primary_db: str
+    archived_db: str
+    restored_from: str
+    checkpoint_backup: BackupRecordModel
+    pruned: list[str] = Field(default_factory=list)
+    downloaded_size_bytes: int
+    source_url: str
+
+
 class MutationResultModel(BaseModel):
     ok: bool = True
     category_id: int | None = None

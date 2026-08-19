@@ -248,7 +248,7 @@ function buildDraftRows(rows: BomEntry[]): MaterialRowDraft[] {
     subtype_id: row.subtype_id,
     quantity: row.quantity === null ? "" : String(row.quantity),
     assembly_quantity: row.assembly_quantity === null ? "" : String(row.assembly_quantity),
-    inheritance_mode: row.inheritance_mode || "override",
+    inheritance_mode: row.inheritance_mode || (row.subtype_id !== null && row.subtype_depth > 0 ? "add" : "override"),
   }));
 }
 
@@ -291,13 +291,13 @@ function buildLocalBomEntries(
         subtype_id: subtype.id,
         quantity: null,
         assembly_quantity: null,
-        inheritance_mode: "override" as const,
+        inheritance_mode: subtype.depth > 0 ? ("add" as const) : ("override" as const),
       };
       return {
         subtype_id: subtype.id,
         subtype: subtype.name,
         subtype_depth: subtype.depth,
-        inheritance_mode: entry.inheritance_mode || "override",
+        inheritance_mode: entry.inheritance_mode || (subtype.depth > 0 ? "add" : "override"),
         quantity: entry.quantity,
         quantity_state: quantityStateForValue(entry.quantity),
         effective_quantity: entry.quantity,
@@ -372,7 +372,7 @@ function buildDraftDisplayRows(
         subtype_id: subtype.id,
         quantity: parseDisplayNumber(draftRow?.quantity ?? ""),
         assembly_quantity: parseDisplayNumber(draftRow?.assembly_quantity ?? ""),
-        inheritance_mode: draftRow?.inheritance_mode || ("override" as const),
+        inheritance_mode: draftRow?.inheritance_mode || (subtype.depth > 0 ? ("add" as const) : ("override" as const)),
       };
     });
     const effectiveBySubtypeId = resolveSubtypeQuantities(parsedEntries, subtypeOptions);
@@ -382,7 +382,7 @@ function buildDraftDisplayRows(
         subtype_id: subtype.id,
         quantity: "",
         assembly_quantity: "",
-        inheritance_mode: "override" as const,
+        inheritance_mode: subtype.depth > 0 ? ("add" as const) : ("override" as const),
       };
       const persisted = bySubtypeId.get(subtype.id);
       const quantity = parseDisplayNumber(draftRow.quantity);
@@ -2113,7 +2113,7 @@ function MaterialOccurrenceEditor({
           subtype_id: subtype.id,
           quantity: "",
           assembly_quantity: "",
-          inheritance_mode: "override" as const,
+          inheritance_mode: subtype.depth > 0 ? ("add" as const) : ("override" as const),
         }))
       : [{ subtype_id: null, quantity: "", assembly_quantity: "", inheritance_mode: "override" as const }];
     setDraftMode(nextMode);
@@ -2222,13 +2222,13 @@ function MaterialOccurrenceEditor({
           />
         </td>
         <td className="px-2 py-1">
-          {row.subtype_id === null ? (
+          {row.subtype_id === null || row.subtype_depth === 0 ? (
             <span className="text-[11px] text-zinc-500">Base</span>
           ) : (
             <select
-              value={draftRows[index]?.inheritance_mode ?? "override"}
+              value={draftRows[index]?.inheritance_mode ?? "add"}
               aria-label={`Comportamiento de ${row.subtype}`}
-              title="Reemplazar fija el total de este subtipo; Sumar agrega la cifra al valor heredado. Deja las cantidades en blanco para heredar sin cambios."
+              title="Sumar agrega esta cantidad a la del nivel superior. Reemplazar usa solo esta cantidad e ignora la del nivel superior. Si dejas la cantidad vacía, se usa la del nivel superior."
               onChange={(event) => {
                 const inheritanceMode = event.target.value as "override" | "add";
                 const nextRows = draftRows.map((item, itemIndex) =>

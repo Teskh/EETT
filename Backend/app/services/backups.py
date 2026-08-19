@@ -228,14 +228,9 @@ def prune_backups(settings: Settings, retention_count: int) -> list[str]:
     return removed
 
 
-def create_backup(settings: Settings, label: str | None = None) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+def create_database_dump(settings: Settings, output_path: Path) -> None:
     db_name, username, host, port, password = _resolve_db_connection(settings)
-    timestamp = _local_now()
-    safe_label = _sanitize_label(label) if label else ""
-    label_part = f"_{safe_label}" if safe_label else ""
-    filename = f"{db_name}_backup_{timestamp.strftime('%Y%m%d_%H%M%S')}{label_part}.dump"
-    output_path = get_backup_paths(settings).root / filename
-
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         settings.pg_dump_path,
         "--format=custom",
@@ -254,7 +249,24 @@ def create_backup(settings: Settings, label: str | None = None) -> tuple[dict[st
 
     result = subprocess.run(cmd, env=_pg_env(password), check=False, capture_output=True, text=True)
     if result.returncode != 0:
+        output_path.unlink(missing_ok=True)
         raise RuntimeError(result.stderr.strip() or "pg_dump failed")
+
+
+def create_backup(
+    settings: Settings,
+    label: str | None = None,
+    *,
+    prune: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    db_name, _, _, _, _ = _resolve_db_connection(settings)
+    timestamp = _local_now()
+    safe_label = _sanitize_label(label) if label else ""
+    label_part = f"_{safe_label}" if safe_label else ""
+    filename = f"{db_name}_backup_{timestamp.strftime('%Y%m%d_%H%M%S')}{label_part}.dump"
+    output_path = get_backup_paths(settings).root / filename
+
+    create_database_dump(settings, output_path)
 
     metadata = load_backup_metadata(settings)
     metadata.setdefault("items", {})[filename] = {"label": label.strip() if label else None}
@@ -263,7 +275,7 @@ def create_backup(settings: Settings, label: str | None = None) -> tuple[dict[st
     settings_data = load_backup_settings(settings)
     settings_data["last_backup_at"] = timestamp.isoformat()
     settings_data = save_backup_settings(settings, settings_data)
-    pruned = prune_backups(settings, int(settings_data.get("retention_count") or 0))
+    pruned = prune_backups(settings, int(settings_data.get("retention_count") or 0)) if prune else []
 
     stats = output_path.stat()
     backup_record = {
@@ -318,9 +330,15 @@ def swap_databases(settings: Settings, primary_db: str, secondary_db: str, force
         engine.dispose()
 
 
-def restore_backup(settings: Settings, filename: str, *, force_disconnect: bool = True, checkpoint_label: str | None = None) -> dict[str, Any]:
-    paths = get_backup_paths(settings)
-    backup_path = paths.root / filename
+def restore_dump_file(
+    settings: Settings,
+    backup_path: Path,
+    *,
+    restored_from: str,
+    force_disconnect: bool = True,
+    checkpoint_label: str | None = None,
+) -> dict[str, Any]:
+    backup_path = Path(backup_path)
     if not backup_path.exists():
         raise ValueError("Backup file not found.")
     if backup_path.suffix not in VALID_BACKUP_SUFFIXES:
@@ -331,7 +349,11 @@ def restore_backup(settings: Settings, filename: str, *, force_disconnect: bool 
     restore_db = _restore_db_name(primary_db, _local_now())
     _validate_db_name(restore_db)
 
-    checkpoint_backup, _, pruned = create_backup(settings, checkpoint_label or f"Manual restore checkpoint for {filename}")
+    checkpoint_backup, backup_settings, _ = create_backup(
+        settings,
+        checkpoint_label or f"Manual restore checkpoint for {restored_from}",
+        prune=False,
+    )
     engine = _admin_engine(settings)
     created = False
     try:
@@ -372,10 +394,24 @@ def restore_backup(settings: Settings, filename: str, *, force_disconnect: bool 
         raise RuntimeError(result.stderr.strip() or "pg_restore failed")
 
     swap_databases(settings, primary_db, restore_db, force_disconnect=force_disconnect)
+    pruned = prune_backups(settings, int(backup_settings.get("retention_count") or 0))
     return {
         "primary_db": primary_db,
         "archived_db": restore_db,
-        "restored_from": filename,
+        "restored_from": restored_from,
         "checkpoint_backup": checkpoint_backup,
         "pruned": pruned,
     }
+
+
+def restore_backup(settings: Settings, filename: str, *, force_disconnect: bool = True, checkpoint_label: str | None = None) -> dict[str, Any]:
+    paths = get_backup_paths(settings)
+    if Path(filename).name != filename:
+        raise ValueError("Invalid backup filename.")
+    return restore_dump_file(
+        settings,
+        paths.root / filename,
+        restored_from=filename,
+        force_disconnect=force_disconnect,
+        checkpoint_label=checkpoint_label,
+    )

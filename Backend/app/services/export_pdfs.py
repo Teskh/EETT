@@ -464,6 +464,12 @@ def _build_styles():
             alignment=TA_LEFT,
             fontName="Helvetica-Bold",
             textColor=primary_color,
+            leading=10.5,
+        ),
+        "TableCell": ParagraphStyle(
+            name="TableCell",
+            parent=styles["Normal"],
+            leading=10.5,
         ),
         "CategoryHeadingStyle": ParagraphStyle(
             name="CategoryHeadingStyle",
@@ -620,7 +626,7 @@ def _build_instance_story(
         materials = instance.get("materials", [])
         if materials:
             materials_flowables.append(_materials_table(materials, styles, available_width))
-            materials_flowables.append(Spacer(1, 0.05 * inch))
+            materials_flowables.append(Spacer(1, 0.03 * inch))
 
     image_flowable = _load_image_flowable(instance.get("image_path"), max_width=available_width * (2 / 3))
 
@@ -656,7 +662,7 @@ def _build_instance_story(
 
     story.extend(accessory_flowables)
     story.extend(materials_flowables)
-    story.append(Spacer(1, 0.08 * inch))
+    story.append(Spacer(1, 0.05 * inch))
 
     return story
 
@@ -681,7 +687,7 @@ def _instance_body_flowables(instance: dict[str, Any], styles) -> list[Any]:
     attributes = instance.get("attributes", [])
     if usage_rows:
         flowables.append(_usage_rows_table(usage_rows, styles))
-        flowables.append(Spacer(1, 0.05 * inch))
+        flowables.append(Spacer(1, 0.03 * inch))
     elif attributes:
         flowables.append(
             _instance_attribute_flowable(
@@ -690,7 +696,7 @@ def _instance_body_flowables(instance: dict[str, Any], styles) -> list[Any]:
                 include_group=False,
             )
         )
-        flowables.append(Spacer(1, 0.05 * inch))
+        flowables.append(Spacer(1, 0.03 * inch))
 
     return flowables
 
@@ -751,8 +757,8 @@ def _usage_rows_table(rows: list[dict[str, Any]], styles) -> Any:
         }
         data.append(
             [
-                Paragraph(escape(str(row.get("application") or "")), styles["Normal"]),
-                *[Paragraph(escape(values_by_name.get(name, "")), styles["Normal"]) for name in attribute_names],
+                Paragraph(escape(str(row.get("application") or "")), styles["TableCell"]),
+                *[Paragraph(escape(values_by_name.get(name, "")), styles["TableCell"]) for name in attribute_names],
             ]
         )
 
@@ -771,10 +777,10 @@ def _usage_rows_table(rows: list[dict[str, Any]], styles) -> Any:
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
@@ -793,11 +799,11 @@ def _attribute_table(attributes: list[dict[str, Any]], styles, *, include_group:
     for attribute in attributes:
         value = "" if attribute.get("value") is None else str(attribute.get("value"))
         row = [
-            Paragraph(escape(str(attribute.get("name") or "")), styles["Normal"]),
-            Paragraph(escape(value), styles["Normal"]),
+            Paragraph(escape(str(attribute.get("name") or "")), styles["TableCell"]),
+            Paragraph(escape(value), styles["TableCell"]),
         ]
         if include_group:
-            row.insert(0, Paragraph(escape(str(attribute.get("group") or "General")), styles["Normal"]))
+            row.insert(0, Paragraph(escape(str(attribute.get("group") or "General")), styles["TableCell"]))
         data.append(row)
 
     col_widths = [108, 140, 203] if include_group else [160, 291]
@@ -809,10 +815,10 @@ def _attribute_table(attributes: list[dict[str, Any]], styles, *, include_group:
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
@@ -853,15 +859,15 @@ def _materials_table(materials: list[dict[str, Any]], styles, available_width: f
         for index, row in enumerate(rows):
             quantity = "" if row.get("quantity") is None else _format_quantity(row["quantity"])
             cells = [
-                Paragraph(escape(material["material_name"] if index == 0 else ""), styles["Normal"]),
-                Paragraph(escape(material["sku"] if index == 0 else ""), styles["Normal"]),
+                Paragraph(escape(material["material_name"] if index == 0 else ""), styles["TableCell"]),
+                Paragraph(escape(material["sku"] if index == 0 else ""), styles["TableCell"]),
             ]
             if has_subtypes:
-                cells.append(Paragraph(escape(row.get("subtype") or "General"), styles["Normal"]))
+                cells.append(Paragraph(escape(row.get("subtype") or "General"), styles["TableCell"]))
             cells.extend(
                 [
-                    Paragraph(escape(quantity), styles["Normal"]),
-                    Paragraph(escape(material.get("unit") or ""), styles["Normal"]),
+                    Paragraph(escape(quantity), styles["TableCell"]),
+                    Paragraph(escape(material.get("unit") or ""), styles["TableCell"]),
                 ]
             )
             data.append(cells)
@@ -888,10 +894,10 @@ def _materials_table(materials: list[dict[str, Any]], styles, available_width: f
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]
 
     current_row = 1

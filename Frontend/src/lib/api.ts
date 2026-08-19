@@ -5,6 +5,8 @@ import type {
   BackupRecord,
   BackupRestoreResponse,
   BackupSettings,
+  DatabaseSyncResponse,
+  DatabaseSyncStatus,
   CatalogAttribute,
   CatalogCategoryDeletionImpact,
   CatalogMaterialRule,
@@ -267,6 +269,14 @@ export const api = {
     return request<BackupRestoreResponse>("/api/v1/backups/restore", {
       method: "POST",
       body: JSON.stringify({ filename, force_disconnect: true }),
+    });
+  },
+  getDatabaseSyncStatus() {
+    return request<DatabaseSyncStatus>("/api/v1/database-sync/status");
+  },
+  syncDatabaseFromProduction() {
+    return request<DatabaseSyncResponse>("/api/v1/database-sync", {
+      method: "POST",
     });
   },
   getCatalog(categoryId?: number | null) {

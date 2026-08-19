@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     pg_restore_path: str = "pg_restore"
     backup_scheduler_enabled: bool = True
     backup_scheduler_poll_seconds: int = 60
+    database_sync_source_url: str = "https://aplicacionph.dyndns.org/eett"
+    database_sync_token: str | None = None
+    database_sync_timeout_seconds: int = 600
+    database_sync_max_dump_bytes: int = 2 * 1024 * 1024 * 1024
     session_secret: str = "spec-sheets-internal-session-secret"
     session_cookie_name: str = "spec_sheets_session"
     public_base_path: str = ""
