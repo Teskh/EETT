@@ -47,19 +47,25 @@ def number_category_sections(categories: list[dict[str, Any]]) -> list[dict[str,
 def iter_material_context_rows(project_data: dict[str, Any]):
     for section in number_category_sections(project_data.get("categories", [])):
         category_label = f"{section['number']}. {section['name']}"
-        for instance in section.get("instances", []):
+        for instance_index, instance in enumerate(section.get("instances", [])):
             instance_label = instance.get("short_name") or instance["name"]
-            for material in iter_existing_instance_materials(instance):
+            for material_index, material in enumerate(iter_existing_instance_materials(instance)):
+                instance_key = instance.get("id") if instance.get("id") is not None else instance_index
+                material_key = material.get("material_id") if material.get("material_id") is not None else material_index
                 for bom_entry in material.get("bom_entries", []):
                     yield {
                         "category_label": category_label,
                         "category_depth": section.get("depth", 0),
+                        "context_material_key": f"{section['number']}:{instance_key}:{material_key}",
+                        "instance_id": instance.get("id"),
                         "instance_name": instance["name"],
                         "instance_label": instance_label,
+                        "material_id": material.get("material_id"),
                         "material_name": material["material_name"],
                         "sku": material["sku"],
                         "unit": material.get("unit") or "",
                         "subtype": bom_entry.get("subtype") or "General",
+                        "subtype_id": bom_entry.get("subtype_id"),
                         "quantity": bom_entry.get("effective_quantity", bom_entry.get("quantity")),
                         "quantity_state": bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state")),
                         "assembly_quantity": bom_entry.get(

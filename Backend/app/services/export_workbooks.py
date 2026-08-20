@@ -4,10 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from app.services.export_projection import iter_cost_model_rows, iter_material_context_rows
+from app.services.subtype_compaction import compact_subtype_rows
 
 
 HEADER_FILL = PatternFill(fill_type="solid", start_color="D7E3F4", end_color="D7E3F4")
@@ -16,6 +17,7 @@ INSTANCE_FILL = PatternFill(fill_type="solid", start_color="F4F7FB", end_color="
 INPUT_FILL = PatternFill(fill_type="solid", start_color="FFF7D6", end_color="FFF7D6")
 FORMULA_FILL = PatternFill(fill_type="solid", start_color="F3F4F6", end_color="F3F4F6")
 ADJUSTMENT_FILL = PatternFill(fill_type="solid", start_color="FCE8E6", end_color="FCE8E6")
+MATERIAL_DIVIDER = Side(style="thin", color="D9DEE7")
 
 
 def build_materials_workbook(project_data: dict[str, Any], output_path: Any) -> None:
@@ -23,35 +25,44 @@ def build_materials_workbook(project_data: dict[str, Any], output_path: Any) -> 
     workbook.remove(workbook.active)
 
     context_rows = list(iter_material_context_rows(project_data))
-    context_rows.extend(
-        {
-            "category_label": auxiliary.get("category") or "Materiales auxiliares",
-            "category_depth": 0,
-            "instance_name": "Materiales auxiliares",
-            "instance_label": "Materiales auxiliares",
-            "material_name": auxiliary.get("name") or auxiliary.get("code") or "Material auxiliar",
-            "sku": auxiliary.get("code") or "",
-            "unit": "",
-            "subtype": auxiliary.get("subtype") or "General",
-            "quantity": 1.0,
-            "quantity_state": "value",
-            "assembly_quantity": None,
-            "assembly_quantity_state": "blank",
-        }
-        for auxiliary in project_data.get("auxiliary_materials", [])
-        if str(auxiliary.get("code") or "").strip()
-    )
+    for auxiliary_index, auxiliary in enumerate(project_data.get("auxiliary_materials", [])):
+        code = str(auxiliary.get("code") or "").strip()
+        if not code:
+            continue
+        context_rows.append(
+            {
+                "category_label": auxiliary.get("category") or "Materiales auxiliares",
+                "category_depth": 0,
+                "context_material_key": f"auxiliary:{auxiliary_index}",
+                "instance_id": None,
+                "instance_name": "Materiales auxiliares",
+                "instance_label": "Materiales auxiliares",
+                "material_id": None,
+                "material_name": auxiliary.get("name") or auxiliary.get("code") or "Material auxiliar",
+                "sku": code,
+                "unit": "",
+                "subtype": auxiliary.get("subtype") or "General",
+                "subtype_id": auxiliary.get("subtype_id"),
+                "quantity": 1.0,
+                "quantity_state": "value",
+                "assembly_quantity": None,
+                "assembly_quantity_state": "blank",
+            }
+        )
+
+    subtype_nodes = project_data.get("subtypes", [])
 
     totals_sheet = workbook.create_sheet("Total Materiales")
-    _populate_total_materials_sheet(totals_sheet, context_rows)
+    _populate_total_materials_sheet(totals_sheet, context_rows, subtype_nodes=subtype_nodes)
 
     context_sheet = workbook.create_sheet("Por Contexto")
-    _populate_context_sheet(context_sheet, context_rows, quantity_key="quantity", title="Q fabrica por categoria e instancia")
+    _populate_context_sheet(context_sheet, context_rows, subtype_nodes=subtype_nodes, quantity_key="quantity", title="Q fabrica por categoria e instancia")
 
     assembly_sheet = workbook.create_sheet("Q obra")
     _populate_context_sheet(
         assembly_sheet,
         context_rows,
+        subtype_nodes=subtype_nodes,
         quantity_key="assembly_quantity",
         title="Q obra por categoria e instancia",
     )
@@ -89,9 +100,11 @@ def build_cost_model_workbook(
         output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
 
-def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> None:
+
+def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]], *, subtype_nodes: list[dict[str, Any]]) -> None:
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A2"
+    ws.sheet_properties.outlinePr.summaryBelow = False
     include_subtype = any(
         (row.get("subtype") or "General") != "General"
         and _include_context_row(row, quantity_key="quantity", quantity_state_key="quantity_state")
@@ -104,17 +117,19 @@ def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> N
     ws.append(headers)
     _style_header_row(ws, row_index=1, column_count=len(headers))
 
-    totals: dict[tuple[str, str], dict[str, Any]] = {}
+    totals: dict[tuple[str, int | None, str], dict[str, Any]] = {}
     for row in context_rows:
         sku = row["sku"]
         subtype = row.get("subtype") or "General"
-        key = (sku, subtype)
+        subtype_id = row.get("subtype_id")
+        key = (sku, subtype_id, subtype)
         entry = totals.setdefault(
             key,
             {
                 "material_name": row["material_name"],
                 "sku": sku,
                 "subtype": subtype,
+                "subtype_id": subtype_id,
                 "unit": row["unit"],
                 "quantity_total": 0.0,
                 "has_numeric_quantity": False,
@@ -129,19 +144,42 @@ def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]]) -> N
         elif state == "blank":
             entry["has_blank_quantity"] = True
 
-    next_row = 2
-    quantity_column = 4 if include_subtype else 3
-    for entry in sorted(totals.values(), key=lambda item: (item["material_name"], item["sku"], item["subtype"] != "General", item["subtype"].lower())):
+    entries_by_sku: dict[str, list[dict[str, Any]]] = {}
+    for entry in totals.values():
         if not entry["has_numeric_quantity"] and not entry["has_blank_quantity"]:
             continue
-        quantity_value = entry["quantity_total"] if entry["has_numeric_quantity"] else None
-        row_values = [entry["material_name"], entry["sku"]]
-        if include_subtype:
-            row_values.append(entry["subtype"])
-        row_values.extend([quantity_value, entry["unit"]])
-        ws.append(row_values)
-        _style_data_row(ws, next_row, numeric_columns={quantity_column})
-        next_row += 1
+        entry["quantity"] = entry["quantity_total"] if entry["has_numeric_quantity"] else None
+        entry["quantity_state"] = "value" if entry["has_numeric_quantity"] else "blank"
+        entries_by_sku.setdefault(entry["sku"], []).append(entry)
+
+    next_row = 2
+    quantity_column = 4 if include_subtype else 3
+    material_groups = sorted(
+        entries_by_sku.values(),
+        key=lambda entries: (entries[0]["material_name"], entries[0]["sku"]),
+    )
+    for entries in material_groups:
+        compacted_entries = _omit_blank_subtype_parents(
+            compact_subtype_rows(
+                entries,
+                subtype_nodes,
+                signature=lambda entry: _quantity_signature(entry, "quantity"),
+            ),
+            quantity_key="quantity",
+        )
+        for entry_index, entry in enumerate(compacted_entries):
+            is_material_start = entry_index == 0
+            row_values = [entry["material_name"] if is_material_start else "", entry["sku"] if is_material_start else ""]
+            if include_subtype:
+                row_values.append(_full_subtype_label(entry["subtype"]))
+            row_values.extend([entry["quantity"], entry["unit"] if is_material_start else ""])
+            ws.append(row_values)
+            _style_data_row(ws, next_row, numeric_columns={quantity_column})
+            if is_material_start:
+                _style_material_start(ws, next_row)
+            else:
+                ws.row_dimensions[next_row].outlineLevel = 1
+            next_row += 1
 
     _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10} if include_subtype else {"A": 42, "B": 16, "C": 14, "D": 10})
 
@@ -412,9 +450,17 @@ def _populate_cost_model_totals_sheet(ws, cost_rows: list[dict[str, Any]], *, su
     _style_cost_model_total_row(ws, total_row_index, label_column=3, value_column=7, currency_format=currency_fmt)
 
 
-def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_key: str, title: str) -> None:
+def _populate_context_sheet(
+    ws,
+    context_rows: list[dict[str, Any]],
+    *,
+    subtype_nodes: list[dict[str, Any]],
+    quantity_key: str,
+    title: str,
+) -> None:
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A3"
+    ws.sheet_properties.outlinePr.summaryBelow = False
 
     ws.append([title])
     title_cell = ws["A1"]
@@ -422,7 +468,11 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
     title_cell.alignment = Alignment(horizontal="left", vertical="center")
 
     quantity_state_key = f"{quantity_key}_state"
-    visible_rows = [row for row in context_rows if _include_context_row(row, quantity_key=quantity_key, quantity_state_key=quantity_state_key)]
+    compacted_rows = _compact_context_rows(context_rows, subtype_nodes=subtype_nodes, quantity_key=quantity_key)
+    visible_rows = [
+        row for row in compacted_rows
+        if _include_context_row(row, quantity_key=quantity_key, quantity_state_key=quantity_state_key)
+    ]
     include_subtype = any((row.get("subtype") or "General") != "General" for row in visible_rows)
     headers = ["Material", "SKU"]
     if include_subtype:
@@ -442,6 +492,7 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
     current_row = 3
     active_category: str | None = None
     active_instance: str | None = None
+    active_material_key: object | None = None
 
     for row in visible_rows:
         if row["category_label"] != active_category:
@@ -450,6 +501,7 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
             _style_group_row(ws, current_row, fill=CATEGORY_FILL, bold=True)
             active_category = row["category_label"]
             active_instance = None
+            active_material_key = None
             current_row += 1
 
         if row["instance_label"] != active_instance:
@@ -457,18 +509,111 @@ def _populate_context_sheet(ws, context_rows: list[dict[str, Any]], *, quantity_
             ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
             _style_group_row(ws, current_row, fill=INSTANCE_FILL, bold=False)
             active_instance = row["instance_label"]
+            active_material_key = None
+            ws.row_dimensions[current_row].outlineLevel = 1
             current_row += 1
 
+        material_key = _material_context_key(row)
+        is_material_start = material_key != active_material_key
         numeric_value = row[quantity_key] if row[quantity_state_key] == "value" else None
-        row_values = [row["material_name"], row["sku"]]
+        row_values = [row["material_name"] if is_material_start else "", row["sku"] if is_material_start else ""]
         if include_subtype:
-            row_values.append(row["subtype"] if row["subtype"] != "General" else "General")
-        row_values.extend([numeric_value, row["unit"]])
+            row_values.append(_full_subtype_label(row.get("subtype") or "General"))
+        row_values.extend([numeric_value, row["unit"] if is_material_start else ""])
         ws.append(row_values)
         _style_data_row(ws, current_row, numeric_columns={4 if include_subtype else 3})
+        ws.row_dimensions[current_row].outlineLevel = 2
+        if is_material_start:
+            _style_material_start(ws, current_row)
+        active_material_key = material_key
         current_row += 1
 
     _set_column_widths(ws, {"A": 42, "B": 16, "C": 18, "D": 14, "E": 10} if include_subtype else {"A": 42, "B": 16, "C": 14, "D": 10})
+
+
+def _compact_context_rows(
+    context_rows: list[dict[str, Any]],
+    *,
+    subtype_nodes: list[dict[str, Any]],
+    quantity_key: str,
+) -> list[dict[str, Any]]:
+    compacted_rows: list[dict[str, Any]] = []
+    active_key: object | None = None
+    material_rows: list[dict[str, Any]] = []
+
+    def flush_material_rows() -> None:
+        if material_rows:
+            compacted_material_rows = compact_subtype_rows(
+                material_rows,
+                subtype_nodes,
+                signature=lambda row: _quantity_signature(row, quantity_key),
+            )
+            compacted_rows.extend(
+                _omit_blank_subtype_parents(
+                    compacted_material_rows,
+                    quantity_key=quantity_key,
+                )
+            )
+
+    for row in context_rows:
+        material_key = _material_context_key(row)
+        if material_rows and material_key != active_key:
+            flush_material_rows()
+            material_rows = []
+        active_key = material_key
+        material_rows.append(row)
+    flush_material_rows()
+    return compacted_rows
+
+
+def _material_context_key(row: dict[str, Any]) -> object:
+    if row.get("context_material_key") is not None:
+        return row["context_material_key"]
+    instance_key = row.get("instance_id") if row.get("instance_id") is not None else row.get("instance_name")
+    material_key = row.get("material_id") if row.get("material_id") is not None else row.get("sku")
+    return row.get("category_label"), instance_key, material_key
+
+
+def _quantity_signature(row: dict[str, Any], quantity_key: str) -> tuple[object, object]:
+    value = row.get(quantity_key)
+    if isinstance(value, (int, float)):
+        value = round(float(value), 9)
+    return row.get(f"{quantity_key}_state"), value
+
+
+def _omit_blank_subtype_parents(
+    rows: list[dict[str, Any]],
+    *,
+    quantity_key: str,
+) -> list[dict[str, Any]]:
+    valued_paths = [
+        _subtype_path_parts(row.get("subtype") or "General")
+        for row in rows
+        if row.get(f"{quantity_key}_state") == "value"
+    ]
+    return [
+        row
+        for row in rows
+        if not (
+            row.get(f"{quantity_key}_state") == "blank"
+            and (parts := _subtype_path_parts(row.get("subtype") or "General"))
+            and any(len(path) > len(parts) and path[: len(parts)] == parts for path in valued_paths)
+        )
+    ]
+
+
+def _full_subtype_label(subtype: str) -> str:
+    parts = _subtype_path_parts(subtype)
+    return " › ".join(parts) if parts else subtype or "General"
+
+
+def _subtype_path_parts(subtype: str) -> list[str]:
+    return [part.strip() for part in str(subtype or "").replace(" > ", " › ").split("›") if part.strip()]
+
+
+def _style_material_start(ws, row_index: int) -> None:
+    for column_index in range(1, ws.max_column + 1):
+        ws.cell(row=row_index, column=column_index).border = Border(top=MATERIAL_DIVIDER)
 
 
 def _include_context_row(row: dict[str, Any], *, quantity_key: str, quantity_state_key: str) -> bool:
