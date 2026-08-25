@@ -587,6 +587,7 @@ def seed_demo_dataset(session: Session) -> None:
                 details=build_activity_details(
                     headline="Q_fábrica de materiales modificada",
                     subject_name="Laminated Glass Panel",
+                    subject_sku="MAT-003",
                     notes=[f"Component: {window_instance.name}"],
                     changes=[build_activity_change("Q_fábrica estándar", "2.8", "3.2")],
                     kind="material",

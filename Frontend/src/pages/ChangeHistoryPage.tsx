@@ -406,6 +406,7 @@ function buildHaystack(group: ActivityGroup) {
       entry.headline,
       translateActivityText(entry.headline) || "",
       entry.subject_name || "",
+      entry.subject_sku || "",
       entry.actor || "",
       ...entry.notes,
       ...entry.notes.map((note) => translateActivityText(note) || ""),
@@ -532,8 +533,15 @@ function EntryCard({ entry, groupTitle }: { entry: ActivityEntry; groupTitle: st
   return (
     <div className="py-2 first:pt-0 last:pb-0">
       {entryLabel && (
-        <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          {renderQuantityText(entryLabel)}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            {renderQuantityText(entryLabel)}
+          </div>
+          {entry.subject_sku && (
+            <span className="rounded-sm border border-black/5 bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:border-white/5 dark:bg-zinc-800 dark:text-zinc-300">
+              {entry.subject_sku}
+            </span>
+          )}
         </div>
       )}
 

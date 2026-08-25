@@ -1233,6 +1233,7 @@ export type ActivityEntry = {
   kind: string;
   headline: string;
   subject_name: string | null;
+  subject_sku: string | null;
   notes: string[];
   changes: ActivityChange[];
   created_at: string;
@@ -1327,6 +1328,13 @@ export type CreateProjectInstanceRequest = {
   attribute_values?: AttributeValueInput[];
   selected_material_rule_ids?: number[] | null;
   media_asset_id?: number | null;
+};
+
+export type CreateLinkedProjectAccessoryRequest = CreateProjectInstanceRequest & {
+  target_instance_id: number;
+  relationship_type?: string;
+  context_label?: string | null;
+  application_attribute_values: AttributeValueInput[];
 };
 
 export type UpdateProjectInstanceRequest = {

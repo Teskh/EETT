@@ -55,6 +55,7 @@ def build_activity_details(
     *,
     headline: str,
     subject_name: str | None = None,
+    subject_sku: str | None = None,
     notes: list[str] | None = None,
     changes: list[dict[str, Any]] | None = None,
     kind: str | None = None,
@@ -73,6 +74,7 @@ def build_activity_details(
     return {
         "headline": headline.strip(),
         "subject_name": (subject_name or "").strip() or None,
+        "subject_sku": (subject_sku or "").strip() or None,
         "notes": normalized_notes,
         "changes": normalized_changes,
         "kind": (kind or "").strip() or None,

@@ -1220,6 +1220,7 @@ def create_project_instance(
     media_asset_id: int | None = None,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
+    commit: bool = True,
 ) -> ProjectInstance:
     component = session.scalar(
         select(CatalogComponent)
@@ -1299,8 +1300,11 @@ def create_project_instance(
                 kind="instance",
             ),
         )
-    session.commit()
-    session.refresh(instance)
+    if commit:
+        session.commit()
+        session.refresh(instance)
+    else:
+        session.flush()
     return instance
 
 
@@ -1398,6 +1402,7 @@ def create_project_instance_occurrence(
     attribute_values: dict[str, str | None] | None = None,
     actor_user: User | None = None,
     mutation_batch_id: str | None = None,
+    commit: bool = True,
 ) -> ProjectInstanceOccurrence | None:
     instance = _load_instance_for_occurrence_edit(session, project_id=project.id, instance_id=instance_id)
     if instance is None:
@@ -1447,9 +1452,80 @@ def create_project_instance_occurrence(
                 kind="usage",
             ),
         )
-    session.commit()
-    session.refresh(occurrence)
+    if commit:
+        session.commit()
+        session.refresh(occurrence)
+    else:
+        session.flush()
     return occurrence
+
+
+def create_linked_project_accessory(
+    session: Session,
+    *,
+    project: Project,
+    category_id: int,
+    component_id: int,
+    name: str,
+    short_name: str | None,
+    description: str | None,
+    short_description: str | None,
+    installation: str | None,
+    unit_amount: float | None,
+    attribute_values: dict[str, str | None] | None,
+    selected_material_rule_ids: list[int] | None,
+    media_asset_id: int | None,
+    target_instance_id: int,
+    relationship_type: str,
+    context_label: str | None,
+    application_attribute_values: dict[str, str | None] | None,
+    actor_user: User | None = None,
+    mutation_batch_id: str | None = None,
+) -> tuple[ProjectInstance, ProjectInstanceOccurrence]:
+    try:
+        instance = create_project_instance(
+            session,
+            project=project,
+            category_id=category_id,
+            component_id=component_id,
+            name=name,
+            short_name=short_name,
+            description=description,
+            short_description=short_description,
+            installation=installation,
+            unit_amount=unit_amount,
+            attribute_values=attribute_values,
+            selected_material_rule_ids=selected_material_rule_ids,
+            media_asset_id=media_asset_id,
+            actor_user=actor_user,
+            mutation_batch_id=mutation_batch_id,
+            commit=False,
+        )
+        if instance.instance_type.value != "accessory":
+            raise ValueError("Selected component is not an accessory.")
+
+        occurrence = create_project_instance_occurrence(
+            session,
+            project=project,
+            instance_id=instance.id,
+            relationship_type=relationship_type,
+            context_label=context_label,
+            target_instance_id=target_instance_id,
+            attribute_values=application_attribute_values,
+            actor_user=actor_user,
+            mutation_batch_id=mutation_batch_id,
+            commit=False,
+        )
+        if occurrence is None:
+            raise ValueError("The linked accessory application could not be created.")
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    session.refresh(instance)
+    session.refresh(occurrence)
+    return instance, occurrence
 
 
 def update_project_instance_occurrence(
@@ -2052,6 +2128,7 @@ def replace_project_material_occurrence(
             details=build_activity_details(
                 headline="Q_fábrica de materiales modificada",
                 subject_name=material.name,
+                subject_sku=material.sku,
                 notes=[f"Component: {instance.name}"],
                 changes=_describe_material_quantity_changes(previous_snapshot, next_snapshot),
                 kind="material",
@@ -2106,6 +2183,7 @@ def add_project_instance_manual_material(
             details=build_activity_details(
                 headline="Material added",
                 subject_name=material.name,
+                subject_sku=material.sku,
                 notes=[f"Component: {instance.name}", "Source: manual"],
                 kind="material",
             ),
@@ -2165,6 +2243,7 @@ def delete_project_instance_material(
             details=build_activity_details(
                 headline="Material removed",
                 subject_name=material.name,
+                subject_sku=material.sku,
                 notes=[f"Component: {instance.name}"],
                 changes=_describe_material_quantity_changes(previous_snapshot, []),
                 kind="material",

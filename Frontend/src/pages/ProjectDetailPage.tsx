@@ -70,6 +70,7 @@ type InstanceFormModalProps = {
   categoryName: string;
   availableComponents: AvailableComponent[];
   initialInstance?: ProjectInstance;
+  linkedApplicationTargetName?: string;
   submitting: boolean;
   onClose: () => void;
   onSubmit: (payload: InstanceFormPayload) => Promise<void>;
@@ -84,6 +85,7 @@ type InstanceFormPayload = {
   installation: string | null;
   unit_amount: number | null;
   attribute_values: AttributeValueInput[];
+  application_attribute_values?: AttributeValueInput[];
   selected_material_rule_ids?: number[];
   media_asset_id?: number | null;
   clear_media?: boolean;
@@ -670,8 +672,39 @@ function buildAttributesFromComponent(component: AvailableComponent | undefined)
   }));
 }
 
+export function buildUsageAttributesFromComponent(component: AvailableComponent | undefined): EditableAttribute[] {
+  if (!component) {
+    return [];
+  }
+  return component.usage_attributes.map((attribute) => ({
+    name: attribute.name,
+    value_type: attribute.value_type,
+    options: attribute.options,
+    value: "",
+  }));
+}
+
 function editableAttributesToMap(attributes: EditableAttribute[]) {
   return new Map(attributes.map((attribute) => [attribute.name, attribute.value || ""]));
+}
+
+export function buildAttributeValueInputs(attributes: EditableAttribute[]): AttributeValueInput[] {
+  return attributes.map((attribute) => ({
+    name: attribute.name,
+    value: (attribute.value || "").trim() || null,
+  }));
+}
+
+export function buildLinkedApplicationOccurrenceRequest(
+  targetInstanceId: number,
+  attributeValues: AttributeValueInput[],
+): UpdateProjectOccurrenceRequest & { target_instance_id: number } {
+  return {
+    relationship_type: "uses",
+    context_label: null,
+    target_instance_id: targetInstanceId,
+    attribute_values: attributeValues,
+  };
 }
 
 function numericValue(value: string | null | undefined) {
@@ -719,22 +752,45 @@ function materialRuleApplies(rule: CatalogMaterialRule, attributes: EditableAttr
   );
 }
 
-function buildOccurrenceAttributeDrafts(instance: ProjectInstance, occurrence?: UsageOccurrence): EditableAttribute[] {
+export function resolveOccurrenceAttributeDefinitions(
+  instance: ProjectInstance,
+  occurrence?: UsageOccurrence,
+): EditableAttribute[] {
+  const definitions = new Map<string, EditableAttribute>();
+  for (const definition of instance.usage_attribute_definitions || []) {
+    definitions.set(definition.name, { ...definition, value: "" });
+  }
+
+  const baseDefinitions = new Map(
+    (instance.editable_attributes || []).map((definition) => [definition.name, definition]),
+  );
+  const occurrences = occurrence && !instance.outgoing_occurrences.some((row) => row.id === occurrence.id)
+    ? [...instance.outgoing_occurrences, occurrence]
+    : instance.outgoing_occurrences;
+  for (const row of occurrences) {
+    for (const attribute of row.attributes) {
+      if (definitions.has(attribute.name)) {
+        continue;
+      }
+      const matchingBaseDefinition = baseDefinitions.get(attribute.name);
+      definitions.set(attribute.name, {
+        name: attribute.name,
+        value_type: matchingBaseDefinition?.value_type || "text",
+        options: matchingBaseDefinition?.options || [],
+        value: "",
+      });
+    }
+  }
+
+  return normalizeEditableAttributes([...definitions.values()]);
+}
+
+export function buildOccurrenceAttributeDrafts(instance: ProjectInstance, occurrence?: UsageOccurrence): EditableAttribute[] {
   const values = new Map((occurrence?.attributes || []).map((attribute) => [attribute.name, attribute.value ?? ""]));
-  const drafts = instance.usage_attribute_definitions.map((attribute) => ({
+  return resolveOccurrenceAttributeDefinitions(instance, occurrence).map((attribute) => ({
     ...attribute,
     value: values.get(attribute.name) ?? "",
   }));
-  const definedNames = new Set(instance.usage_attribute_definitions.map((attribute) => attribute.name));
-  const extras = (occurrence?.attributes || [])
-    .filter((attribute) => !definedNames.has(attribute.name))
-    .map((attribute) => ({
-      name: attribute.name,
-      value_type: "text",
-      options: [],
-      value: attribute.value ?? "",
-    }));
-  return normalizeEditableAttributes([...drafts, ...extras]);
 }
 
 function InstanceFormModal({
@@ -743,6 +799,7 @@ function InstanceFormModal({
   categoryName,
   availableComponents,
   initialInstance,
+  linkedApplicationTargetName,
   submitting,
   onClose,
   onSubmit,
@@ -755,6 +812,7 @@ function InstanceFormModal({
   const [installation, setInstallation] = useState("");
   const [unitAmount, setUnitAmount] = useState("");
   const [attributes, setAttributes] = useState<EditableAttribute[]>([]);
+  const [applicationAttributes, setApplicationAttributes] = useState<EditableAttribute[]>([]);
   const [selectedMaterialRuleIds, setSelectedMaterialRuleIds] = useState<number[]>([]);
   const [selectedMedia, setSelectedMedia] = useState<MediaAsset | null>(null);
   const selectedComponent = availableComponents.find((component) => component.id === componentId) || availableComponents[0];
@@ -778,6 +836,7 @@ function InstanceFormModal({
       setInstallation(initialInstance.installation || "");
       setUnitAmount(initialInstance.unit_amount === null ? "" : String(initialInstance.unit_amount));
       setAttributes(normalizeEditableAttributes(initialInstance.editable_attributes));
+      setApplicationAttributes([]);
       setSelectedMedia(initialInstance.media[0] || null);
       return;
     }
@@ -791,9 +850,10 @@ function InstanceFormModal({
     setInstallation(defaultComponent?.installation || "");
     setUnitAmount("");
     setAttributes(buildAttributesFromComponent(defaultComponent));
+    setApplicationAttributes(linkedApplicationTargetName ? buildUsageAttributesFromComponent(defaultComponent) : []);
     setSelectedMedia(defaultComponent?.media[0] || null);
     setSelectedMaterialRuleIds((defaultComponent?.material_rules || []).map((rule) => rule.id).filter((id): id is number => id !== undefined));
-  }, [availableComponents, initialInstance, mode, open]);
+  }, [availableComponents, initialInstance, linkedApplicationTargetName, mode, open]);
 
   useEffect(() => {
     if (!open || mode !== "create") {
@@ -809,9 +869,10 @@ function InstanceFormModal({
     setShortDescription(selectedComponent.short_description || "");
     setInstallation(selectedComponent.installation || "");
     setAttributes(buildAttributesFromComponent(selectedComponent));
+    setApplicationAttributes(linkedApplicationTargetName ? buildUsageAttributesFromComponent(selectedComponent) : []);
     setSelectedMedia(selectedComponent.media[0] || null);
     setSelectedMaterialRuleIds(selectedComponent.material_rules.map((rule) => rule.id).filter((id): id is number => id !== undefined));
-  }, [availableComponents, componentId, mode, open]);
+  }, [availableComponents, componentId, linkedApplicationTargetName, mode, open]);
 
   useEffect(() => {
     if (!open || mode !== "create") {
@@ -838,10 +899,10 @@ function InstanceFormModal({
       short_description: shortDescription.trim() || null,
       installation: installation.trim() || null,
       unit_amount: unitAmount.trim() === "" ? null : Number(unitAmount),
-      attribute_values: attributes.map((attribute) => ({
-        name: attribute.name,
-        value: (attribute.value || "").trim() || null,
-      })),
+      attribute_values: buildAttributeValueInputs(attributes),
+      application_attribute_values: linkedApplicationTargetName
+        ? buildAttributeValueInputs(applicationAttributes)
+        : undefined,
       selected_material_rule_ids: mode === "create" ? selectedMaterialRuleIds : undefined,
       media_asset_id: selectedMedia?.id ?? null,
       clear_media: selectedMedia === null,
@@ -982,6 +1043,53 @@ function InstanceFormModal({
           </div>
         ) : null}
 
+        {mode === "create" && linkedApplicationTargetName ? (
+          <div className="rounded-xl border border-accent-500/30 bg-accent-500/5 p-4 flex flex-col gap-3">
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Aplicación inicial</div>
+              <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{linkedApplicationTargetName}</div>
+            </div>
+            {applicationAttributes.length ? applicationAttributes.map((attribute) => (
+              <div key={`application-${attribute.name}`} className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-zinc-600 dark:text-zinc-400 uppercase tracking-widest">{attribute.name}</label>
+                {attribute.value_type === "select" ? (
+                  <select
+                    value={attribute.value || ""}
+                    onChange={(event) =>
+                      setApplicationAttributes((current) =>
+                        current.map((item) =>
+                          item.name === attribute.name ? { ...item, value: event.target.value } : item,
+                        ),
+                      )
+                    }
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                  >
+                    <option value="">Seleccionar valor</option>
+                    {attribute.options.map((option) => (
+                      <option key={`${attribute.name}-${option}`} value={option}>{option}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={attribute.value || ""}
+                    type={attribute.value_type === "number" ? "number" : "text"}
+                    onChange={(event) =>
+                      setApplicationAttributes((current) =>
+                        current.map((item) =>
+                          item.name === attribute.name ? { ...item, value: event.target.value } : item,
+                        ),
+                      )
+                    }
+                    className="w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-all font-mono"
+                  />
+                )}
+              </div>
+            )) : (
+              <div className="text-xs text-zinc-500 dark:text-zinc-400">Este accesorio no tiene atributos de aplicación definidos.</div>
+            )}
+          </div>
+        ) : null}
+
         {mode === "create" ? (
           <div className="rounded-xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 shadow-sm p-4 flex flex-col gap-3">
             <div className="flex items-center justify-between gap-3">
@@ -1050,7 +1158,7 @@ function InstanceFormModal({
             disabled={submitting}
             className="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 rounded-lg text-sm font-bold transition-colors disabled:opacity-50"
           >
-            {submitting ? "Guardando..." : mode === "create" ? "Crear instancia" : "Guardar instancia"}
+            {submitting ? "Guardando..." : linkedApplicationTargetName ? "Crear y vincular" : mode === "create" ? "Crear instancia" : "Guardar instancia"}
           </button>
         </div>
       </form>
@@ -1822,19 +1930,7 @@ function UsageManager({
   const editingOccurrence = editingOccurrenceId === "new"
     ? undefined
     : instance.outgoing_occurrences.find((occurrence) => occurrence.id === editingOccurrenceId);
-  const attributeColumns = instance.usage_attribute_definitions.reduce<string[]>((columns, definition) => {
-    if (!columns.includes(definition.name)) {
-      columns.push(definition.name);
-    }
-    return columns;
-  }, []);
-  for (const occurrence of instance.outgoing_occurrences) {
-    for (const attribute of occurrence.attributes) {
-      if (!attributeColumns.includes(attribute.name)) {
-        attributeColumns.push(attribute.name);
-      }
-    }
-  }
+  const attributeColumns = resolveOccurrenceAttributeDefinitions(instance).map((definition) => definition.name);
   const visibleAttributeColumns = attributeColumns.slice(0, 4);
   const overflowAttributeColumns = attributeColumns.slice(4);
 
@@ -3613,9 +3709,12 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
 
     setSubmitting(true);
     setError(null);
-    let createdInstance: ProjectInstance | null = null;
     try {
-      const result = await api.createProjectInstance(projectId, {
+      const initialApplication = buildLinkedApplicationOccurrenceRequest(
+        currentLinkedAccessoryState.targetInstanceId,
+        payload.application_attribute_values ?? [],
+      );
+      const result = await api.createLinkedProjectAccessory(projectId, {
         category_id: category.id,
         component_id: payload.component_id,
         name: payload.name,
@@ -3627,32 +3726,26 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
         attribute_values: payload.attribute_values,
         selected_material_rule_ids: payload.selected_material_rule_ids ?? [],
         media_asset_id: payload.media_asset_id ?? null,
+        target_instance_id: initialApplication.target_instance_id,
+        relationship_type: initialApplication.relationship_type,
+        context_label: initialApplication.context_label,
+        application_attribute_values: initialApplication.attribute_values,
       });
-      if (!result.instance) {
-        throw new Error("No se pudo crear la instancia del accesorio.");
+      if (!result.instance || !result.occurrence) {
+        throw new Error("No se pudo crear y vincular el accesorio.");
       }
 
-      createdInstance = result.instance as ProjectInstance;
-      setData((current) => (current ? upsertCategoryInstance(current, category.id, createdInstance as ProjectInstance) : current));
-
-      const occurrenceResult = await api.createProjectOccurrence(projectId, createdInstance.id, {
-        relationship_type: "uses",
-        context_label: null,
-        target_instance_id: currentLinkedAccessoryState.targetInstanceId,
-        attribute_values: [],
+      const createdInstance = result.instance as ProjectInstance;
+      const createdOccurrence = result.occurrence as UsageOccurrence;
+      setData((current) => {
+        if (!current) {
+          return current;
+        }
+        const withInstance = upsertCategoryInstance(current, category.id, createdInstance);
+        return applyOccurrenceToProject(withInstance, createdInstance.id, createdOccurrence);
       });
-      if (!occurrenceResult.occurrence) {
-        throw new Error("El accesorio fue creado, pero no se pudo vincular al ítem.");
-      }
-
-      setData((current) =>
-        current ? applyOccurrenceToProject(current, createdInstance?.id || 0, occurrenceResult.occurrence as UsageOccurrence) : current,
-      );
       setLinkedAccessoryState(null);
     } catch (err) {
-      if (createdInstance) {
-        setLinkedAccessoryState(null);
-      }
       const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : "No se pudo crear el accesorio vinculado.";
       setError(message);
     } finally {
@@ -4167,6 +4260,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
           mode="create"
           categoryName={`Accesorio vinculado · ${activeLinkedAccessoryCategory.name}`}
           availableComponents={activeLinkedAccessoryCategory.available_components.filter((component) => component.type === "accessory")}
+          linkedApplicationTargetName={linkedAccessoryState.targetInstanceName}
           submitting={submitting}
           onClose={() => setLinkedAccessoryState(null)}
           onSubmit={handleCreateLinkedAccessory}

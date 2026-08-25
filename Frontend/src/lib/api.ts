@@ -23,6 +23,7 @@ import type {
   CreateUserRequest,
   CreateCategoryRequest,
   CreateComponentRequest,
+  CreateLinkedProjectAccessoryRequest,
   CreateProjectInstanceRequest,
   CreateProjectRequest,
   ExportJob,
@@ -725,6 +726,13 @@ export const api = {
   },
   createProjectInstance(projectId: number, payload: CreateProjectInstanceRequest, mutationBatchId?: string) {
     return request<MutationResult>(`/api/v1/projects/${projectId}/instances`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: mutationHeaders(mutationBatchId),
+    });
+  },
+  createLinkedProjectAccessory(projectId: number, payload: CreateLinkedProjectAccessoryRequest, mutationBatchId?: string) {
+    return request<MutationResult>(`/api/v1/projects/${projectId}/linked-accessories`, {
       method: "POST",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),

@@ -1228,6 +1228,84 @@ class ServiceLayerTests(unittest.TestCase):
         caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
         self.assertFalse(any(item["id"] == occurrence_id for item in caulking_payload["outgoing_occurrences"]))
 
+    def test_linked_accessory_api_creates_instance_and_application_atomically(self) -> None:
+        with self.session_factory() as session:
+            source_instance = session.scalar(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.name == "Elastic Caulking Package")
+            )
+            target_instance = session.scalar(
+                select(ProjectInstance)
+                .where(
+                    ProjectInstance.project_id == 2,
+                    ProjectInstance.instance_type == ComponentType.ITEM,
+                )
+                .order_by(ProjectInstance.id)
+            )
+            self.assertIsNotNone(source_instance)
+            self.assertIsNotNone(target_instance)
+            assert source_instance is not None
+            assert target_instance is not None
+            category_id = source_instance.category_id
+            component_id = source_instance.component_id
+            target_instance_id = target_instance.id
+
+        create_response = self.client.post(
+            "/api/v1/projects/2/linked-accessories",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "category_id": category_id,
+                "component_id": component_id,
+                "name": "Atomic linked caulking",
+                "short_name": None,
+                "description": None,
+                "short_description": None,
+                "installation": None,
+                "unit_amount": None,
+                "attribute_values": [],
+                "selected_material_rule_ids": [],
+                "media_asset_id": None,
+                "target_instance_id": target_instance_id,
+                "relationship_type": "uses",
+                "context_label": None,
+                "application_attribute_values": [
+                    {"name": "Color", "value": "Gray"},
+                    {"name": "Applicability", "value": "Toilet base"},
+                    {"name": "Area", "value": "Bathroom"},
+                ],
+            },
+        )
+        self.assertEqual(create_response.status_code, 200)
+        payload = create_response.json()
+        self.assertEqual(payload["instance"]["name"], "Atomic linked caulking")
+        self.assertEqual(payload["occurrence"]["targets"][0]["instance_id"], target_instance_id)
+        self.assertEqual(
+            {row["name"]: row["value"] for row in payload["occurrence"]["attributes"]},
+            {"Color": "Gray", "Applicability": "Toilet base", "Area": "Bathroom"},
+        )
+
+        failed_response = self.client.post(
+            "/api/v1/projects/2/linked-accessories",
+            headers={"X-Spec-Sheets-User": "editor"},
+            json={
+                "category_id": category_id,
+                "component_id": component_id,
+                "name": "Rolled back linked caulking",
+                "attribute_values": [],
+                "selected_material_rule_ids": [],
+                "target_instance_id": 999999,
+                "application_attribute_values": [{"name": "Color", "value": "Gray"}],
+            },
+        )
+        self.assertEqual(failed_response.status_code, 422)
+        with self.session_factory() as session:
+            rolled_back_instance = session.scalar(
+                select(ProjectInstance).where(
+                    ProjectInstance.project_id == 2,
+                    ProjectInstance.name == "Rolled back linked caulking",
+                )
+            )
+        self.assertIsNone(rolled_back_instance)
+
     def test_html_renderers_include_core_screen_content(self) -> None:
         with self.session_factory() as session:
             catalog = get_catalog_page_data(session)
@@ -2363,6 +2441,7 @@ class ServiceLayerTests(unittest.TestCase):
         merged_entry = merged_group["entries"][0]
         self.assertEqual(merged_entry["headline"], "Material quantities changed")
         self.assertEqual(merged_entry["subject_name"], material["material_name"])
+        self.assertEqual(merged_entry["subject_sku"], material["sku"])
         changes_by_label = {change["label"]: (change["before"], change["after"]) for change in merged_entry["changes"]}
         self.assertEqual(
             changes_by_label.get(f"{first_row['subtype']} quantity"),
@@ -2372,6 +2451,44 @@ class ServiceLayerTests(unittest.TestCase):
             changes_by_label.get(f"{first_row['subtype']} assembly quantity"),
             (str(first_row["assembly_quantity"]), str((first_row["assembly_quantity"] or 0) + 3)),
         )
+
+    def test_legacy_material_activity_recovers_subject_sku_from_rule(self) -> None:
+        with self.session_factory() as session:
+            project = session.scalar(select(Project).where(Project.id == 2))
+            rule = session.scalar(
+                select(ComponentMaterialRule)
+                .where(ComponentMaterialRule.material_id.is_not(None))
+                .order_by(ComponentMaterialRule.id)
+            )
+            self.assertIsNotNone(project)
+            self.assertIsNotNone(rule)
+            assert project is not None
+            assert rule is not None
+
+            group = ProjectActivityGroup(project=project, title="Legacy material update")
+            session.add(group)
+            session.flush()
+            session.add(
+                ProjectActivityLog(
+                    project=project,
+                    group=group,
+                    entity_type="ProjectBomEntry",
+                    entity_id=rule.id,
+                    action="updated",
+                    details=build_activity_details(
+                        headline="Material quantities changed",
+                        subject_name=rule.material.name,
+                        kind="material",
+                    ),
+                )
+            )
+            session.commit()
+            expected_sku = rule.material.sku
+
+        activity = self.client.get("/api/v1/projects/2/activity", headers={"X-Spec-Sheets-User": "viewer"})
+        self.assertEqual(activity.status_code, 200)
+        legacy_group = next(group for group in activity.json() if group["title"] == "Legacy material update")
+        self.assertEqual(legacy_group["entries"][0]["subject_sku"], expected_sku)
 
     def test_legacy_deleted_item_activity_recovers_subject_name_from_project_instances(self) -> None:
         with self.session_factory() as session:

@@ -58,6 +58,8 @@ from app.api_models import (
     HouseTypeLinksBundleResponse,
     HouseTypeLinksUpdateRequest,
     LoginRequest,
+    LinkedProjectAccessoryCreateRequest,
+    LinkedProjectAccessoryMutationResultModel,
     MaterialDashboardCecoResponse,
     MaterialDashboardDateRangeRequest,
     MaterialDashboardDetailResponse,
@@ -253,6 +255,7 @@ from app.services.projects import (
     copy_project,
     create_project_instance,
     create_project_instance_occurrence,
+    create_linked_project_accessory,
     create_project_subtype,
     delete_project_instance_occurrence,
     delete_project_instance_material,
@@ -1796,6 +1799,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "category_id": payload.category_id,
             "instance_id": instance.id,
             "instance": get_project_instance_data(session, project_id, instance.id),
+        }
+
+    @app.post(
+        "/api/v1/projects/{project_id}/linked-accessories",
+        response_model=LinkedProjectAccessoryMutationResultModel,
+    )
+    async def create_linked_project_accessory_v1(
+        project_id: int,
+        payload: LinkedProjectAccessoryCreateRequest,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+        mutation_batch_id: str | None = Depends(get_mutation_batch_id),
+    ):
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_edit(current_user, project)
+        if payload.media_asset_id is not None and get_media_asset(session, payload.media_asset_id) is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        try:
+            instance, occurrence = create_linked_project_accessory(
+                session,
+                project=project,
+                category_id=payload.category_id,
+                component_id=payload.component_id,
+                name=payload.name,
+                short_name=payload.short_name,
+                description=payload.description,
+                short_description=payload.short_description,
+                installation=payload.installation,
+                unit_amount=payload.unit_amount,
+                attribute_values=parse_attribute_values_rows(payload.attribute_values),
+                selected_material_rule_ids=payload.selected_material_rule_ids,
+                media_asset_id=payload.media_asset_id,
+                target_instance_id=payload.target_instance_id,
+                relationship_type=payload.relationship_type,
+                context_label=payload.context_label,
+                application_attribute_values=parse_attribute_values_rows(payload.application_attribute_values),
+                actor_user=current_user,
+                mutation_batch_id=mutation_batch_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "project_id": project_id,
+            "category_id": payload.category_id,
+            "instance_id": instance.id,
+            "occurrence_id": occurrence.id,
+            "instance": get_project_instance_data(session, project_id, instance.id),
+            "occurrence": get_project_occurrence_data(session, project_id, instance.id, occurrence.id),
         }
 
     @app.put("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=ProjectInstanceMutationResultModel)

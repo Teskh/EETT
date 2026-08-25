@@ -599,6 +599,11 @@ class ProjectOccurrenceMutationResultModel(MutationResultModel):
     occurrence: OccurrenceModel | None = None
 
 
+class LinkedProjectAccessoryMutationResultModel(ProjectInstanceMutationResultModel):
+    occurrence_id: int
+    occurrence: OccurrenceModel
+
+
 class CategorySectionModel(BaseModel):
     id: int
     name: str
@@ -649,6 +654,13 @@ class ProjectOccurrenceUpdateRequest(BaseModel):
     context_label: str | None = None
     target_instance_id: int | None = None
     attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
+
+
+class LinkedProjectAccessoryCreateRequest(ProjectInstanceCreateRequest):
+    target_instance_id: int
+    relationship_type: str = "uses"
+    context_label: str | None = None
+    application_attribute_values: list[AttributeValueInputModel] = Field(default_factory=list)
 
 
 class SyncScalarFieldModel(BaseModel):
@@ -773,6 +785,7 @@ class ActivityEntryModel(BaseModel):
     kind: str
     headline: str
     subject_name: str | None
+    subject_sku: str | None
     notes: list[str] = Field(default_factory=list)
     changes: list[ActivityChangeModel] = Field(default_factory=list)
     created_at: str

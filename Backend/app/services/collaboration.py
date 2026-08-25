@@ -4,13 +4,15 @@ from datetime import datetime, timedelta
 import re
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     ApprovalStatus,
     CommentMention,
     CommentNotification,
+    ComponentMaterialRule,
+    Material,
     NotificationType,
     Project,
     ProjectActivityGroup,
@@ -203,7 +205,11 @@ def get_project_activity(session: Session, project_id: int) -> list[dict]:
         )
         .order_by(ProjectActivityGroup.created_at.desc())
     ).all()
-    return _merge_activity_groups([_serialize_activity_group(group) for group in groups])
+    recovered_subject_skus = _recover_activity_subject_skus(session, groups)
+    return _merge_activity_groups([
+        _serialize_activity_group(group, recovered_subject_skus=recovered_subject_skus)
+        for group in groups
+    ])
 
 
 def get_activity_projects(session: Session, user: User, *, execution_only: bool = False) -> list[dict]:
@@ -233,12 +239,17 @@ def get_activity_history(session: Session, user: User, *, execution_only: bool =
         )
         .order_by(ProjectActivityGroup.created_at.desc())
     ).all()
-    return _merge_activity_groups([
-        _serialize_activity_group(group)
+    visible_groups = [
+        group
         for group in groups
         if group.project is not None
         and can_view_project(user, group.project)
         and (not execution_only or group.project.status == ProjectStatus.EXECUTION)
+    ]
+    recovered_subject_skus = _recover_activity_subject_skus(session, visible_groups)
+    return _merge_activity_groups([
+        _serialize_activity_group(group, recovered_subject_skus=recovered_subject_skus)
+        for group in visible_groups
     ])
 
 
@@ -456,8 +467,107 @@ def _build_comment_route(project_id: int, comment_id: int) -> str:
     return f"/projects/{project_id}#comment-{comment_id}"
 
 
-def _serialize_activity_group(group: ProjectActivityGroup) -> dict:
-    entries = [_serialize_activity_event(entry, project=group.project) for entry in sorted(group.events, key=lambda item: item.created_at)]
+def _normalize_material_name(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _recover_activity_subject_skus(
+    session: Session,
+    groups: list[ProjectActivityGroup],
+) -> dict[int, str]:
+    legacy_events: list[ProjectActivityLog] = []
+    for group in groups:
+        for event in group.events:
+            details = event.details or {}
+            if (
+                event.entity_type != "ProjectBomEntry"
+                or not isinstance(details, dict)
+                or str(details.get("kind") or "").casefold() != "material"
+                or (isinstance(details.get("subject_sku"), str) and details["subject_sku"].strip())
+            ):
+                continue
+            legacy_events.append(event)
+
+    if not legacy_events:
+        return {}
+
+    entity_ids = {event.entity_id for event in legacy_events if event.entity_id is not None}
+    rule_material_by_id = {
+        rule_id: material_id
+        for rule_id, material_id in session.execute(
+            select(ComponentMaterialRule.id, ComponentMaterialRule.material_id).where(
+                ComponentMaterialRule.id.in_(entity_ids)
+            )
+        ).all()
+    }
+    material_ids = entity_ids | set(rule_material_by_id.values())
+    subject_names = {
+        str((event.details or {}).get("subject_name") or "").strip()
+        for event in legacy_events
+        if str((event.details or {}).get("subject_name") or "").strip()
+    }
+    material_rows = session.execute(
+        select(Material.id, Material.sku, Material.name).where(
+            or_(
+                Material.id.in_(material_ids),
+                Material.name.in_(subject_names),
+            )
+        )
+    ).all()
+    material_by_id = {
+        material_id: (sku.strip(), _normalize_material_name(name))
+        for material_id, sku, name in material_rows
+        if sku and sku.strip()
+    }
+    materials_by_name: dict[str, set[str]] = {}
+    for _, sku, name in material_rows:
+        normalized_name = _normalize_material_name(name)
+        if normalized_name and sku and sku.strip():
+            materials_by_name.setdefault(normalized_name, set()).add(sku.strip())
+
+    recovered: dict[int, str] = {}
+    for event in legacy_events:
+        details = event.details or {}
+        subject_name = _normalize_material_name(details.get("subject_name"))
+        direct_material = material_by_id.get(event.entity_id)
+        rule_material = material_by_id.get(rule_material_by_id.get(event.entity_id))
+        candidates = [candidate for candidate in (direct_material, rule_material) if candidate is not None]
+
+        matching_skus = {sku for sku, name in candidates if subject_name and name == subject_name}
+        if len(matching_skus) == 1:
+            recovered[event.id] = matching_skus.pop()
+            continue
+
+        preferred = direct_material if event.action in {"created", "deleted"} else None
+        if preferred is not None:
+            recovered[event.id] = preferred[0]
+            continue
+
+        candidate_skus = {sku for sku, _ in candidates}
+        if len(candidate_skus) == 1:
+            recovered[event.id] = candidate_skus.pop()
+            continue
+
+        name_skus = materials_by_name.get(subject_name, set())
+        if len(name_skus) == 1:
+            recovered[event.id] = next(iter(name_skus))
+
+    return recovered
+
+
+def _serialize_activity_group(
+    group: ProjectActivityGroup,
+    *,
+    recovered_subject_skus: dict[int, str] | None = None,
+) -> dict:
+    entries = [
+        _serialize_activity_event(
+            entry,
+            project=group.project,
+            recovered_subject_sku=(recovered_subject_skus or {}).get(entry.id),
+        )
+        for entry in sorted(group.events, key=lambda item: item.created_at)
+    ]
     return {
         "id": group.id,
         "title": group.title or _default_group_title(group),
@@ -507,6 +617,8 @@ def _can_merge_material_entries(newer_entry: dict, older_entry: dict) -> bool:
     if newer_entry.get("headline") != older_entry.get("headline"):
         return False
     if newer_entry.get("subject_name") != older_entry.get("subject_name"):
+        return False
+    if newer_entry.get("subject_sku") != older_entry.get("subject_sku"):
         return False
     return tuple(newer_entry.get("notes") or []) == tuple(older_entry.get("notes") or [])
 
@@ -646,7 +758,12 @@ def _recover_legacy_subject_name(details: dict[str, Any], *, project: Project | 
     return best_name if best_score >= 4 else None
 
 
-def _serialize_activity_event(entry: ProjectActivityLog, *, project: Project | None = None) -> dict:
+def _serialize_activity_event(
+    entry: ProjectActivityLog,
+    *,
+    project: Project | None = None,
+    recovered_subject_sku: str | None = None,
+) -> dict:
     details = entry.details or {}
     notes = details.get("notes") if isinstance(details.get("notes"), list) else []
     changes = details.get("changes") if isinstance(details.get("changes"), list) else []
@@ -659,6 +776,11 @@ def _serialize_activity_event(entry: ProjectActivityLog, *, project: Project | N
         "kind": kind,
         "headline": str(details.get("headline") or entry.action.replace("_", " ").strip()),
         "subject_name": subject_name,
+        "subject_sku": (
+            str(details.get("subject_sku")).strip()
+            if isinstance(details.get("subject_sku"), str) and str(details.get("subject_sku")).strip()
+            else recovered_subject_sku
+        ),
         "notes": [str(note).strip() for note in notes if str(note).strip()],
         "changes": [
             {
