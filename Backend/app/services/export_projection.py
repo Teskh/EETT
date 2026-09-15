@@ -342,8 +342,7 @@ def build_full_technical_export_sections(
             orm_instance = orm_instances.get(serialized_instance["id"])
             if orm_instance is None:
                 continue
-            if _is_attached_accessory_instance(orm_instance):
-                continue
+            # Full exports retain each accessory specification as well as parent mentions.
             settings = normalize_full_export_settings(
                 instance_type=serialized_instance["type"],
                 raw_settings=_instance_export_settings(serialized_instance, "full_technical_pdf"),
