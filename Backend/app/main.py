@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from starlette.background import BackgroundTask
 from starlette.middleware.sessions import SessionMiddleware
+from app.middleware import PrivateResponseMiddleware
 
 from app.api_models import (
     ActivityGroupProjectModel,
@@ -349,6 +350,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=settings.environment == "production",
         path=settings.public_base_path or "/",
     )
+    # Added last so this also covers headers written by SessionMiddleware.
+    app.add_middleware(PrivateResponseMiddleware)
 
     static_dir = Path(__file__).resolve().parent / "static"
     frontend_index = static_dir / "app" / "index.html"
@@ -930,6 +933,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/auth/microsoft/login")
     @app.get("/api/v1/auth/microsoft/login")
     async def microsoft_login_api(request: Request):
+        # An account switch must never fall back to the previous app identity.
+        request.session.clear()
         settings = request.app.state.settings
         if not settings.microsoft_login_enabled:
             return _login_redirect_error("El ingreso con Microsoft está deshabilitado.")
@@ -945,6 +950,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def microsoft_callback_api(request: Request, session: Session = Depends(get_session)):
         settings = request.app.state.settings
         expected_state = request.session.pop("ms_oauth_state", None)
+        # Also handle callbacks from login flows started before this safeguard.
+        request.session.clear()
         received_state = request.query_params.get("state")
         if not expected_state or not received_state or not secrets.compare_digest(expected_state, received_state):
             return _login_redirect_error("No se pudo validar la respuesta de Microsoft. Intenta nuevamente.")

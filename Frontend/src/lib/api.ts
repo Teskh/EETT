@@ -112,6 +112,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await fetch(toAppPath(input), {
     credentials: "same-origin",
     ...init,
+    cache: "no-store",
     headers,
   });
 
