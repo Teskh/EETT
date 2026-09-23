@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
-import type { AvailableComponent, ProjectInstance } from "../lib/types";
+import type { AvailableComponent, ProjectCategorySection, ProjectDetailData, ProjectInstance } from "../lib/types";
 import {
   buildAttributeValueInputs,
   buildLinkedApplicationOccurrenceRequest,
@@ -8,7 +10,14 @@ import {
   buildUsageAttributesFromComponent,
   projectTreeMatches,
   resolveOccurrenceAttributeDefinitions,
+  getLinkedAccessoryCategories,
+  getProjectItemTargets,
+  LinkedAccessoryModal,
 } from "./ProjectDetailPage";
+
+vi.mock("../components/Modal", () => ({
+  Modal: ({ children }: { children: React.ReactNode }) => children,
+}));
 
 const projectTreeWithMaterialSku = {
   id: 1,
@@ -114,6 +123,43 @@ describe("application attribute fields", () => {
 });
 
 describe("linked accessory creation", () => {
+  const itemCategory = {
+    id: 1, name: "Puertas", linked_category_ids: [2], available_components: [],
+    instances: [{ id: 44, name: "Puerta principal", type: "item" }],
+  } as unknown as ProjectCategorySection;
+  const accessoryCategory = {
+    id: 2, name: "Aislación", linked_category_ids: [3], available_components: [],
+    instances: [{ ...accessoryWithLegacyApplicationFields, name: "Aislación térmica" }],
+  } as unknown as ProjectCategorySection;
+
+  it("lists project items even when the accessory category links elsewhere", () => {
+    expect(getProjectItemTargets([itemCategory, accessoryCategory])).toEqual([{
+      instance_id: 44, instance_name: "Puerta principal", category_id: 1,
+      category_name: "Puertas", type: "item",
+    }]);
+  });
+
+  it("can link existing accessories whose catalog component is no longer available", () => {
+    const data = { categories: [itemCategory, accessoryCategory] } as ProjectDetailData;
+    expect(getLinkedAccessoryCategories(data, itemCategory)).toEqual([accessoryCategory]);
+  });
+
+  it("opens the application editor for an existing accessory with the clicked item selected", () => {
+    const markup = renderToStaticMarkup(createElement(LinkedAccessoryModal, {
+      category: accessoryCategory,
+      target: getProjectItemTargets([itemCategory])[0],
+      submitting: false,
+      onClose: vi.fn(), onCreate: vi.fn(), onLink: vi.fn(),
+    }));
+    expect(markup).toContain('value="20" selected=""');
+    expect(markup).toContain('value="44" selected=""');
+    expect(markup).toContain("Crear aplicación");
+    expect(markup).toContain("Declared field");
+    expect(markup).toContain("Legacy finish");
+    expect(markup).not.toContain("Crear y vincular");
+    expect(markup).not.toContain("En otra ubicación");
+  });
+
   it("builds initial application fields from the selected component usage schema", () => {
     const component = {
       usage_attributes: [

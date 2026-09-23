@@ -134,15 +134,28 @@ function buildCategoryTree(flatCategories: ProjectCategorySection[]): CategoryNo
   return rootNodes;
 }
 
-function getLinkedAccessoryCategories(data: ProjectDetailData, itemCategory: ProjectCategorySection): ProjectCategorySection[] {
+export function getLinkedAccessoryCategories(data: ProjectDetailData, itemCategory: ProjectCategorySection): ProjectCategorySection[] {
   const linkedCategoryIds = new Set(itemCategory.linked_category_ids);
   const candidates = linkedCategoryIds.size
     ? data.categories.filter((category) => linkedCategoryIds.has(category.id))
     : data.categories;
 
   return candidates
-    .filter((category) => category.available_components.some((component) => component.type === "accessory"))
+    .filter((category) => category.instances.some((instance) => instance.type === "accessory") ||
+      category.available_components.some((component) => component.type === "accessory"))
     .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function getProjectItemTargets(categories: ProjectCategorySection[]): TargetOption[] {
+  return categories.flatMap((category) => category.instances
+    .filter((instance) => instance.type === "item")
+    .map((instance) => ({
+      instance_id: instance.id,
+      instance_name: instance.name,
+      category_id: category.id,
+      category_name: category.name,
+      type: instance.type,
+    })));
 }
 
 function ProjectCategoryTree({
@@ -1209,6 +1222,63 @@ function LinkedAccessoryCategoryModal({
   );
 }
 
+export function LinkedAccessoryModal({ category, target, submitting, onClose, onCreate, onLink }: {
+  category: ProjectCategorySection;
+  target: TargetOption;
+  submitting: boolean;
+  onClose: () => void;
+  onCreate: (payload: InstanceFormPayload) => Promise<void>;
+  onLink: (instanceId: number, payload: UpdateProjectOccurrenceRequest) => Promise<void>;
+}) {
+  const accessories = category.instances.filter((instance) => instance.type === "accessory");
+  const [selection, setSelection] = useState<string>(() => accessories[0] ? String(accessories[0].id) : "new");
+  const selectedInstance = accessories.find((instance) => String(instance.id) === selection);
+  const [creating, setCreating] = useState(accessories.length === 0);
+
+  if (creating) {
+    return <InstanceFormModal
+      open
+      mode="create"
+      categoryName={`Accesorio vinculado · ${category.name}`}
+      availableComponents={category.available_components.filter((component) => component.type === "accessory")}
+      linkedApplicationTargetName={target.instance_name}
+      submitting={submitting}
+      onClose={onClose}
+      onSubmit={onCreate}
+    />;
+  }
+
+  return <Modal open title="Vincular accesorio" kicker={category.name} onClose={onClose}>
+    <div className="space-y-4">
+      <label className="flex flex-col gap-1 text-sm">
+        Accesorio del proyecto
+        <select value={selection} onChange={(event) => setSelection(event.target.value)}
+          className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-zinc-900 px-2 py-1.5 text-sm">
+          {accessories.map((instance) => <option key={instance.id} value={instance.id}>
+            {instance.name}{instance.short_name ? ` (${instance.short_name})` : ""} · #{instance.id}
+          </option>)}
+        </select>
+      </label>
+      {selectedInstance ? <OccurrenceEditorCard
+        key={selectedInstance.id}
+        instance={selectedInstance}
+        targetOptions={[target]}
+        fixedTarget={target}
+        saveLabel="Crear aplicación"
+        onSave={async (payload) => {
+          await onLink(selectedInstance.id, payload);
+          onClose();
+        }}
+      /> : null}
+      {category.available_components.some((component) => component.type === "accessory") ? <button
+        type="button" onClick={() => setCreating(true)}
+        className="text-sm font-semibold text-accent-600 dark:text-accent-500">
+        Crear otro accesorio
+      </button> : null}
+    </div>
+  </Modal>;
+}
+
 function getOccurrenceDestinationMode(occurrence?: UsageOccurrence): "item" | "location" {
   return occurrence?.targets[0] ? "item" : "location";
 }
@@ -1697,6 +1767,7 @@ function OccurrenceEditorCard({
   onSave,
   onDelete,
   saveLabel,
+  fixedTarget,
 }: {
   instance: ProjectInstance;
   occurrence?: UsageOccurrence;
@@ -1704,25 +1775,26 @@ function OccurrenceEditorCard({
   onSave: (payload: UpdateProjectOccurrenceRequest) => Promise<void>;
   onDelete?: () => Promise<void>;
   saveLabel: string;
+  fixedTarget?: TargetOption;
 }) {
-  const initialDestinationMode = getOccurrenceDestinationMode(occurrence);
+  const initialDestinationMode = fixedTarget ? "item" : getOccurrenceDestinationMode(occurrence);
   const [destinationMode, setDestinationMode] = useState<"item" | "location">(initialDestinationMode);
   const [itemContextLabel, setItemContextLabel] = useState(initialDestinationMode === "item" ? occurrence?.context_label || "" : "");
   const [locationLabel, setLocationLabel] = useState(initialDestinationMode === "location" ? occurrence?.context_label || "" : "");
-  const [targetInstanceId, setTargetInstanceId] = useState<string>(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
+  const [targetInstanceId, setTargetInstanceId] = useState<string>(fixedTarget ? String(fixedTarget.instance_id) : occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
   const [attributes, setAttributes] = useState<EditableAttribute[]>(() => buildOccurrenceAttributeDrafts(instance, occurrence));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const nextDestinationMode = getOccurrenceDestinationMode(occurrence);
+    const nextDestinationMode = fixedTarget ? "item" : getOccurrenceDestinationMode(occurrence);
     setDestinationMode(nextDestinationMode);
     setItemContextLabel(nextDestinationMode === "item" ? occurrence?.context_label || "" : "");
     setLocationLabel(nextDestinationMode === "location" ? occurrence?.context_label || "" : "");
-    setTargetInstanceId(occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
+    setTargetInstanceId(fixedTarget ? String(fixedTarget.instance_id) : occurrence?.targets[0] ? String(occurrence.targets[0].instance_id) : "");
     setAttributes(buildOccurrenceAttributeDrafts(instance, occurrence));
     setError(null);
-  }, [instance, occurrence]);
+  }, [instance, occurrence, fixedTarget?.instance_id]);
 
   async function handleSave() {
     const trimmedContextLabel = (destinationMode === "item" ? itemContextLabel : locationLabel).trim();
@@ -1771,7 +1843,7 @@ function OccurrenceEditorCard({
   return (
     <div className="rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-3 space-y-3">
       <div className="space-y-3">
-        <fieldset className="space-y-1.5">
+        {!fixedTarget ? <fieldset className="space-y-1.5">
           <legend className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">¿Dónde se aplica?</legend>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <label className={`flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2 text-sm ${destinationMode === "item" ? "border-accent-500/60 bg-accent-500/10" : "border-black/10 bg-white dark:border-white/10 dark:bg-black/20"}`}>
@@ -1801,7 +1873,7 @@ function OccurrenceEditorCard({
               </span>
             </label>
           </div>
-        </fieldset>
+        </fieldset> : null}
 
         {destinationMode === "item" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1809,6 +1881,7 @@ function OccurrenceEditorCard({
               <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Ítem de destino</label>
               <select
                 value={targetInstanceId}
+                disabled={Boolean(fixedTarget)}
                 onChange={(event) => setTargetInstanceId(event.target.value)}
                 className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-2 py-1.5 text-sm"
               >
@@ -4020,17 +4093,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
 
   const categoryTree = buildCategoryTree(data.categories);
   const flatSubtypeOptions = flattenSubtypeTree(data.subtypes);
-  const targetOptions: TargetOption[] = data.categories.flatMap((category) =>
-    category.instances
-      .filter((instance) => instance.type === "item")
-      .map((instance) => ({
-        instance_id: instance.id,
-        instance_name: instance.name,
-        category_id: category.id,
-        category_name: category.name,
-        type: instance.type,
-      })),
-  );
+  const targetOptions = getProjectItemTargets(data.categories);
   const incomingOccurrenceSourceIds = new Map<number, number>();
   for (const category of data.categories) {
     for (const sourceInstance of category.instances) {
@@ -4116,8 +4179,7 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
                         subtypeOptions={flatSubtypeOptions}
                         targetOptions={targetOptions.filter(
                           (target) =>
-                            target.instance_id !== instance.id &&
-                            (category.linked_category_ids.length === 0 || category.linked_category_ids.includes(target.category_id)),
+                            target.instance_id !== instance.id,
                         )}
                         linkedAccessoryCategories={linkedAccessoryCategories}
                         syncPreview={syncPreviews[instance.id] || null}
@@ -4255,15 +4317,14 @@ export function ProjectDetailPage({ projectId, onTitleChange, readOnly = false }
       ) : null}
 
       {!readOnly && linkedAccessoryState && activeLinkedAccessoryCategory ? (
-        <InstanceFormModal
-          open
-          mode="create"
-          categoryName={`Accesorio vinculado · ${activeLinkedAccessoryCategory.name}`}
-          availableComponents={activeLinkedAccessoryCategory.available_components.filter((component) => component.type === "accessory")}
-          linkedApplicationTargetName={linkedAccessoryState.targetInstanceName}
+        <LinkedAccessoryModal
+          key={`${activeLinkedAccessoryCategory.id}-${linkedAccessoryState.targetInstanceId}`}
+          category={activeLinkedAccessoryCategory}
+          target={targetOptions.find((target) => target.instance_id === linkedAccessoryState.targetInstanceId)!}
           submitting={submitting}
           onClose={() => setLinkedAccessoryState(null)}
-          onSubmit={handleCreateLinkedAccessory}
+          onCreate={handleCreateLinkedAccessory}
+          onLink={handleCreateOccurrence}
         />
       ) : null}
 
