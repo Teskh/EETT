@@ -146,7 +146,7 @@ export function StockTrendChart({
               strokeDasharray="4 6"
             />
             <text x={chart.padding.left - 10} y={y + 4} textAnchor="end" fontSize="11" fill="currentColor" opacity="0.62" pointerEvents="none">
-              {formatNumber(chart.maxValue * stop)}
+              {formatNumber(chart.minValue + (chart.maxValue - chart.minValue) * stop)}
             </text>
           </g>
         );

@@ -101,4 +101,14 @@ describe("material dashboard house comparison chart", () => {
     expect(chart?.points.at(-1)?.projectedStockY).toBe(plotBottom);
     expect(chart?.points.at(-1)?.stockY).toBeGreaterThan(plotBottom);
   });
+
+  it("projects expected stock when the range starts on a weekend", () => {
+    const data = comparison([10, 10, 10], [10, 10, 10], [1, 1, 1]);
+    // 2026-08-01 is a Saturday: the stock series has no value for it.
+    data.points = [{ ...data.points[0], date: "2026-08-01", material_quantity: 0, expected_material_quantity: 0, house_starts: 0 }, ...data.points];
+    const projected = buildProjectedStockByDay(data, stock([90, 80, 70]));
+
+    expect(projected).not.toBeNull();
+    expect([...(projected?.values() ?? [])].map((point) => point.projectedStockValue)).toEqual([90, 80, 70]);
+  });
 });

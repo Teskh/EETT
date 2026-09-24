@@ -1132,6 +1132,7 @@ export type CostModelAdjustment = {
   id: number;
   subtype_id: number | null;
   adjusted_quantity: number;
+  quantity_scope?: "component" | "scenario";
   source_kind: string;
   source_note: string | null;
   source_house_type_id: number | null;
@@ -1147,6 +1148,7 @@ export type CostModelSubtypeEntry = {
   subtype_id: number | null;
   subtype_name: string;
   estimated_quantity: number | null;
+  has_missing_quantity?: boolean;
 };
 
 export type CostModelInstanceEntry = {
@@ -1198,6 +1200,7 @@ export type CostModelAdjustmentUpsertRequest = {
   material_id: number;
   subtype_id?: number | null;
   adjusted_quantity: number;
+  quantity_scope?: "component" | "scenario";
   source_kind?: string;
   source_note?: string | null;
   source_house_type_id?: number | null;
@@ -1210,6 +1213,31 @@ export type CostModelAdjustmentUpsertRequest = {
 export type CostModelAdjustmentDeleteRequest = {
   material_id: number;
   subtype_id?: number | null;
+};
+
+export type CostModelHistoryReference = {
+  sku: string;
+  quantity_per_house: number | null;
+  estimated_quantity_per_house: number;
+  reason: string | null;
+  factory_consumption: number | null;
+  factory_expected_consumption: number;
+  allocated_consumption: number | null;
+};
+
+export type CostModelHistory = {
+  project_id: number;
+  subtype_id: number | null;
+  range_start: string;
+  range_end: string;
+  method: "bom_weighted_allocation";
+  sample_houses: number;
+  total_houses: number;
+  unmapped_houses: number;
+  incomplete_houses: number;
+  blocked_reason: string | null;
+  references: CostModelHistoryReference[];
+  generated_at: string;
 };
 
 export type Approval = {

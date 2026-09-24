@@ -52,6 +52,7 @@ from app.api_models import (
     CommentNotificationReadResponse,
     CommentUnreadCountResponse,
     CostModelAdjustmentDeleteRequest,
+    CostModelHistoryRequest,
     CostModelAdjustmentUpsertRequest,
     CostModelViewResponse,
     DashboardResponse,
@@ -2220,6 +2221,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Project not found")
         return view
 
+    @app.post("/api/v1/projects/{project_id}/cost-model/history")
+    def get_project_cost_model_history_api(
+        project_id: int,
+        payload: CostModelHistoryRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_history import get_cost_model_history
+
+        require_page_read(current_user, "cost_model")
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_project_view(current_user, project)
+        try:
+            return get_cost_model_history(
+                request.app.state.settings, session=session, project_id=project_id,
+                subtype_id=payload.subtype_id, start_date=payload.start_date, end_date=payload.end_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @app.put("/api/v1/projects/{project_id}/cost-model/adjustments", response_model=CostModelViewResponse)
     async def upsert_project_cost_model_adjustment_api(
         project_id: int,
@@ -2242,6 +2268,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 material_id=payload.material_id,
                 subtype_id=payload.subtype_id,
                 adjusted_quantity=payload.adjusted_quantity,
+                quantity_scope=payload.quantity_scope,
                 source_kind=payload.source_kind,
                 source_note=payload.source_note,
                 source_house_type_id=payload.source_house_type_id,

@@ -1,6 +1,6 @@
 import type { MaterialDashboardMovementPoint } from "../../lib/types";
 
-import { isWeekend, moveToPreviousBusinessDay, toStartOfDay } from "./dates";
+import { moveToPreviousBusinessDay, toDateInputValue, toStartOfDay } from "./dates";
 
 export const CHART_WIDTH = 760;
 export const CHART_HEIGHT = 240;
@@ -37,21 +37,25 @@ export function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-export function buildLinePath(points: StockSeriesPoint[], width: number, height: number) {
+export function buildLinePath(points: StockSeriesPoint[], width: number, height: number, options: { fitValues?: boolean } = {}) {
   if (!points.length) {
     return null;
   }
   const padding = CHART_PADDING;
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  const maxValue = Math.max(...points.map((point) => point.value), 1);
+  const values = points.map((point) => point.value);
+  // Fitting frames the axis on the observed values, so small charts show the
+  // variation instead of a line hugging the top of a zero-based axis.
+  const minValue = options.fitValues ? Math.min(...values) : 0;
+  const maxValue = Math.max(...values, minValue + 1);
 
   const chartPoints = points.map((point, index) => {
     const x =
       points.length === 1
         ? padding.left + plotWidth / 2
         : padding.left + (index / (points.length - 1)) * plotWidth;
-    const y = padding.top + plotHeight - (point.value / maxValue) * plotHeight;
+    const y = padding.top + plotHeight - ((point.value - minValue) / (maxValue - minValue)) * plotHeight;
     return { ...point, index, x, y };
   });
 
@@ -59,7 +63,7 @@ export function buildLinePath(points: StockSeriesPoint[], width: number, height:
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
     .join(" ");
 
-  return { path, points: chartPoints, maxValue, padding, plotHeight, plotWidth, width, height };
+  return { path, points: chartPoints, minValue, maxValue, padding, plotHeight, plotWidth, width, height };
 }
 
 export function getClampedSelectionBounds(selection: ChartSelection, pointCount: number) {
@@ -110,10 +114,26 @@ export function getClosestPointIndex(points: Array<{ x: number; index: number }>
   return closestIndex;
 }
 
+/** Shifts a YYYY-MM-DD key by whole calendar days, independent of DST. */
+function shiftDayKey(key: string, days: number) {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function isWeekendKey(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday === 0 || weekday === 6;
+}
+
 /**
  * Reconstructs the day-by-day stock level by walking backwards from today's
  * stock on hand and undoing each day's movements. Weekend days are skipped
  * unless `includeWeekends` is set, matching how the plant operates.
+ *
+ * Days are walked as calendar keys, not timestamps: where DST starts at
+ * midnight (Chile), that midnight does not exist and timestamp keys stop
+ * matching, silently dropping every earlier movement.
  */
 export function buildHistoricalStockSeries(
   movements: MaterialDashboardMovementPoint[],
@@ -128,55 +148,41 @@ export function buildHistoricalStockSeries(
     return [];
   }
   const includeWeekends = options.includeWeekends ?? false;
-  const today = toStartOfDay(new Date());
-  const anchorDate = includeWeekends ? today : moveToPreviousBusinessDay(today);
-  const dailyMovementMap = new Map<number, number>();
+  const today = new Date();
+  const anchorKey = toDateInputValue(includeWeekends ? today : moveToPreviousBusinessDay(today));
+  const dailyMovementMap = new Map<string, number>();
   for (const point of movements) {
-    const time = toStartOfDay(point.date).getTime();
-    dailyMovementMap.set(time, (dailyMovementMap.get(time) || 0) + (Number(point.quantity) || 0));
+    const key = toDateInputValue(point.date);
+    dailyMovementMap.set(key, (dailyMovementMap.get(key) || 0) + (Number(point.quantity) || 0));
   }
 
-  let runningStock = Number(currentStock);
-  if (anchorDate.getTime() !== today.getTime()) {
-    const futureCursor = new Date(today);
-    while (futureCursor.getTime() > anchorDate.getTime()) {
-      runningStock += dailyMovementMap.get(futureCursor.getTime()) || 0;
-      futureCursor.setDate(futureCursor.getDate() - 1);
-    }
-  }
-
-  const earliestMovementTime = dailyMovementMap.size ? Math.min(...dailyMovementMap.keys()) : anchorDate.getTime();
-  const requestedEndTime = options.endDate ? toStartOfDay(options.endDate).getTime() : anchorDate.getTime();
-  const endTime = Math.min(requestedEndTime, anchorDate.getTime());
-  const requestedStartTime = options.startDate ? toStartOfDay(options.startDate).getTime() : earliestMovementTime;
-  const startTime = Math.min(requestedStartTime, endTime);
+  const earliestMovementKey = dailyMovementMap.size ? [...dailyMovementMap.keys()].sort()[0] : anchorKey;
+  const requestedEndKey = options.endDate ? toDateInputValue(options.endDate) : anchorKey;
+  const endKey = requestedEndKey < anchorKey ? requestedEndKey : anchorKey;
+  const requestedStartKey = options.startDate ? toDateInputValue(options.startDate) : earliestMovementKey;
+  const startKey = requestedStartKey < endKey ? requestedStartKey : endKey;
   const history: StockSeriesPoint[] = [];
-
-  const cursor = new Date(anchorDate);
-  while (cursor.getTime() > endTime) {
-    runningStock += dailyMovementMap.get(cursor.getTime()) || 0;
-    cursor.setDate(cursor.getDate() - 1);
-  }
-
-  if (includeWeekends || !isWeekend(cursor)) {
-    history.unshift({
-      date: cursor.toISOString(),
-      time: cursor.getTime(),
-      value: runningStock,
-    });
-  }
-
-  while (cursor.getTime() > startTime) {
-    cursor.setDate(cursor.getDate() - 1);
-    runningStock += dailyMovementMap.get(cursor.getTime()) || 0;
-    if (!includeWeekends && isWeekend(cursor)) {
-      continue;
+  const pushPoint = (key: string, value: number) => {
+    if (!includeWeekends && isWeekendKey(key)) {
+      return;
     }
-    history.unshift({
-      date: cursor.toISOString(),
-      time: cursor.getTime(),
-      value: runningStock,
-    });
+    const date = toStartOfDay(key);
+    history.unshift({ date: date.toISOString(), time: date.getTime(), value });
+  };
+
+  // Stock at the end of a day equals the next day's closing stock plus that
+  // next day's outgoing movements.
+  let runningStock = Number(currentStock);
+  let key = toDateInputValue(today);
+  while (key > endKey) {
+    runningStock += dailyMovementMap.get(key) || 0;
+    key = shiftDayKey(key, -1);
+  }
+  pushPoint(key, runningStock);
+  while (key > startKey) {
+    runningStock += dailyMovementMap.get(key) || 0;
+    key = shiftDayKey(key, -1);
+    pushPoint(key, runningStock);
   }
 
   return history;

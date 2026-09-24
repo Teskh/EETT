@@ -1115,6 +1115,7 @@ class ProjectCostModelAdjustment(Base):
         ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None
     )
     adjusted_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    quantity_scope: Mapped[str] = mapped_column(String(20), default="component", server_default="component", nullable=False)
     source_kind: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
     source_note: Mapped[str | None] = mapped_column(Text, default=None)
     source_house_type_id: Mapped[int | None] = mapped_column(Integer, default=None)

@@ -193,9 +193,7 @@ def _build_cost_model_rows(
     rows: list[dict[str, Any]] = []
 
     for row in iter_cost_model_rows(project_data):
-        if row.get("quantity_state") == "zero":
-            continue
-        quantity_value = row.get("quantity") if row.get("quantity_state") == "value" else None
+        quantity_value = 0.0 if row.get("quantity_state") == "zero" else row.get("quantity") if row.get("quantity_state") == "value" else None
         rows.append(
             {
                 "instance_name": row["instance_label"],
@@ -213,7 +211,13 @@ def _build_cost_model_rows(
             }
         )
 
-    _append_cost_model_adjustment_rows(rows, adjustments or [])
+    subtype_names_by_id = {}
+    def collect_subtypes(nodes):
+        for node in nodes:
+            subtype_names_by_id[node["id"]] = node.get("path") or node["name"]
+            collect_subtypes(node.get("children", []))
+    collect_subtypes(project_data.get("subtypes", []))
+    _append_cost_model_adjustment_rows(rows, adjustments or [], subtype_names_by_id=subtype_names_by_id)
 
     for auxiliary in sorted(
         project_data.get("auxiliary_materials", []),
@@ -245,6 +249,8 @@ def _build_cost_model_rows(
 def _append_cost_model_adjustment_rows(
     rows: list[dict[str, Any]],
     adjustments: list[dict[str, Any]],
+    *,
+    subtype_names_by_id: dict[int, str] | None = None,
 ) -> None:
     """Represent project-level overrides as explicit deltas without inventing an instance allocation."""
     for adjustment in sorted(
@@ -260,12 +266,13 @@ def _append_cost_model_adjustment_rows(
         if material_id is None or adjusted_quantity is None:
             continue
 
+        scenario = adjustment.get("quantity_scope") == "scenario"
         matching_rows = [
             row
             for row in rows
             if not row.get("is_auxiliary")
             and row.get("material_id") == material_id
-            and row.get("subtype_id") == subtype_id
+            and (row.get("subtype_id") == subtype_id or (scenario and row.get("subtype_id") is None))
         ]
         if not matching_rows:
             continue
@@ -275,10 +282,15 @@ def _append_cost_model_adjustment_rows(
             for row in matching_rows
             if isinstance(row.get("quantity"), (int, float))
         )
+        if scenario and adjustment.get("source_kind") == "estimated":
+            adjusted_quantity = sum(float(row["quantity"]) for row in matching_rows
+                                    if not row.get("is_adjustment") and isinstance(row.get("quantity"), (int, float)))
         reference = matching_rows[0]
         rows.append(
             {
                 **reference,
+                "subtype_id": subtype_id,
+                "subtype_name": (subtype_names_by_id or {}).get(subtype_id, reference["subtype_name"]) if subtype_id is not None else "General",
                 "instance_name": "Ajustes del modelo",
                 "category_name": "Ajustes del modelo",
                 "quantity": adjusted_quantity - base_quantity,

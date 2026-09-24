@@ -218,6 +218,9 @@ def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
     missing_by_subtype: dict[int, int] = defaultdict(int)
     missing_general = 0
     subtype_only_occurrences = 0
+    missing_general_skus: set[str] = set()
+    subtype_only_skus: set[str] = set()
+    missing_skus: dict[int, set[str]] = defaultdict(set)
 
     for key, entries in entries_by_occurrence.items():
         material = next((entry.material for entry in entries if entry.material is not None), None)
@@ -229,16 +232,19 @@ def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
             entry = next((row for row in entries if row.subtype_id is None), None)
             if entry is None or entry.quantity is None:
                 missing_general += 1
+                missing_general_skus.add(sku)
             else:
                 general[sku] += float(entry.quantity)
             continue
 
         entries_by_subtype = {int(row.subtype_id): row for row in entries if row.subtype_id is not None}
         subtype_only_occurrences += 1
+        subtype_only_skus.add(sku)
         for variant in variants:
             value, _source = inherited_entry_value(entries_by_subtype, variant, "quantity")
             if value is None:
                 missing_by_subtype[variant.id] += 1
+                missing_skus[variant.id].add(sku)
             else:
                 by_subtype[variant.id][sku] += value
 
@@ -256,6 +262,10 @@ def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
         "general": dict(general),
         "by_subtype": {subtype_id: dict(quantities) for subtype_id, quantities in by_subtype.items()},
         "missing_by_subtype": resolved_missing,
+        "missing_skus_by_subtype": {
+            None: sorted(missing_general_skus | subtype_only_skus),
+            **{subtype.id: sorted(missing_general_skus | missing_skus[subtype.id]) for subtype in variants},
+        },
         "subtype_paths": {subtype.id: subtype_path(subtype) for subtype in variants},
         "instance_quantities": build_project_instance_quantity_map(project),
     }

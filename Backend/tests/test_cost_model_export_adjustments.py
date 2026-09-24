@@ -68,6 +68,30 @@ class CostModelExportAdjustmentTests(unittest.TestCase):
         self.assertEqual(deltas, {None: 3, 9: -2})
         self.assertTrue(all(row["instance_name"] == "Ajustes del modelo" for row in adjustment_rows))
 
+    def test_scenario_override_replaces_general_plus_subtype(self) -> None:
+        rows = _build_cost_model_rows(self.project_data, prices_by_sku={"MAT-021": 1000}, adjustments=[
+            {"material_id": 21, "subtype_id": None, "adjusted_quantity": 5},
+            {"material_id": 21, "subtype_id": 9, "adjusted_quantity": 6, "quantity_scope": "scenario"},
+        ])
+        self.assertEqual(sum(row["quantity"] for row in rows), 6)
+        self.assertEqual(next(row["quantity"] for row in rows if row["is_adjustment"] and row["subtype_id"] == 9), -2)
+
+    def test_scenario_can_override_general_only_material(self) -> None:
+        self.project_data["categories"][0]["instances"][0]["materials"][0]["bom_entries"].pop()
+        rows = _build_cost_model_rows(self.project_data, prices_by_sku={"MAT-021": 1000}, adjustments=[
+            {"material_id": 21, "subtype_id": 9, "adjusted_quantity": 0, "quantity_scope": "scenario"},
+        ])
+        self.assertEqual(sum(row["quantity"] for row in rows), 0)
+        self.assertEqual(rows[-1]["subtype_name"], "Premium")
+        self.assertEqual(rows[-1]["subtype_id"], 9)
+
+    def test_return_to_estimate_uses_current_bom_and_ignores_legacy_general_adjustment(self) -> None:
+        rows = _build_cost_model_rows(self.project_data, prices_by_sku={"MAT-021": 1000}, adjustments=[
+            {"material_id": 21, "subtype_id": None, "adjusted_quantity": 5},
+            {"material_id": 21, "subtype_id": 9, "adjusted_quantity": 999, "quantity_scope": "scenario", "source_kind": "estimated"},
+        ])
+        self.assertEqual(sum(row["quantity"] for row in rows), 5)
+
     def test_workbook_contains_adjustment_rows_and_preserves_zero_totals(self) -> None:
         zero_adjustment = [{"material_id": 21, "subtype_id": None, "adjusted_quantity": 0}]
         output = BytesIO()

@@ -34,6 +34,7 @@ from app.models import (
     ProjectActivityLog,
     ProjectBomEntry,
     ProjectInstance,
+    ProjectInstanceOccurrence,
     ProjectMembership,
     MembershipRole,
     ProjectSubtype,
@@ -1228,7 +1229,7 @@ class ServiceLayerTests(unittest.TestCase):
         caulking_payload = next(item for item in sealants_section["instances"] if item["id"] == caulking_instance.id)
         self.assertFalse(any(item["id"] == occurrence_id for item in caulking_payload["outgoing_occurrences"]))
 
-    def test_linked_accessory_api_creates_instance_and_application_atomically(self) -> None:
+    def test_linked_accessory_api_reuses_existing_instance_and_adds_application(self) -> None:
         with self.session_factory() as session:
             source_instance = session.scalar(
                 select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.name == "Elastic Caulking Package")
@@ -1247,7 +1248,14 @@ class ServiceLayerTests(unittest.TestCase):
             assert target_instance is not None
             category_id = source_instance.category_id
             component_id = source_instance.component_id
+            source_instance_id = source_instance.id
             target_instance_id = target_instance.id
+            accessory_count_before = len(session.scalars(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.component_id == component_id)
+            ).all())
+            occurrence_count_before = len(session.scalars(
+                select(ProjectInstanceOccurrence).where(ProjectInstanceOccurrence.source_instance_id == source_instance_id)
+            ).all())
 
         create_response = self.client.post(
             "/api/v1/projects/2/linked-accessories",
@@ -1276,7 +1284,8 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(create_response.status_code, 200)
         payload = create_response.json()
-        self.assertEqual(payload["instance"]["name"], "Atomic linked caulking")
+        self.assertEqual(payload["instance"]["id"], source_instance_id)
+        self.assertEqual(payload["instance"]["name"], "Elastic Caulking Package")
         self.assertEqual(payload["occurrence"]["targets"][0]["instance_id"], target_instance_id)
         self.assertEqual(
             {row["name"]: row["value"] for row in payload["occurrence"]["attributes"]},
@@ -1305,6 +1314,15 @@ class ServiceLayerTests(unittest.TestCase):
                 )
             )
         self.assertIsNone(rolled_back_instance)
+        with self.session_factory() as session:
+            accessory_count_after = len(session.scalars(
+                select(ProjectInstance).where(ProjectInstance.project_id == 2, ProjectInstance.component_id == component_id)
+            ).all())
+            occurrence_count_after = len(session.scalars(
+                select(ProjectInstanceOccurrence).where(ProjectInstanceOccurrence.source_instance_id == source_instance_id)
+            ).all())
+        self.assertEqual(accessory_count_after, accessory_count_before)
+        self.assertEqual(occurrence_count_after, occurrence_count_before + 1)
 
     def test_html_renderers_include_core_screen_content(self) -> None:
         with self.session_factory() as session:
@@ -1979,9 +1997,13 @@ class ServiceLayerTests(unittest.TestCase):
             for row_index in range(2, totals.max_row + 1)
             if totals.cell(row=row_index, column=3).value == "Total general"
         )
+        totals_last_material_row = max(
+            row_index for row_index in range(2, totals_total_general_row)
+            if totals.cell(row=row_index, column=1).value is not None
+        )
         self.assertEqual(
             totals.cell(row=totals_total_general_row, column=7).value,
-            f'=SUMIFS(G2:G{totals_total_general_row - 1},C2:C{totals_total_general_row - 1},"General")',
+            f'=SUMIFS(G2:G{totals_last_material_row},C2:C{totals_last_material_row},"General")',
         )
 
     @patch("app.services.exports._get_purchase_order_lines_for_products_batch")
@@ -2036,6 +2058,42 @@ class ServiceLayerTests(unittest.TestCase):
             if by_instance.cell(row=row_index, column=5).value == "MAT-001"
         )
         self.assertEqual(by_instance.cell(row=anchor_row_index, column=8).value, 9876)
+
+    def test_cost_model_scenario_adjustment_round_trip(self) -> None:
+        headers = {"X-Spec-Sheets-User": "editor"}
+        initial = self.client.get("/api/v1/projects/2/cost-model", headers=headers).json()
+        row = next(row for row in initial["rows"] if not row["is_auxiliary"])
+        payload = {
+            "material_id": row["material_id"], "subtype_id": None,
+            "quantity_scope": "scenario", "adjusted_quantity": 0, "source_kind": "manual",
+        }
+        saved = self.client.put("/api/v1/projects/2/cost-model/adjustments", headers=headers, json=payload)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        reloaded = self.client.get("/api/v1/projects/2/cost-model", headers=headers).json()
+        adjustment = next(item for item in reloaded["rows"] if item["material_id"] == row["material_id"])["adjustments"][0]
+        self.assertEqual(adjustment["quantity_scope"], "scenario")
+        self.assertEqual(adjustment["adjusted_quantity"], 0)
+        self.assertEqual(adjustment["source_kind"], "manual")
+        for invalid in (-1,):
+            response = self.client.put("/api/v1/projects/2/cost-model/adjustments", headers=headers,
+                                       json={**payload, "adjusted_quantity": invalid})
+            self.assertEqual(response.status_code, 422)
+
+    @patch("app.services.cost_model_history.get_cost_model_history")
+    def test_cost_model_history_endpoint_passes_local_subtype_and_checks_access(self, history) -> None:
+        history.return_value = {"project_id": 2, "subtype_id": None, "references": []}
+        response = self.client.post("/api/v1/projects/2/cost-model/history",
+                                    headers={"X-Spec-Sheets-User": "editor"},
+                                    json={"subtype_id": None, "start_date": "2026-01-01", "end_date": "2026-01-31"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(history.call_args.kwargs["project_id"], 2)
+        self.assertIsNone(history.call_args.kwargs["subtype_id"])
+        self.assertEqual(history.call_args.kwargs["start_date"], date(2026, 1, 1))
+        history.side_effect = ValueError("Invalid period")
+        response = self.client.post("/api/v1/projects/2/cost-model/history",
+                                    headers={"X-Spec-Sheets-User": "editor"},
+                                    json={"start_date": "2026-01-31", "end_date": "2026-01-01"})
+        self.assertEqual(response.status_code, 422)
 
     def test_cost_model_view_returns_consolidated_rows_with_aggregate_and_per_subtype_adjustments(self) -> None:
         view_response = self.client.get(

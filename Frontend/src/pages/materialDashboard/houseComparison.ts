@@ -132,16 +132,19 @@ export function buildProjectedStockByDay(
   if (!houseComparison || !houseComparison.link_count || !houseComparison.points.length || !stockSeries.length) {
     return null;
   }
-  const firstPoint = houseComparison.points[0];
-  const firstStockValue = getStockValueForDate(stockSeries, firstPoint.date);
-  if (firstStockValue === null) {
+  // The stock series skips weekends, so a range starting on a Saturday has no
+  // stock for its first day. Start from the first day that has one.
+  const firstIndex = houseComparison.points.findIndex((point) => getStockValueForDate(stockSeries, point.date) !== null);
+  if (firstIndex < 0) {
     return null;
   }
+  const firstPoint = houseComparison.points[firstIndex];
+  const firstStockValue = getStockValueForDate(stockSeries, firstPoint.date) as number;
 
   const projectedStockByDay = new Map<number, ProjectedStockByDayPoint>();
   let runningProjectedStock = firstStockValue + (Number(firstPoint.material_quantity) || 0);
 
-  houseComparison.points.forEach((point) => {
+  houseComparison.points.slice(firstIndex).forEach((point) => {
     runningProjectedStock -= Number(point.expected_material_quantity) || 0;
     projectedStockByDay.set(toStartOfDay(point.date).getTime(), {
       projectedStockValue: roundTo4(runningProjectedStock),
@@ -159,6 +162,7 @@ export function buildHouseComparisonChart(
   stockAxisBaseline: number | null = null,
   stockAxisCeiling: number | null = null,
   projectedStockByDay: Map<number, ProjectedStockByDayPoint> | null = null,
+  options: { fitStockValues?: boolean } = {},
 ) {
   if (!houseComparison.points.length) {
     return null;
@@ -203,10 +207,15 @@ export function buildHouseComparisonChart(
   // In house-comparison mode the expected curve is the reference. Its first
   // and last values define the axis so it always runs from the top-left to the
   // bottom-right. Actual stock shares that frame and is free to deviate.
-  const maxStock = hasProjectedReference
-    ? projectedStart
-    : Math.max(...combinedStockValues, stockAxisCeiling ?? Number.NEGATIVE_INFINITY, 1);
-  const minStock = hasProjectedReference ? projectedEnd : Math.max(finalStock, 0);
+  // Fitting frames both curves instead, so actual stock that consumes much
+  // faster or slower than expected stays readable in small charts.
+  const fit = options.fitStockValues && combinedStockValues.length > 0;
+  const maxStock = fit
+    ? Math.max(...combinedStockValues)
+    : hasProjectedReference
+      ? projectedStart
+      : Math.max(...combinedStockValues, stockAxisCeiling ?? Number.NEGATIVE_INFINITY, 1);
+  const minStock = fit ? Math.min(...combinedStockValues) : hasProjectedReference ? projectedEnd : Math.max(finalStock, 0);
   const stockRange = Math.max(maxStock - minStock, 1);
   const maxRemainingHouseStarts = Math.max(...chartPoints.map((point) => point.remainingHouseStarts), 1);
   const toStockY = (value: number) => padding.top + plotHeight - ((value - minStock) / stockRange) * plotHeight;

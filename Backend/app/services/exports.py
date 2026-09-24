@@ -311,6 +311,8 @@ def _render_cost_model_workbook_export(
                 "material_id": adjustment.material_id,
                 "subtype_id": adjustment.subtype_id,
                 "adjusted_quantity": adjustment.adjusted_quantity,
+                "quantity_scope": adjustment.quantity_scope,
+                "source_kind": adjustment.source_kind,
             }
             for adjustment in adjustments
         ],

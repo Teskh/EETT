@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -287,6 +288,24 @@ def get_production_house_starts_with_links(
     """Produced houses in the window annotated with their mapping status, for
     the production overview in the dashboard modal."""
 
+    production, _expected_maps = get_production_house_starts_with_links_and_maps(
+        settings, session=session, start_date=start_date, end_date=end_date, history_days=history_days,
+    )
+    return production
+
+
+def get_production_house_starts_with_links_and_maps(
+    settings: Settings,
+    *,
+    session: Session,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    history_days: int = 90,
+    extra_project_ids: Iterable[int] = (),
+) -> tuple[dict, dict]:
+    """Like get_production_house_starts_with_links, also returning the expected
+    quantity maps it built (plus extra_project_ids), which are costly to load."""
+
     production = get_production_house_starts(
         settings,
         start_date=start_date.isoformat() if start_date else None,
@@ -300,7 +319,7 @@ def get_production_house_starts_with_links(
     )
     expected_maps = get_project_expected_quantity_maps(
         session,
-        {link.project_id for link in links_by_key.values() if link.project_id is not None},
+        {link.project_id for link in links_by_key.values() if link.project_id is not None} | set(extra_project_ids),
     )
 
     houses = []
@@ -342,7 +361,7 @@ def get_production_house_starts_with_links(
         "partial_house_starts": partial_count,
         "houses": houses,
         "generated_at": datetime.utcnow().isoformat(),
-    }
+    }, expected_maps
 
 
 def get_material_dashboard_project_usage(

@@ -13,6 +13,7 @@ from app.models import (
     CatalogComponent,
     CatalogComponentMedia,
     ComponentMaterialRule,
+    ComponentType,
     InstanceExportSetting,
     Material,
     MaterialRuleGroup,
@@ -678,6 +679,7 @@ def copy_project(
                 material_id=adjustment.material_id,
                 subtype=subtype_map.get(adjustment.subtype_id) if adjustment.subtype_id is not None else None,
                 adjusted_quantity=adjustment.adjusted_quantity,
+                quantity_scope=adjustment.quantity_scope,
                 source_kind=adjustment.source_kind,
                 source_note=adjustment.source_note,
                 source_house_type_id=adjustment.source_house_type_id,
@@ -1483,24 +1485,37 @@ def create_linked_project_accessory(
     mutation_batch_id: str | None = None,
 ) -> tuple[ProjectInstance, ProjectInstanceOccurrence]:
     try:
-        instance = create_project_instance(
-            session,
-            project=project,
-            category_id=category_id,
-            component_id=component_id,
-            name=name,
-            short_name=short_name,
-            description=description,
-            short_description=short_description,
-            installation=installation,
-            unit_amount=unit_amount,
-            attribute_values=attribute_values,
-            selected_material_rule_ids=selected_material_rule_ids,
-            media_asset_id=media_asset_id,
-            actor_user=actor_user,
-            mutation_batch_id=mutation_batch_id,
-            commit=False,
+        # A linked accessory is one material applied in many places: reuse the
+        # project's existing instance of this component and only add an occurrence.
+        instance = session.scalar(
+            select(ProjectInstance)
+            .where(
+                ProjectInstance.project_id == project.id,
+                ProjectInstance.category_id == category_id,
+                ProjectInstance.component_id == component_id,
+                ProjectInstance.instance_type == ComponentType.ACCESSORY,
+            )
+            .order_by(ProjectInstance.id)
         )
+        if instance is None:
+            instance = create_project_instance(
+                session,
+                project=project,
+                category_id=category_id,
+                component_id=component_id,
+                name=name,
+                short_name=short_name,
+                description=description,
+                short_description=short_description,
+                installation=installation,
+                unit_amount=unit_amount,
+                attribute_values=attribute_values,
+                selected_material_rule_ids=selected_material_rule_ids,
+                media_asset_id=media_asset_id,
+                actor_user=actor_user,
+                mutation_batch_id=mutation_batch_id,
+                commit=False,
+            )
         if instance.instance_type.value != "accessory":
             raise ValueError("Selected component is not an accessory.")
 

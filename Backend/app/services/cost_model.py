@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime
+from math import isfinite
 from typing import Any
 
 from sqlalchemy import select
@@ -76,8 +77,6 @@ def get_cost_model_view(
         if material_id is None:
             continue
         state = row.get("quantity_state")
-        if state == "zero":
-            continue
 
         entry = rows_by_material.get(material_id)
         if entry is None:
@@ -96,7 +95,7 @@ def get_cost_model_view(
 
         subtype_id = row.get("subtype_id")
         subtype_name = row.get("subtype") or "General"
-        quantity_value = row.get("quantity") if state == "value" else None
+        quantity_value = 0.0 if state == "zero" else row.get("quantity") if state == "value" else None
 
         subtype_bucket = entry["subtype_totals"].setdefault(
             subtype_id,
@@ -108,7 +107,7 @@ def get_cost_model_view(
                 "has_blank": False,
             },
         )
-        if state == "value" and quantity_value is not None:
+        if state in {"value", "zero"} and quantity_value is not None:
             subtype_bucket["has_value"] = True
             subtype_bucket["quantity_total"] += float(quantity_value)
         elif state == "blank":
@@ -150,6 +149,7 @@ def get_cost_model_view(
                     "subtype_id": bucket["subtype_id"],
                     "subtype_name": bucket["subtype_name"],
                     "estimated_quantity": quantity,
+                    "has_missing_quantity": bucket["has_blank"],
                 }
             )
 
@@ -234,6 +234,7 @@ def upsert_cost_model_adjustment(
     material_id: int,
     subtype_id: int | None,
     adjusted_quantity: float,
+    quantity_scope: str = "component",
     source_kind: str = "manual",
     source_note: str | None = None,
     source_house_type_id: int | None = None,
@@ -243,13 +244,17 @@ def upsert_cost_model_adjustment(
     source_total_consumption: float | None = None,
     actor: User | None = None,
 ) -> ProjectCostModelAdjustment:
+    if not isfinite(adjusted_quantity) or adjusted_quantity < 0:
+        raise ValueError("Quantity must be a finite, nonnegative number")
+    if quantity_scope not in {"component", "scenario"}:
+        raise ValueError("Unknown quantity scope")
     material = session.get(Material, material_id)
     if material is None:
         raise ValueError("Material not found")
 
     if subtype_id is not None:
         subtype = session.get(ProjectSubtype, subtype_id)
-        if subtype is None or subtype.project_id != project.id:
+        if subtype is None or subtype.project_id != project.id or subtype.kind == "group":
             raise ValueError("Subtype not found for this project")
 
     query = select(ProjectCostModelAdjustment).where(
@@ -268,6 +273,7 @@ def upsert_cost_model_adjustment(
             material_id=material_id,
             subtype_id=subtype_id,
             adjusted_quantity=adjusted_quantity,
+            quantity_scope=quantity_scope,
             source_kind=source_kind,
             source_note=source_note,
             source_house_type_id=source_house_type_id,
@@ -280,6 +286,7 @@ def upsert_cost_model_adjustment(
         session.add(adjustment)
     else:
         adjustment.adjusted_quantity = adjusted_quantity
+        adjustment.quantity_scope = quantity_scope
         adjustment.source_kind = source_kind
         adjustment.source_note = source_note
         adjustment.source_house_type_id = source_house_type_id
@@ -324,6 +331,7 @@ def _serialize_adjustment(adjustment: ProjectCostModelAdjustment) -> dict[str, A
         "id": adjustment.id,
         "subtype_id": adjustment.subtype_id,
         "adjusted_quantity": adjustment.adjusted_quantity,
+        "quantity_scope": adjustment.quantity_scope,
         "source_kind": adjustment.source_kind,
         "source_note": adjustment.source_note,
         "source_house_type_id": adjustment.source_house_type_id,

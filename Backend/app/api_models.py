@@ -1498,7 +1498,8 @@ class CatalogResponse(BaseModel):
 class CostModelAdjustmentUpsertRequest(BaseModel):
     material_id: int
     subtype_id: int | None = None
-    adjusted_quantity: float
+    adjusted_quantity: float = Field(ge=0, allow_inf_nan=False)
+    quantity_scope: Literal["component", "scenario"] = "component"
     source_kind: str = "manual"
     source_note: str | None = None
     source_house_type_id: int | None = None
@@ -1511,6 +1512,12 @@ class CostModelAdjustmentUpsertRequest(BaseModel):
 class CostModelAdjustmentDeleteRequest(BaseModel):
     material_id: int
     subtype_id: int | None = None
+
+
+class CostModelHistoryRequest(BaseModel):
+    subtype_id: int | None = None
+    start_date: date
+    end_date: date
 
 
 class CostModelViewResponse(BaseModel):

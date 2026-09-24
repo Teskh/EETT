@@ -1,4 +1,5 @@
 import type {
+  CostModelHistory,
   ActivityGroup,
   ActivityProject,
   BackupCreateResponse,
@@ -834,6 +835,12 @@ export const api = {
   },
   getCostModel(projectId: number) {
     return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model`);
+  },
+  getCostModelHistory(projectId: number, subtypeId: number | null, range: { startDate: string; endDate: string }) {
+    return request<CostModelHistory>(`/api/v1/projects/${projectId}/cost-model/history`, {
+      method: "POST",
+      body: JSON.stringify({ subtype_id: subtypeId, start_date: range.startDate, end_date: range.endDate }),
+    });
   },
   upsertCostModelAdjustment(projectId: number, payload: CostModelAdjustmentUpsertRequest, mutationBatchId?: string) {
     return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments`, {
