@@ -1,7 +1,10 @@
 import { api } from "../../lib/api";
 
-export async function exportCostBudget(projectId: number) {
-  const job = await api.requestProjectExport(projectId, { kind: "cost_model_workbook", payload: {} });
+/** Materials outside the BOM depend on the period shown, so the page sends them. */
+export type ExportExtra = { sku: string; name: string; unit: string | null; quantity_per_house: number | null; unit_cost: number | null; value_per_house: number | null; replaces_sku: string | null; origin: string };
+
+export async function exportCostBudget(projectId: number, extras: ExportExtra[] = []) {
+  const job = await api.requestProjectExport(projectId, { kind: "cost_model_workbook", payload: { extras } });
   if (job.status !== "completed" || !job.artifact_uri) {
     throw new Error(typeof job.payload.error === "string" ? job.payload.error : "No se pudo generar la exportación.");
   }

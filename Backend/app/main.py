@@ -52,7 +52,13 @@ from app.api_models import (
     CommentNotificationReadResponse,
     CommentUnreadCountResponse,
     CostModelAdjustmentDeleteRequest,
-    CostModelHistoryRequest,
+    CostModelAdjustmentsBulkRequest,
+    CostModelSeriesRequest,
+    CostModelStudyRequest,
+    CecoExclusionRule,
+    CecoExclusionsUpdate,
+    CostModelExtraUpsert,
+    CostModelExtrasDefaultUpdate,
     CostModelAdjustmentUpsertRequest,
     CostModelViewResponse,
     DashboardResponse,
@@ -466,15 +472,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return HTMLResponse(fallback_html or "")
 
     @app.get("/", response_class=HTMLResponse)
-    async def home() -> str:
+    def home() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/login", response_class=HTMLResponse)
-    async def login_page() -> str:
+    def login_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/exports/{artifact_name}")
-    async def view_export_artifact(
+    def view_export_artifact(
         artifact_name: str,
         request: Request,
         session: Session = Depends(get_session),
@@ -503,7 +509,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/api/v1/media/assets", response_model=MediaAssetListResponse)
-    async def list_media_assets_v1(
+    def list_media_assets_v1(
         kind: str = "image",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -511,7 +517,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"assets": [serialize_media_asset(asset) for asset in list_media_assets(session, kind=kind)]}
 
     @app.post("/api/v1/media/assets", response_model=MediaAssetModel)
-    async def upload_media_asset_v1(
+    def upload_media_asset_v1(
         file: UploadFile = File(...),
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -530,7 +536,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serialize_media_asset(asset)
 
     @app.get("/api/v1/media/assets/{asset_id}/content", response_class=FileResponse)
-    async def download_media_asset_v1(
+    def download_media_asset_v1(
         asset_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -549,7 +555,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(asset_path, media_type=asset.content_type, filename=asset.original_filename or asset_path.name)
 
     @app.get("/catalog", response_class=HTMLResponse)
-    async def catalog(
+    def catalog(
         category_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_optional_actor_user),
@@ -565,7 +571,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serve_frontend_app(render_catalog_page(data, active_id))
 
     @app.post("/catalog/categories")
-    async def create_catalog_category(
+    def create_catalog_category(
         name: str = Form(...),
         description: str | None = Form(default=None),
         scope: str = Form("item"),
@@ -584,7 +590,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={category.id}", status_code=303)
 
     @app.post("/catalog/components")
-    async def create_catalog_component(
+    def create_catalog_component(
         category_id: int = Form(...),
         component_type: str = Form(...),
         name: str = Form(...),
@@ -611,7 +617,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={category_id}", status_code=303)
 
     @app.post("/catalog/components/{component_id}/update")
-    async def update_catalog_component(
+    def update_catalog_component(
         component_id: int,
         name: str = Form(...),
         short_name: str | None = Form(default=None),
@@ -641,7 +647,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={component.category_id}", status_code=303)
 
     @app.post("/catalog/components/{component_id}/delete")
-    async def delete_catalog_component(
+    def delete_catalog_component(
         component_id: int,
         category_id: int = Form(...),
         session: Session = Depends(get_session),
@@ -658,7 +664,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={deleted_category_id or category_id}", status_code=303)
 
     @app.post("/catalog/components/{component_id}/attributes")
-    async def create_catalog_attribute(
+    def create_catalog_attribute(
         component_id: int,
         name: str = Form(...),
         value_type: str = Form(...),
@@ -680,7 +686,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={definition.component.category_id}", status_code=303)
 
     @app.post("/catalog/attributes/{attribute_definition_id}/update")
-    async def update_catalog_attribute(
+    def update_catalog_attribute(
         attribute_definition_id: int,
         name: str = Form(...),
         value_type: str = Form(...),
@@ -702,7 +708,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={definition.component.category_id}", status_code=303)
 
     @app.post("/catalog/attributes/{attribute_definition_id}/delete")
-    async def delete_catalog_attribute(
+    def delete_catalog_attribute(
         attribute_definition_id: int,
         category_id: int = Form(...),
         session: Session = Depends(get_session),
@@ -716,7 +722,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={deleted_category_id or category_id}", status_code=303)
 
     @app.post("/catalog/components/{component_id}/attributes/update")
-    async def replace_catalog_component_attributes(
+    def replace_catalog_component_attributes(
         component_id: int,
         request: Request,
         attributes_json: str = Form("[]"),
@@ -758,7 +764,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/catalog?category_id={category_id}", status_code=303)
 
     @app.get("/projects", response_class=HTMLResponse)
-    async def projects(session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+    def projects(session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
         if frontend_index.exists():
             return serve_frontend_app()
         if current_user is None:
@@ -767,7 +773,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serve_frontend_app(render_projects_page(data))
 
     @app.post("/projects")
-    async def create_project_route(
+    def create_project_route(
         name: str = Form(...),
         status: str = Form("template"),
         session: Session = Depends(get_session),
@@ -778,7 +784,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
+    def project_detail(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_optional_actor_user)) -> str:
         if frontend_index.exists():
             return serve_frontend_app()
         if current_user is None:
@@ -793,23 +799,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serve_frontend_app(render_project_detail_page(data))
 
     @app.get("/users", response_class=HTMLResponse)
-    async def user_editor_page() -> str:
+    def user_editor_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/settings", response_class=HTMLResponse)
-    async def settings_page() -> str:
+    def settings_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/history", response_class=HTMLResponse)
-    async def history_page() -> str:
+    def history_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.get("/dashboard/materials", response_class=HTMLResponse)
-    async def material_dashboard_page() -> str:
+    def material_dashboard_page() -> str:
         return serve_frontend_app(render_home_page())
 
     @app.post("/projects/{project_id}/instances")
-    async def create_project_instance_route(
+    def create_project_instance_route(
         project_id: int,
         category_id: int = Form(...),
         component_id: int = Form(...),
@@ -846,7 +852,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
 
     @app.post("/projects/{project_id}/instances/{instance_id}/update")
-    async def update_project_instance_route(
+    def update_project_instance_route(
         project_id: int,
         instance_id: int,
         category_id: int = Form(...),
@@ -881,7 +887,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
 
     @app.post("/projects/{project_id}/instances/{instance_id}/delete")
-    async def delete_project_instance_route(
+    def delete_project_instance_route(
         project_id: int,
         instance_id: int,
         category_id: int = Form(...),
@@ -898,16 +904,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/projects/{project_id}#category-{category_id}", status_code=303)
 
     @app.get("/api/catalog")
-    async def catalog_api(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def catalog_api(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_catalog_edit(current_user)
         return get_catalog_page_data(session, selected_category_id=category_id)
 
     @app.get("/api/projects")
-    async def projects_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def projects_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return get_projects_page_data(session, user=current_user)
 
     @app.get("/api/projects/{project_id}")
-    async def project_detail_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_detail_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         data = get_project_view_data(session, project_id, user=current_user)
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -933,7 +939,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/auth/microsoft/login")
     @app.get("/api/v1/auth/microsoft/login")
-    async def microsoft_login_api(request: Request):
+    def microsoft_login_api(request: Request):
         # An account switch must never fall back to the previous app identity.
         request.session.clear()
         settings = request.app.state.settings
@@ -1013,7 +1019,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=_public_path("/") or "/", status_code=303)
 
     @app.post("/api/v1/login", response_model=SessionUserResponse)
-    async def login_api(
+    def login_api(
         payload: LoginRequest,
         request: Request,
         session: Session = Depends(get_session),
@@ -1036,17 +1042,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serialize_session_user(user)
 
     @app.post("/api/v1/logout", status_code=204)
-    async def logout_api(request: Request) -> Response:
+    def logout_api(request: Request) -> Response:
         request.session.clear()
         return Response(status_code=204)
 
     @app.get("/api/v1/session", response_model=SessionUserResponse)
-    async def session_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def session_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         del session
         return serialize_session_user(current_user)
 
     @app.get("/api/v1/users", response_model=UserDirectoryResponse)
-    async def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def list_users_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
         require_page_read(current_user, "settings")
         return {
@@ -1056,7 +1062,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/roles/page-access", response_model=UserDirectoryResponse)
-    async def update_role_page_access_api(
+    def update_role_page_access_api(
         payload: RolePageAccessUpdateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1077,7 +1083,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.post("/api/v1/users", response_model=ManagedUserModel)
-    async def create_user_api(
+    def create_user_api(
         payload: UserCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1099,7 +1105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serialize_user(user)
 
     @app.put("/api/v1/users/{user_id}", response_model=ManagedUserModel)
-    async def update_user_api(
+    def update_user_api(
         user_id: int,
         payload: UserUpdateRequest,
         session: Session = Depends(get_session),
@@ -1124,7 +1130,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return serialize_user(user)
 
     @app.delete("/api/v1/users/{user_id}", response_model=MutationResultModel)
-    async def delete_user_api(
+    def delete_user_api(
         user_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1140,13 +1146,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "deleted_id": user_id}
 
     @app.get("/api/v1/backups", response_model=list[BackupRecordModel])
-    async def list_backups_api(request: Request, current_user=Depends(get_actor_user)):
+    def list_backups_api(request: Request, current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
         require_page_read(current_user, "settings")
         return backup_service.list_backups(request.app.state.settings)
 
     @app.post("/api/v1/backups", response_model=BackupCreateResponse, status_code=201)
-    async def create_backup_api(
+    def create_backup_api(
         payload: BackupCreateRequest,
         request: Request,
         current_user=Depends(get_actor_user),
@@ -1162,13 +1168,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"backup": backup, "settings": backup_settings, "pruned": pruned}
 
     @app.get("/api/v1/backups/settings", response_model=BackupSettingsModel)
-    async def get_backup_settings_api(request: Request, current_user=Depends(get_actor_user)):
+    def get_backup_settings_api(request: Request, current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
         require_page_read(current_user, "settings")
         return backup_service.load_backup_settings(request.app.state.settings)
 
     @app.put("/api/v1/backups/settings", response_model=BackupSettingsModel)
-    async def update_backup_settings_api(
+    def update_backup_settings_api(
         payload: BackupSettingsUpdateRequest,
         request: Request,
         current_user=Depends(get_actor_user),
@@ -1184,7 +1190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/v1/backups/restore", response_model=BackupRestoreResponse)
-    async def restore_backup_api(
+    def restore_backup_api(
         payload: BackupRestoreRequest,
         request: Request,
         current_user=Depends(get_actor_user),
@@ -1204,7 +1210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return result
 
     @app.get("/api/v1/database-sync/status", response_model=DatabaseSyncStatusModel)
-    async def database_sync_status_api(request: Request, current_user=Depends(get_actor_user)):
+    def database_sync_status_api(request: Request, current_user=Depends(get_actor_user)):
         require_user_admin(current_user)
         require_page_read(current_user, "settings")
         client_host = request.client.host if request.client else None
@@ -1293,12 +1299,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/api/v1/catalog", response_model=CatalogResponse)
-    async def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def catalog_v1(category_id: int | None = None, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "catalog")
         return get_catalog_page_data(session, selected_category_id=category_id)
 
     @app.post("/api/v1/catalog/categories", response_model=MutationResultModel)
-    async def create_catalog_category_v1(
+    def create_catalog_category_v1(
         payload: CatalogCategoryCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1314,7 +1320,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "category_id": category.id}
 
     @app.put("/api/v1/catalog/categories/{category_id}", response_model=MutationResultModel)
-    async def update_catalog_category_v1(
+    def update_catalog_category_v1(
         category_id: int,
         payload: CatalogCategoryUpdateRequest,
         session: Session = Depends(get_session),
@@ -1333,7 +1339,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/catalog/categories/{category_id}/deletion-impact",
         response_model=CatalogCategoryDeletionImpactModel,
     )
-    async def catalog_category_deletion_impact_v1(
+    def catalog_category_deletion_impact_v1(
         category_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1345,7 +1351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return impact
 
     @app.delete("/api/v1/catalog/categories/{category_id}", response_model=MutationResultModel)
-    async def delete_catalog_category_v1(
+    def delete_catalog_category_v1(
         category_id: int,
         confirm_cascade: bool = False,
         session: Session = Depends(get_session),
@@ -1361,7 +1367,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "deleted_id": category_id, "category_id": impact["parent_id"]}
 
     @app.post("/api/v1/catalog/components", response_model=CatalogComponentMutationResultModel)
-    async def create_catalog_component_v1(
+    def create_catalog_component_v1(
         payload: CatalogComponentCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1386,7 +1392,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/catalog/components/{component_id}", response_model=CatalogComponentMutationResultModel)
-    async def update_catalog_component_v1(
+    def update_catalog_component_v1(
         component_id: int,
         payload: CatalogComponentUpdateRequest,
         session: Session = Depends(get_session),
@@ -1414,7 +1420,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/catalog/components/{component_id}/media", response_model=CatalogComponentMutationResultModel)
-    async def update_catalog_component_media_v1(
+    def update_catalog_component_media_v1(
         component_id: int,
         payload: CatalogComponentMediaUpdateRequest,
         session: Session = Depends(get_session),
@@ -1439,7 +1445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.delete("/api/v1/catalog/components/{component_id}", response_model=MutationResultModel)
-    async def delete_catalog_component_v1(
+    def delete_catalog_component_v1(
         component_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1454,7 +1460,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "category_id": deleted_category_id, "deleted_id": component_id}
 
     @app.put("/api/v1/catalog/components/{component_id}/attributes", response_model=CatalogComponentMutationResultModel)
-    async def replace_catalog_component_attributes_v1(
+    def replace_catalog_component_attributes_v1(
         component_id: int,
         payload: CatalogComponentAttributesReplaceRequest,
         session: Session = Depends(get_session),
@@ -1477,7 +1483,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/catalog/components/{component_id}/materials", response_model=CatalogComponentMutationResultModel)
-    async def replace_catalog_component_materials_v1(
+    def replace_catalog_component_materials_v1(
         component_id: int,
         payload: CatalogComponentMaterialsReplaceRequest,
         session: Session = Depends(get_session),
@@ -1499,7 +1505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/catalog/categories/{category_id}/links", response_model=MutationResultModel)
-    async def update_catalog_category_links_v1(
+    def update_catalog_category_links_v1(
         category_id: int,
         payload: CatalogCategoryLinksUpdateRequest,
         session: Session = Depends(get_session),
@@ -1510,7 +1516,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "category_id": category_id, "linked_category_ids": payload.linked_category_ids}
 
     @app.get("/api/v1/catalog/materials/search", response_model=CatalogMaterialSearchResponse)
-    async def search_catalog_materials_v1(
+    def search_catalog_materials_v1(
         request: Request,
         q: str,
         limit: int = 12,
@@ -1546,13 +1552,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/api/v1/projects", response_model=ProjectsBoardResponse)
-    async def projects_v1(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def projects_v1(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         if not can_read_page(current_user, "projects") and not can_read_page(current_user, "cost_model"):
             require_page_read(current_user, "projects")
         return get_projects_page_data(session, user=current_user)
 
     @app.post("/api/v1/projects", response_model=MutationResultModel)
-    async def create_project_v1(
+    def create_project_v1(
         payload: ProjectCreateRequest,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1570,7 +1576,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id}
 
     @app.post("/api/v1/projects/{project_id}/copy", response_model=MutationResultModel)
-    async def copy_project_v1(
+    def copy_project_v1(
         project_id: int,
         payload: ProjectCopyRequest,
         session: Session = Depends(get_session),
@@ -1596,7 +1602,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": copied_project.id}
 
     @app.delete("/api/v1/projects/{project_id}", response_model=MutationResultModel)
-    async def delete_project_v1(
+    def delete_project_v1(
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -1609,7 +1615,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "deleted_id": project_id}
 
     @app.put("/api/v1/projects/{project_id}", response_model=MutationResultModel)
-    async def update_project_v1(
+    def update_project_v1(
         project_id: int,
         payload: ProjectUpdateRequest,
         session: Session = Depends(get_session),
@@ -1633,7 +1639,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id}
 
     @app.put("/api/v1/projects/{project_id}/status", response_model=MutationResultModel)
-    async def update_project_status_v1(
+    def update_project_status_v1(
         project_id: int,
         payload: ProjectStatusUpdateRequest,
         session: Session = Depends(get_session),
@@ -1657,7 +1663,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id}
 
     @app.get("/api/v1/projects/{project_id}", response_model=ProjectDetailResponse)
-    async def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_detail_v1(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "projects")
         project = get_project_with_details(session, project_id)
         if project is None:
@@ -1669,7 +1675,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return data
 
     @app.post("/api/v1/projects/{project_id}/subtypes", response_model=MutationResultModel)
-    async def create_project_subtype_v1(
+    def create_project_subtype_v1(
         project_id: int,
         payload: ProjectSubtypeCreateRequest,
         session: Session = Depends(get_session),
@@ -1695,7 +1701,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id, "subtype_id": subtype.id}
 
     @app.put("/api/v1/projects/{project_id}/subtypes/{subtype_id}", response_model=MutationResultModel)
-    async def update_project_subtype_v1(
+    def update_project_subtype_v1(
         project_id: int,
         subtype_id: int,
         payload: ProjectSubtypeUpdateRequest,
@@ -1724,7 +1730,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id, "subtype_id": subtype.id}
 
     @app.delete("/api/v1/projects/{project_id}/subtypes/{subtype_id}", response_model=MutationResultModel)
-    async def delete_project_subtype_v1(
+    def delete_project_subtype_v1(
         project_id: int,
         subtype_id: int,
         confirm_impact: bool = False,
@@ -1752,7 +1758,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id, "deleted_id": subtype_id}
 
     @app.get("/api/v1/projects/{project_id}/subtypes/{subtype_id}/deletion-impact")
-    async def project_subtype_deletion_impact_v1(
+    def project_subtype_deletion_impact_v1(
         project_id: int,
         subtype_id: int,
         session: Session = Depends(get_session),
@@ -1768,7 +1774,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/v1/projects/{project_id}/instances", response_model=ProjectInstanceMutationResultModel)
-    async def create_project_instance_v1(
+    def create_project_instance_v1(
         project_id: int,
         payload: ProjectInstanceCreateRequest,
         session: Session = Depends(get_session),
@@ -1813,7 +1819,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/projects/{project_id}/linked-accessories",
         response_model=LinkedProjectAccessoryMutationResultModel,
     )
-    async def create_linked_project_accessory_v1(
+    def create_linked_project_accessory_v1(
         project_id: int,
         payload: LinkedProjectAccessoryCreateRequest,
         session: Session = Depends(get_session),
@@ -1861,7 +1867,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=ProjectInstanceMutationResultModel)
-    async def update_project_instance_v1(
+    def update_project_instance_v1(
         project_id: int,
         instance_id: int,
         payload: ProjectInstanceUpdateRequest,
@@ -1901,7 +1907,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences", response_model=ProjectOccurrenceMutationResultModel)
-    async def create_project_occurrence_v1(
+    def create_project_occurrence_v1(
         project_id: int,
         instance_id: int,
         payload: ProjectOccurrenceUpdateRequest,
@@ -1938,7 +1944,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=ProjectOccurrenceMutationResultModel)
-    async def update_project_occurrence_v1(
+    def update_project_occurrence_v1(
         project_id: int,
         instance_id: int,
         occurrence_id: int,
@@ -1977,7 +1983,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}/occurrences/{occurrence_id}", response_model=MutationResultModel)
-    async def delete_project_occurrence_v1(
+    def delete_project_occurrence_v1(
         project_id: int,
         instance_id: int,
         occurrence_id: int,
@@ -2002,7 +2008,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project_id, "instance_id": instance_id, "deleted_id": occurrence_id}
 
     @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}", response_model=MutationResultModel)
-    async def delete_project_instance_v1(
+    def delete_project_instance_v1(
         project_id: int,
         instance_id: int,
         session: Session = Depends(get_session),
@@ -2025,7 +2031,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project_id, "deleted_id": instance_id}
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/materials", response_model=MutationResultModel)
-    async def add_project_manual_material_v1(
+    def add_project_manual_material_v1(
         project_id: int,
         instance_id: int,
         payload: ManualMaterialAddRequest,
@@ -2053,7 +2059,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id, "instance_id": instance_id}
 
     @app.put("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{material_key}", response_model=MutationResultModel)
-    async def update_project_material_occurrence_v1(
+    def update_project_material_occurrence_v1(
         project_id: int,
         instance_id: int,
         material_key: str,
@@ -2092,7 +2098,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "project_id": project.id, "instance_id": instance_id}
 
     @app.delete("/api/v1/projects/{project_id}/instances/{instance_id}/materials/{material_key}", response_model=MutationResultModel)
-    async def delete_project_material_occurrence_v1(
+    def delete_project_material_occurrence_v1(
         project_id: int,
         instance_id: int,
         material_key: str,
@@ -2123,7 +2129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}/calculation-sheet",
         response_model=MaterialCalculationSheetResponse,
     )
-    async def get_project_material_calculation_sheet_v1(
+    def get_project_material_calculation_sheet_v1(
         project_id: int,
         instance_id: int,
         rule_id: int,
@@ -2153,7 +2159,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/v1/projects/{project_id}/instances/{instance_id}/materials/{rule_id}/calculation-sheet",
         response_model=MaterialCalculationSheetResponse,
     )
-    async def update_project_material_calculation_sheet_v1(
+    def update_project_material_calculation_sheet_v1(
         project_id: int,
         instance_id: int,
         rule_id: int,
@@ -2188,7 +2194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return sheet
 
     @app.get("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
-    async def project_material_mode_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_material_mode_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2202,7 +2208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/api/v1/projects/{project_id}/cost-model", response_model=CostModelViewResponse)
-    async def get_project_cost_model_api(
+    def get_project_cost_model_api(
         project_id: int,
         request: Request,
         session: Session = Depends(get_session),
@@ -2216,38 +2222,186 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project_id,
             settings=request.app.state.settings,
             user=current_user,
+            live_prices=False,
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return view
 
-    @app.post("/api/v1/projects/{project_id}/cost-model/history")
-    def get_project_cost_model_history_api(
+    @app.get("/api/v1/projects/{project_id}/cost-model/prices")
+    def get_project_cost_model_prices_api(
         project_id: int,
-        payload: CostModelHistoryRequest,
         request: Request,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
-        from app.services.cost_model_history import get_cost_model_history
+        from app.services.cost_model import get_cost_model_prices
 
+        require_page_read(current_user, "cost_model")
+        prices = get_cost_model_prices(session, project_id, settings=request.app.state.settings, user=current_user)
+        if prices is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return prices
+
+    @app.put("/api/v1/projects/{project_id}/cost-model/adjustments/bulk", response_model=CostModelViewResponse)
+    def upsert_project_cost_model_adjustments_api(
+        project_id: int,
+        payload: CostModelAdjustmentsBulkRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model import get_cost_model_view, upsert_cost_model_adjustments
+
+        project = get_project_with_details(session, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        require_page_edit(current_user, "cost_model")
+        require_project_edit(current_user, project)
+        try:
+            upsert_cost_model_adjustments(session, project=project, items=[item.model_dump() for item in payload.items], actor=current_user)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        view = get_cost_model_view(session, project_id, settings=request.app.state.settings, user=current_user, live_prices=False)
+        if view is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return view
+
+    def _require_cost_model_project(session: Session, current_user, project_id: int):
         require_page_read(current_user, "cost_model")
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         require_project_view(current_user, project)
+        return project
+
+    @app.post("/api/v1/projects/{project_id}/cost-model/study")
+    def get_project_cost_model_study_api(
+        project_id: int,
+        payload: CostModelStudyRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_study import get_cost_model_study
+
+        _require_cost_model_project(session, current_user, project_id)
         try:
-            return get_cost_model_history(
+            return get_cost_model_study(
                 request.app.state.settings, session=session, project_id=project_id,
-                subtype_id=payload.subtype_id, start_date=payload.start_date, end_date=payload.end_date,
+                start_date=payload.start_date, end_date=payload.end_date,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    @app.post("/api/v1/projects/{project_id}/cost-model/series")
+    def get_project_cost_model_series_api(
+        project_id: int,
+        payload: CostModelSeriesRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_study import get_cost_model_material_series
+
+        _require_cost_model_project(session, current_user, project_id)
+        try:
+            return get_cost_model_material_series(
+                request.app.state.settings, session=session, project_id=project_id, sku=payload.sku,
+                start_date=payload.start_date, end_date=payload.end_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/v1/projects/{project_id}/cost-model/timeline")
+    def get_project_cost_model_timeline_api(
+        project_id: int,
+        request: Request,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_study import get_cost_model_timeline
+
+        _require_cost_model_project(session, current_user, project_id)
+        try:
+            return get_cost_model_timeline(request.app.state.settings, session=session, project_id=project_id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def _require_cost_model_edit(session: Session, current_user, project_id: int):
+        project = _require_cost_model_project(session, current_user, project_id)
+        require_page_edit(current_user, "cost_model")
+        require_project_edit(current_user, project)
+        return project
+
+    @app.get("/api/v1/projects/{project_id}/cost-model/extras")
+    def get_project_cost_model_extras_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        from app.services.cost_model_extras import get_cost_model_extras
+
+        _require_cost_model_project(session, current_user, project_id)
+        return get_cost_model_extras(session, project_id)
+
+    @app.put("/api/v1/projects/{project_id}/cost-model/extras/default")
+    def update_project_cost_model_extras_default_api(
+        project_id: int, payload: CostModelExtrasDefaultUpdate, session: Session = Depends(get_session), current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_extras import set_cost_model_extras_default
+
+        _require_cost_model_edit(session, current_user, project_id)
+        try:
+            return set_cost_model_extras_default(session, project_id, payload.mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.put("/api/v1/projects/{project_id}/cost-model/extras")
+    def upsert_project_cost_model_extra_api(
+        project_id: int, payload: CostModelExtraUpsert, session: Session = Depends(get_session), current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_extras import upsert_cost_model_extra
+
+        _require_cost_model_edit(session, current_user, project_id)
+        try:
+            return upsert_cost_model_extra(session, project_id, payload.model_dump(), actor=current_user)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/projects/{project_id}/cost-model/extras/{sku}")
+    def delete_project_cost_model_extra_api(project_id: int, sku: str, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+        from app.services.cost_model_extras import delete_cost_model_extra
+
+        _require_cost_model_edit(session, current_user, project_id)
+        return delete_cost_model_extra(session, project_id, sku)
+
+    @app.get("/api/v1/cost-model/ceco-exclusions")
+    def get_cost_model_ceco_exclusions_api(
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_study import list_ceco_exclusions
+
+        require_page_read(current_user, "cost_model")
+        return list_ceco_exclusions(session)
+
+    @app.put("/api/v1/cost-model/ceco-exclusions")
+    def update_cost_model_ceco_exclusions_api(
+        payload: CecoExclusionsUpdate,
+        session: Session = Depends(get_session),
+        current_user=Depends(get_actor_user),
+    ):
+        from app.services.cost_model_study import replace_ceco_exclusions
+
+        require_page_edit(current_user, "cost_model")
+        try:
+            return replace_ceco_exclusions(session, [rule.model_dump() for rule in payload.rules], actor=current_user)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.put("/api/v1/projects/{project_id}/cost-model/adjustments", response_model=CostModelViewResponse)
-    async def upsert_project_cost_model_adjustment_api(
+    def upsert_project_cost_model_adjustment_api(
         project_id: int,
         payload: CostModelAdjustmentUpsertRequest,
         request: Request,
@@ -2286,13 +2440,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project_id,
             settings=request.app.state.settings,
             user=current_user,
+            live_prices=False,
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return view
 
     @app.delete("/api/v1/projects/{project_id}/cost-model/adjustments", response_model=CostModelViewResponse)
-    async def delete_project_cost_model_adjustment_api(
+    def delete_project_cost_model_adjustment_api(
         project_id: int,
         payload: CostModelAdjustmentDeleteRequest,
         request: Request,
@@ -2317,13 +2472,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project_id,
             settings=request.app.state.settings,
             user=current_user,
+            live_prices=False,
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return view
 
     @app.put("/api/v1/projects/{project_id}/material-mode", response_model=MaterialModeResponse)
-    async def update_project_material_mode_api(
+    def update_project_material_mode_api(
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2349,7 +2505,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/api/v1/projects/{project_id}/instances/{instance_id}/sync-preview", response_model=SyncPreviewResponse)
-    async def sync_preview_api(
+    def sync_preview_api(
         project_id: int,
         instance_id: int,
         session: Session = Depends(get_session),
@@ -2367,7 +2523,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/refresh", response_model=SyncPreviewResponse)
-    async def refresh_instance_api(
+    def refresh_instance_api(
         project_id: int,
         instance_id: int,
         session: Session = Depends(get_session),
@@ -2391,7 +2547,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-fields/apply-catalog", response_model=SyncPreviewResponse)
-    async def apply_catalog_value_to_instance_field_api(
+    def apply_catalog_value_to_instance_field_api(
         project_id: int,
         instance_id: int,
         payload: SyncFieldApplyRequest,
@@ -2420,7 +2576,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-fields/apply-instance", response_model=SyncPreviewResponse)
-    async def apply_instance_value_to_catalog_field_api(
+    def apply_instance_value_to_catalog_field_api(
         project_id: int,
         instance_id: int,
         payload: SyncFieldApplyRequest,
@@ -2450,7 +2606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/sync-attributes/reconcile", response_model=SyncPreviewResponse)
-    async def reconcile_instance_base_attributes_api(
+    def reconcile_instance_base_attributes_api(
         project_id: int,
         instance_id: int,
         payload: SyncAttributeSchemaUpdateRequest,
@@ -2481,7 +2637,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return preview
 
     @app.get("/api/v1/projects/{project_id}/comments", response_model=list[CommentModel])
-    async def project_comments_api(
+    def project_comments_api(
         project_id: int,
         instance_id: int | None = None,
         session: Session = Depends(get_session),
@@ -2496,7 +2652,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_comments(session, project_id, instance_id=instance_id, user=current_user)
 
     @app.post("/api/v1/projects/{project_id}/comments", response_model=CommentModel)
-    async def add_comment_api(
+    def add_comment_api(
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2537,7 +2693,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return payload_out
 
     @app.delete("/api/v1/projects/{project_id}/comments/{comment_id}", response_model=CommentDeleteResponse)
-    async def delete_comment_api(project_id: int, comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def delete_comment_api(project_id: int, comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2555,7 +2711,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
 
     @app.get("/api/v1/comments/mentionable-users", response_model=MentionableUsersResponse)
-    async def mentionable_users_api(
+    def mentionable_users_api(
         project_id: int | None = None,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2565,7 +2721,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"users": [serialize_user(user) for user in users]}
 
     @app.get("/api/v1/comments/{comment_id}/context", response_model=CommentContextResponse)
-    async def comment_context_api(comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def comment_context_api(comment_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         context = get_comment_context(session, comment_id)
         if context is None:
             raise HTTPException(status_code=404, detail="Comment not found")
@@ -2576,7 +2732,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return context
 
     @app.get("/api/v1/projects/{project_id}/activity", response_model=list[ActivityGroupModel])
-    async def project_activity_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_activity_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2584,17 +2740,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_activity(session, project_id)
 
     @app.get("/api/v1/activity", response_model=list[ActivityGroupModel])
-    async def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def activity_history_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
         return get_activity_history(session, current_user, execution_only=is_guest_user(current_user))
 
     @app.get("/api/v1/activity/projects", response_model=list[ActivityGroupProjectModel])
-    async def activity_projects_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def activity_projects_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_page_read(current_user, "history")
         return get_activity_projects(session, current_user, execution_only=is_guest_user(current_user))
 
     @app.get("/api/v1/projects/{project_id}/approvals", response_model=list[ApprovalModel])
-    async def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_approvals_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2602,7 +2758,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_approvals(session, project_id)
 
     @app.post("/api/v1/projects/{project_id}/approvals", response_model=ApprovalModel)
-    async def create_project_approval_api(
+    def create_project_approval_api(
         project_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2623,7 +2779,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_approvals(session, project_id)[0]
 
     @app.post("/api/v1/approvals/{approval_id}/decision", response_model=ApprovalModel)
-    async def decide_project_approval_api(
+    def decide_project_approval_api(
         approval_id: int,
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
@@ -2644,7 +2800,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_approvals(session, approval.project_id)[0]
 
     @app.get("/api/v1/projects/{project_id}/exports", response_model=list[ExportJobModel])
-    async def project_exports_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def project_exports_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         project = get_project_with_details(session, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2652,7 +2808,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_export_jobs(session, project_id)
 
     @app.post("/api/v1/projects/{project_id}/exports", response_model=ExportJobModel)
-    async def request_project_export_api(
+    def request_project_export_api(
         request: Request,
         project_id: int,
         session: Session = Depends(get_session),
@@ -2689,7 +2845,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_project_export_jobs(session, project_id)[0]
 
     @app.get("/api/v1/dashboard/projects/{project_id}/materials", response_model=DashboardResponse)
-    async def dashboard_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def dashboard_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         require_erp_admin(current_user)
         data = get_project_material_dashboard(session, project_id)
         if data is None:
@@ -2748,7 +2904,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/v1/dashboard/materials/search", response_model=CatalogMaterialSearchResponse)
-    async def search_material_dashboard_materials_v1(
+    def search_material_dashboard_materials_v1(
         request: Request,
         q: str,
         limit: int = 10,
@@ -3661,22 +3817,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return resolved
 
     @app.get("/api/v1/notifications", response_model=list[NotificationModel])
-    async def notifications_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def notifications_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return get_user_notifications(session, current_user)
 
     @app.get("/api/v1/notifications/unread-count", response_model=CommentUnreadCountResponse)
-    async def notification_unread_count_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def notification_unread_count_api(session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         return {"unread": get_unread_notification_count(session, current_user)}
 
     @app.post("/api/v1/notifications/{notification_id}/read", response_model=CommentNotificationReadResponse)
-    async def mark_notification_read_api(notification_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def mark_notification_read_api(notification_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         result = mark_notification_read(session, notification_id=notification_id, user=current_user)
         if result is None:
             raise HTTPException(status_code=404, detail="Notification not found")
         return result
 
     @app.post("/api/v1/projects/{project_id}/instances/{instance_id}/notifications/read", response_model=MutationResultModel)
-    async def mark_instance_notifications_read_api(
+    def mark_instance_notifications_read_api(
         project_id: int,
         instance_id: int,
         session: Session = Depends(get_session),
@@ -3692,11 +3848,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "deleted_id": result["updated"]}
 
     @app.get("/api/v1/public/projects", response_model=PublicProjectListResponse)
-    async def public_projects_api(session: Session = Depends(get_session)):
+    def public_projects_api(session: Session = Depends(get_session)):
         return {"projects": list_public_projects(session)}
 
     @app.get("/api/v1/public/projects/{project_id}/skus", response_model=PublicProjectSkuResponse)
-    async def public_project_skus_api(project_id: int, session: Session = Depends(get_session)):
+    def public_project_skus_api(project_id: int, session: Session = Depends(get_session)):
         data = list_project_public_skus(session, project_id)
         if data is None:
             raise HTTPException(status_code=404, detail="Project not found")

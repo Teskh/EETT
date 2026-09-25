@@ -1509,15 +1509,48 @@ class CostModelAdjustmentUpsertRequest(BaseModel):
     source_total_consumption: float | None = None
 
 
+class CostModelAdjustmentsBulkRequest(BaseModel):
+    items: list[CostModelAdjustmentUpsertRequest] = Field(min_length=1, max_length=2000)
+
+
 class CostModelAdjustmentDeleteRequest(BaseModel):
     material_id: int
     subtype_id: int | None = None
 
 
-class CostModelHistoryRequest(BaseModel):
-    subtype_id: int | None = None
+class CostModelStudyRequest(BaseModel):
     start_date: date
     end_date: date
+
+
+class CostModelSeriesRequest(CostModelStudyRequest):
+    sku: str = Field(min_length=1, max_length=64)
+
+
+class CecoExclusionRule(BaseModel):
+    rule: str
+    note: str | None = None
+
+
+class CecoExclusionsUpdate(BaseModel):
+    rules: list[CecoExclusionRule]
+
+
+class CostModelExtrasDefaultUpdate(BaseModel):
+    mode: str
+
+
+class CostModelExtraUpsert(BaseModel):
+    sku: str
+    included: bool
+    name: str | None = None
+    unit: str | None = None
+    quantity_per_house: float | None = None
+    unit_cost: float | None = None
+    replaces_sku: str | None = None
+    source_range_start: date | None = None
+    source_range_end: date | None = None
+    note: str | None = None
 
 
 class CostModelViewResponse(BaseModel):

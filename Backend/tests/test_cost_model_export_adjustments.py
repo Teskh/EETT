@@ -126,3 +126,23 @@ class CostModelExportAdjustmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CostModelExtrasExportTests(unittest.TestCase):
+    setUp = CostModelExportAdjustmentTests.setUp
+
+    def test_included_materials_outside_the_bom_get_their_own_sheet(self) -> None:
+        output = BytesIO()
+        build_cost_model_workbook(self.project_data, output, prices_by_sku={}, extras=[
+            {"sku": "PLAC0075", "name": "MDP 18MM", "unit": "UN", "quantity_per_house": 11.4, "unit_cost": 24000,
+             "value_per_house": 273600, "replaces_sku": "PLAC0003", "origin": "Reemplazo desde 2025-11-17"},
+        ])
+        output.seek(0)
+        rows = list(load_workbook(output)["Fuera de presupuesto"].iter_rows(min_row=2, values_only=True))
+        self.assertEqual(rows, [("MDP 18MM", "PLAC0075", 11.4, "UN", 24000, 273600, "PLAC0003", "Reemplazo desde 2025-11-17")])
+
+    def test_no_sheet_without_extras(self) -> None:
+        output = BytesIO()
+        build_cost_model_workbook(self.project_data, output, prices_by_sku={})
+        output.seek(0)
+        self.assertNotIn("Fuera de presupuesto", load_workbook(output).sheetnames)

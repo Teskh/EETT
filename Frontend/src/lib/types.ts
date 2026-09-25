@@ -1181,6 +1181,18 @@ export type CostModelFlatSubtype = {
   depth: number;
 };
 
+/** One material in the study's terms, by business day. */
+export type CostModelSeries = {
+  project_id: number;
+  sku: string;
+  range_start: string;
+  range_end: string;
+  site_share: number;
+  other_houses: number;
+  unmapped_houses: number;
+  points: { date: string; actual: number; expected_target: number; expected_other: number; target_starts: number; equivalent_houses: number }[];
+};
+
 export type CostModelView = {
   project: {
     id: number;
@@ -1194,6 +1206,8 @@ export type CostModelView = {
   subtypes: ProjectSubtype[];
   flat_subtypes: CostModelFlatSubtype[];
   rows: CostModelRow[];
+  /** Prices are from the cache; live ERP prices come from the prices endpoint. */
+  prices_pending?: boolean;
 };
 
 export type CostModelAdjustmentUpsertRequest = {
@@ -1215,29 +1229,111 @@ export type CostModelAdjustmentDeleteRequest = {
   subtype_id?: number | null;
 };
 
-export type CostModelHistoryReference = {
+export type CostModelStudyGrade = "high" | "medium" | "low" | "none";
+export type CostModelStudySuggestion = "historic" | "estimated" | "review";
+
+export type CostModelStudyMaterial = {
   sku: string;
-  quantity_per_house: number | null;
-  estimated_quantity_per_house: number;
-  reason: string | null;
-  factory_consumption: number | null;
-  factory_expected_consumption: number;
-  allocated_consumption: number | null;
+  /** Real consumption over expected consumption, for this project. */
+  ratio: number | null;
+  pooled_ratio: number | null;
+  method: "pooled" | "separated";
+  identifiability: number | null;
+  actual: number;
+  expected: number;
+  expected_target: number;
+  target_share: number | null;
+  site_share: number;
+  /** Share withdrawn through excluded cost centers, e.g. Obra. */
+  excluded_share: number;
+  unit_cost: number | null;
+  /** Historic quantity per house, keyed by subtype id or "general". */
+  quantity_per_house: Record<string, number>;
+  signals: {
+    tracking: number | null;
+    active_weeks: number | null;
+    edge_sensitivity: number | null;
+    stability: { ratio_before: number; ratio_after: number; change_week: string } | null;
+    weekly_actual: number[];
+    weekly_expected: number[];
+    weeks: string[];
+  };
+  grade: CostModelStudyGrade;
+  reasons: string[];
+  suggestion: CostModelStudySuggestion;
 };
 
-export type CostModelHistory = {
+export type CostModelUnbudgetedMaterial = {
+  sku: string;
+  name: string;
+  unit: string | null;
+  quantity: number;
+  quantity_per_house: number;
+  value_per_house: number;
+  active_weeks: number;
+  /** Share of the withdrawals explained by other projects' budgets. */
+  explained_elsewhere: number;
+  /** Cost center it was mostly withdrawn from, to spot misallocations. */
+  main_cost_center: string | null;
+  main_cost_center_name: string | null;
+  main_cost_center_share: number | null;
+  replaces: {
+    sku: string;
+    name: string;
+    /** "switch": the budgeted material practically stopped when this one started. "name": similar names. */
+    evidence: "switch" | "name";
+    since_week: string | null;
+    shortfall_value_per_house: number;
+    quantity_per_house_since: number | null;
+  }[];
+};
+
+export type CostModelExtra = {
+  sku: string;
+  name: string | null;
+  unit: string | null;
+  included: boolean;
+  /** Pinned quantity per house; null follows the study period. */
+  quantity_per_house: number | null;
+  unit_cost: number | null;
+  replaces_sku: string | null;
+  source_range_start: string | null;
+  source_range_end: string | null;
+  note: string | null;
+  updated_at: string | null;
+};
+
+export type CostModelExtras = { stored: boolean; default: "include" | "exclude"; items: CostModelExtra[] };
+
+export type CecoExclusions = { stored: boolean; rules: { rule: string; note: string | null }[] };
+
+export type CostModelStudy = {
   project_id: number;
-  subtype_id: number | null;
   range_start: string;
   range_end: string;
-  method: "bom_weighted_allocation";
-  sample_houses: number;
-  total_houses: number;
-  unmapped_houses: number;
-  incomplete_houses: number;
-  blocked_reason: string | null;
-  references: CostModelHistoryReference[];
+  houses: {
+    target: number;
+    target_by_subtype: { subtype_id: number | null; houses: number }[];
+    other_projects: number;
+    unmapped: number;
+    target_share: number | null;
+  };
+  unmapped_share: number;
+  data_start: string;
+  warnings: string[];
+  materials: CostModelStudyMaterial[];
+  unbudgeted: CostModelUnbudgetedMaterial[];
+  exclusions: CecoExclusions;
   generated_at: string;
+};
+
+export type CostModelTimeline = {
+  project_id: number;
+  data_start: string | null;
+  data_end: string | null;
+  suggested: { start_date: string; end_date: string } | null;
+  groups: { key: string; project_id: number | null; project_name: string | null; subtype_id: number | null; subtype_name: string | null; houses: number }[];
+  weeks: { week: string; starts: { key: string; houses: number }[] }[];
 };
 
 export type Approval = {

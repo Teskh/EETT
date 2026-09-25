@@ -79,6 +79,7 @@ def build_cost_model_workbook(
     *,
     prices_by_sku: dict[str, float | None],
     adjustments: list[dict[str, Any]] | None = None,
+    extras: list[dict[str, Any]] | None = None,
 ) -> None:
     workbook = Workbook()
     workbook.remove(workbook.active)
@@ -95,10 +96,30 @@ def build_cost_model_workbook(
     totals_sheet = workbook.create_sheet("Total Materiales")
     _populate_cost_model_totals_sheet(totals_sheet, cost_rows, subtype_names=_flatten_subtype_names(project_data.get("subtypes", [])))
 
+    if extras:
+        _populate_cost_model_extras_sheet(workbook.create_sheet("Fuera de presupuesto"), extras)
+
     workbook.properties.title = f"{project_data['project']['name']} - Modelo de Costos"
     if isinstance(output_path, Path):
         output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
+
+
+def _populate_cost_model_extras_sheet(ws, extras: list[dict[str, Any]]) -> None:
+    """Materials outside the BOM included in the budget, per house, as sent
+    by the cost model page for the period it shows."""
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+    headers = ["Material", "SKU", "Q / vivienda", "Unidad", "Costo unitario", "Costo / vivienda", "Reemplaza a", "Origen"]
+    ws.append(headers)
+    _style_header_row(ws, row_index=1, column_count=len(headers))
+    for index, extra in enumerate(extras, start=2):
+        ws.append([
+            extra.get("name") or extra.get("sku"), extra.get("sku"), extra.get("quantity_per_house"), extra.get("unit"),
+            extra.get("unit_cost"), extra.get("value_per_house"), extra.get("replaces_sku") or "", extra.get("origin") or "",
+        ])
+        _style_data_row(ws, index, numeric_columns={3, 5, 6})
+    _set_column_widths(ws, {"A": 42, "B": 16, "C": 14, "D": 10, "E": 14, "F": 16, "G": 16, "H": 30})
 
 
 def _populate_total_materials_sheet(ws, context_rows: list[dict[str, Any]], *, subtype_nodes: list[dict[str, Any]]) -> None:

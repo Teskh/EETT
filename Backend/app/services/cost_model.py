@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from collections import defaultdict
 from datetime import date, datetime
 from math import isfinite
@@ -45,7 +47,11 @@ def get_cost_model_view(
     *,
     settings: Settings | None = None,
     user: User | None = None,
+    live_prices: bool = True,
 ) -> dict[str, Any] | None:
+    """The project's budget rows. Without `live_prices` it does not wait on the
+    ERP: prices come from recent ERP reads or the stored cache, and
+    `prices_pending` tells the client to ask `get_cost_model_prices`."""
     project = get_project_with_details(session, project_id)
     if project is None:
         return None
@@ -65,7 +71,7 @@ def get_cost_model_view(
     for adjustment in adjustments:
         adjustments_by_material[adjustment.material_id].append(adjustment)
 
-    prices_by_sku = _load_cost_model_prices(session, settings=settings, project_data=project_data)
+    prices_by_sku, prices_pending = _load_cost_model_prices(session, settings=settings, project_data=project_data, live=live_prices)
 
     flat_subtypes = _flatten_subtypes(project_data.get("subtypes", []))
 
@@ -224,7 +230,27 @@ def get_cost_model_view(
         "subtypes": project_data.get("subtypes", []),
         "flat_subtypes": flat_subtypes,
         "rows": serialized_rows,
+        "prices_pending": prices_pending,
     }
+
+
+def get_cost_model_prices(
+    session: Session,
+    project_id: int,
+    *,
+    settings: Settings | None,
+    user: User | None = None,
+) -> dict[str, Any] | None:
+    """Current ERP prices for the project's materials, read once per
+    LIVE_PRICE_TTL_SECONDS and shared by every later view and save."""
+    project = get_project_with_details(session, project_id)
+    if project is None or (user is not None and not can_view_project(user, project)):
+        return None
+    project_data = get_project_view_data(session, project_id, user=user)
+    if project_data is None:
+        return None
+    prices, _ = _load_cost_model_prices(session, settings=settings, project_data=project_data, live=True)
+    return {"prices": prices}
 
 
 def upsert_cost_model_adjustment(
@@ -243,6 +269,7 @@ def upsert_cost_model_adjustment(
     source_sample_houses: int | None = None,
     source_total_consumption: float | None = None,
     actor: User | None = None,
+    commit: bool = True,
 ) -> ProjectCostModelAdjustment:
     if not isfinite(adjusted_quantity) or adjusted_quantity < 0:
         raise ValueError("Quantity must be a finite, nonnegative number")
@@ -297,9 +324,23 @@ def upsert_cost_model_adjustment(
         if actor is not None:
             adjustment.created_by_user_id = actor.id
 
-    session.commit()
-    session.refresh(adjustment)
+    if commit:
+        session.commit()
+        session.refresh(adjustment)
     return adjustment
+
+
+def upsert_cost_model_adjustments(session: Session, *, project: Project, items: list[dict[str, Any]], actor: User | None = None) -> int:
+    """Several adjustments in one transaction: all are saved or none."""
+    try:
+        for item in items:
+            upsert_cost_model_adjustment(session, project=project, actor=actor, commit=False, **item)
+            session.flush()
+    except Exception:
+        session.rollback()
+        raise
+    session.commit()
+    return len(items)
 
 
 def delete_cost_model_adjustment(
@@ -344,19 +385,14 @@ def _serialize_adjustment(adjustment: ProjectCostModelAdjustment) -> dict[str, A
     }
 
 
-def _load_cost_model_prices(
-    session: Session,
-    *,
-    settings: Settings | None,
-    project_data: dict[str, Any],
-) -> dict[str, float | None]:
-    from app.services.erp import (
-        _get_average_prices_for_products_batch,
-        _get_purchase_order_lines_for_products_batch,
-        _open_connection,
-        erp_search_available,
-    )
+# ERP price reads take seconds per project, so a read is reused for a while:
+# sku -> (read at, price or None when the ERP had nothing better than the cache).
+LIVE_PRICE_TTL_SECONDS = 30 * 60
+_live_prices: dict[str, tuple[float, float | None]] = {}
+_live_prices_lock = threading.Lock()
 
+
+def _project_skus(project_data: dict[str, Any]) -> list[str]:
     unique_skus: list[str] = []
     seen_skus: set[str] = set()
     for section in project_data.get("categories", []):
@@ -373,9 +409,28 @@ def _load_cost_model_prices(
             continue
         seen_skus.add(sku)
         unique_skus.append(sku)
+    return unique_skus
 
+
+def _load_cost_model_prices(
+    session: Session,
+    *,
+    settings: Settings | None,
+    project_data: dict[str, Any],
+    live: bool = True,
+) -> tuple[dict[str, float | None], bool]:
+    """Prices by SKU and whether some still need an ERP read. With `live`,
+    SKUs without a recent read are read from the ERP now."""
+    from app.services.erp import (
+        _get_average_prices_for_products_batch,
+        _get_purchase_order_lines_for_products_batch,
+        _open_connection,
+        erp_search_available,
+    )
+
+    unique_skus = _project_skus(project_data)
     if not unique_skus:
-        return {}
+        return {}, False
 
     prices = {
         cache.sku.strip().upper(): _select_cost_model_price(
@@ -386,22 +441,35 @@ def _load_cost_model_prices(
         if cache.sku
     }
     price_map = {sku: prices.get(sku) for sku in unique_skus}
+    erp_available = settings is not None and erp_search_available(settings)
+    if not erp_available:
+        return price_map, False
 
-    if settings is None or not erp_search_available(settings):
-        return price_map
+    now = time.monotonic()
+    missing: list[str] = []
+    with _live_prices_lock:
+        for sku in unique_skus:
+            cached = _live_prices.get(sku)
+            if cached is None or now - cached[0] > LIVE_PRICE_TTL_SECONDS:
+                missing.append(sku)
+            elif cached[1] is not None:
+                price_map[sku] = cached[1]
+    if not missing or not live:
+        return price_map, bool(missing)
 
+    read: dict[str, float | None] = {sku: None for sku in missing}
     try:
         with _open_connection(settings) as connection:
             live_prices = _get_average_prices_for_products_batch(
                 connection.cursor(),
-                unique_skus,
+                missing,
                 datetime.utcnow().strftime("%d/%m/%Y"),
             )
             for sku, value in live_prices.items():
-                if _is_positive_price(value):
-                    price_map[sku] = value
+                if sku in read and _is_positive_price(value):
+                    read[sku] = value
 
-            missing_price_skus = [sku for sku in unique_skus if not _is_positive_price(price_map.get(sku))]
+            missing_price_skus = [sku for sku in missing if not _is_positive_price(read[sku]) and not _is_positive_price(price_map.get(sku))]
             if missing_price_skus:
                 purchase_order_lines = _get_purchase_order_lines_for_products_batch(
                     connection.cursor(),
@@ -410,12 +478,21 @@ def _load_cost_model_prices(
                 )
                 for sku, lines in purchase_order_lines.items():
                     purchase_order_price = _select_purchase_order_price(lines)
-                    if purchase_order_price is not None:
-                        price_map[sku] = purchase_order_price
+                    if sku in read and purchase_order_price is not None:
+                        read[sku] = purchase_order_price
+        complete = True
     except Exception:
-        return price_map
+        # Keep what was read, but read again next time.
+        complete = False
 
-    return price_map
+    if complete:
+        with _live_prices_lock:
+            for sku, value in read.items():
+                _live_prices[sku] = (now, value)
+    for sku, value in read.items():
+        if value is not None:
+            price_map[sku] = value
+    return price_map, False
 
 
 def _select_cost_model_price(average_price: float | None, last_purchase_price: float | None) -> float | None:

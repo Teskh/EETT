@@ -245,7 +245,10 @@ def build_project_export_artifact(
         case ExportKind.MATERIALS_WORKBOOK:
             return _render_materials_workbook_export(session, project_id=job.project_id, job_id=job.id)
         case ExportKind.COST_MODEL_WORKBOOK:
-            return _render_cost_model_workbook_export(session, project_id=job.project_id, job_id=job.id, settings=settings)
+            return _render_cost_model_workbook_export(
+                session, project_id=job.project_id, job_id=job.id, settings=settings,
+                extras=(job.payload or {}).get("extras") or [],
+            )
         case ExportKind.FULL_TECHNICAL_PDF:
             return _render_full_technical_pdf_export(
                 session,
@@ -291,6 +294,7 @@ def _render_cost_model_workbook_export(
     project_id: int,
     job_id: int,
     settings: Settings,
+    extras: list[dict] | None = None,
 ) -> ExportArtifact:
     from app.services.export_workbooks import build_cost_model_workbook
 
@@ -316,6 +320,7 @@ def _render_cost_model_workbook_export(
             }
             for adjustment in adjustments
         ],
+        extras=extras or [],
     )
     filename = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
     return ExportArtifact(

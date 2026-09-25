@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
+import app.services.cost_model as cost_model_service
 from app.config import Settings
 from app.database import Base, create_engine_for_url
 from app.main import create_app
@@ -2079,21 +2080,79 @@ class ServiceLayerTests(unittest.TestCase):
                                        json={**payload, "adjusted_quantity": invalid})
             self.assertEqual(response.status_code, 422)
 
-    @patch("app.services.cost_model_history.get_cost_model_history")
-    def test_cost_model_history_endpoint_passes_local_subtype_and_checks_access(self, history) -> None:
-        history.return_value = {"project_id": 2, "subtype_id": None, "references": []}
-        response = self.client.post("/api/v1/projects/2/cost-model/history",
+    def test_cost_model_bulk_adjustments_save_all_or_none(self) -> None:
+        headers = {"X-Spec-Sheets-User": "editor"}
+        rows = [row for row in self.client.get("/api/v1/projects/2/cost-model", headers=headers).json()["rows"] if not row["is_auxiliary"]]
+        items = [{"material_id": row["material_id"], "subtype_id": None, "quantity_scope": "scenario", "adjusted_quantity": 2.5, "source_kind": "historic_allocated"} for row in rows[:2]]
+        saved = self.client.put("/api/v1/projects/2/cost-model/adjustments/bulk", headers=headers, json={"items": items})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        adjusted = {row["material_id"]: row["adjustments"] for row in saved.json()["rows"]}
+        for item in items:
+            self.assertEqual(adjusted[item["material_id"]][0]["adjusted_quantity"], 2.5)
+
+        invalid = [{**items[0], "adjusted_quantity": 7}, {**items[1], "material_id": 999999}]
+        rejected = self.client.put("/api/v1/projects/2/cost-model/adjustments/bulk", headers=headers, json={"items": invalid})
+        self.assertEqual(rejected.status_code, 422)
+        reloaded = {row["material_id"]: row["adjustments"] for row in self.client.get("/api/v1/projects/2/cost-model", headers=headers).json()["rows"]}
+        self.assertEqual(reloaded[items[0]["material_id"]][0]["adjusted_quantity"], 2.5)
+        viewer = self.client.put("/api/v1/projects/2/cost-model/adjustments/bulk", headers={"X-Spec-Sheets-User": "viewer"}, json={"items": items})
+        self.assertEqual(viewer.status_code, 403)
+
+    @patch("app.services.cost_model_study.get_cost_model_study")
+    def test_cost_model_study_endpoint_passes_the_period_and_checks_access(self, study) -> None:
+        study.return_value = {"project_id": 2, "materials": [], "unbudgeted": []}
+        response = self.client.post("/api/v1/projects/2/cost-model/study",
                                     headers={"X-Spec-Sheets-User": "editor"},
-                                    json={"subtype_id": None, "start_date": "2026-01-01", "end_date": "2026-01-31"})
+                                    json={"start_date": "2026-01-01", "end_date": "2026-01-31"})
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(history.call_args.kwargs["project_id"], 2)
-        self.assertIsNone(history.call_args.kwargs["subtype_id"])
-        self.assertEqual(history.call_args.kwargs["start_date"], date(2026, 1, 1))
-        history.side_effect = ValueError("Invalid period")
-        response = self.client.post("/api/v1/projects/2/cost-model/history",
+        self.assertEqual(study.call_args.kwargs["project_id"], 2)
+        self.assertEqual(study.call_args.kwargs["start_date"], date(2026, 1, 1))
+        study.side_effect = ValueError("Invalid period")
+        response = self.client.post("/api/v1/projects/2/cost-model/study",
                                     headers={"X-Spec-Sheets-User": "editor"},
                                     json={"start_date": "2026-01-31", "end_date": "2026-01-01"})
         self.assertEqual(response.status_code, 422)
+
+    @patch("app.services.cost_model_study.get_cost_model_material_series")
+    def test_cost_model_series_endpoint_passes_the_material_and_period(self, series) -> None:
+        series.return_value = {"project_id": 2, "sku": "MAT-001", "points": []}
+        response = self.client.post("/api/v1/projects/2/cost-model/series", headers={"X-Spec-Sheets-User": "editor"},
+                                    json={"sku": "MAT-001", "start_date": "2026-01-01", "end_date": "2026-01-31"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(series.call_args.kwargs["sku"], "MAT-001")
+        self.assertEqual(series.call_args.kwargs["end_date"], date(2026, 1, 31))
+        missing = self.client.post("/api/v1/projects/2/cost-model/series", headers={"X-Spec-Sheets-User": "editor"},
+                                   json={"start_date": "2026-01-01", "end_date": "2026-01-31"})
+        self.assertEqual(missing.status_code, 422)
+
+    def test_ceco_exclusions_round_trip_and_validation(self) -> None:
+        headers = {"X-Spec-Sheets-User": "editor"}
+        initial = self.client.get("/api/v1/cost-model/ceco-exclusions", headers=headers)
+        self.assertEqual(initial.status_code, 200, initial.text)
+        self.assertTrue(initial.json()["stored"])
+        self.assertIsInstance(initial.json()["rules"], list)
+        saved = self.client.put("/api/v1/cost-model/ceco-exclusions", headers=headers,
+                                json={"rules": [{"rule": "06", "note": "EPP"}, {"rule": "*-34"}]})
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual([item["rule"] for item in saved.json()["rules"]], ["*-34", "06"])
+        invalid = self.client.put("/api/v1/cost-model/ceco-exclusions", headers=headers, json={"rules": [{"rule": "fabrica"}]})
+        self.assertEqual(invalid.status_code, 422)
+
+    def test_cost_model_extras_default_include_exclude_and_reset(self) -> None:
+        headers = {"X-Spec-Sheets-User": "editor"}
+        initial = self.client.get("/api/v1/projects/2/cost-model/extras", headers=headers).json()
+        self.assertEqual((initial["stored"], initial["default"], initial["items"]), (True, "include", []))
+        self.assertEqual(self.client.put("/api/v1/projects/2/cost-model/extras/default", headers=headers, json={"mode": "exclude"}).json()["default"], "exclude")
+        self.assertEqual(self.client.put("/api/v1/projects/2/cost-model/extras/default", headers=headers, json={"mode": "maybe"}).status_code, 422)
+        saved = self.client.put("/api/v1/projects/2/cost-model/extras", headers=headers, json={
+            "sku": "plac0075", "included": True, "name": "MDP 18MM", "unit": "UN", "quantity_per_house": 11.4,
+            "unit_cost": 24000, "replaces_sku": "PLAC0003", "source_range_start": "2025-11-17", "source_range_end": "2025-12-12",
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        [item] = saved.json()["items"]
+        self.assertEqual((item["sku"], item["included"], item["quantity_per_house"], item["replaces_sku"]), ("PLAC0075", True, 11.4, "PLAC0003"))
+        self.assertEqual(self.client.put("/api/v1/projects/2/cost-model/extras", headers=headers, json={"sku": "X", "included": True, "quantity_per_house": -1}).status_code, 422)
+        self.assertEqual(self.client.delete("/api/v1/projects/2/cost-model/extras/PLAC0075", headers=headers).json()["items"], [])
 
     def test_cost_model_view_returns_consolidated_rows_with_aggregate_and_per_subtype_adjustments(self) -> None:
         view_response = self.client.get(
@@ -2197,14 +2256,16 @@ class ServiceLayerTests(unittest.TestCase):
         cleared_row = next(row for row in delete_aggregate.json()["rows"] if row["sku"] == "MAT-001")
         self.assertEqual(cleared_row["adjustments"], [])
 
-    @patch("app.services.cost_model._get_average_prices_for_products_batch")
-    @patch("app.services.cost_model._open_connection")
-    @patch("app.services.cost_model.erp_search_available")
+    @patch("app.services.erp._get_purchase_order_lines_for_products_batch", return_value={})
+    @patch("app.services.erp._get_average_prices_for_products_batch")
+    @patch("app.services.erp._open_connection")
+    @patch("app.services.erp.erp_search_available")
     def test_cost_model_view_falls_back_to_live_erp_prices_when_cache_is_missing(
         self,
         erp_search_available_mock,
         open_connection_mock,
         average_prices_mock,
+        _purchase_order_lines_mock,
     ) -> None:
         with self.session_factory() as session:
             cache = session.scalar(select(ErpMaterialCache).where(ErpMaterialCache.sku == "MAT-001"))
@@ -2226,21 +2287,30 @@ class ServiceLayerTests(unittest.TestCase):
         erp_search_available_mock.return_value = True
         open_connection_mock.return_value = _DummyContextManager()
         average_prices_mock.return_value = {"MAT-001": 4321.0}
+        cost_model_service._live_prices.clear()
+        headers = {"X-Spec-Sheets-User": "editor"}
 
-        view_response = self.client.get(
-            "/api/v1/projects/2/cost-model",
-            headers={"X-Spec-Sheets-User": "editor"},
-        )
+        # The rows never wait on the ERP; live prices come from their own request.
+        view_response = self.client.get("/api/v1/projects/2/cost-model", headers=headers)
         self.assertEqual(view_response.status_code, 200)
+        self.assertTrue(view_response.json()["prices_pending"])
+        self.assertEqual(average_prices_mock.call_count, 0)
 
-        rows_by_sku = {row["sku"]: row for row in view_response.json()["rows"]}
-        self.assertEqual(rows_by_sku["MAT-001"]["price"], 4321.0)
+        prices_response = self.client.get("/api/v1/projects/2/cost-model/prices", headers=headers)
+        self.assertEqual(prices_response.status_code, 200)
+        self.assertEqual(prices_response.json()["prices"]["MAT-001"], 4321.0)
         self.assertEqual(average_prices_mock.call_count, 1)
 
-    @patch("app.services.cost_model._get_purchase_order_lines_for_products_batch")
-    @patch("app.services.cost_model._get_average_prices_for_products_batch")
-    @patch("app.services.cost_model._open_connection")
-    @patch("app.services.cost_model.erp_search_available")
+        # Later views reuse the read.
+        rows_by_sku = {row["sku"]: row for row in self.client.get("/api/v1/projects/2/cost-model", headers=headers).json()["rows"]}
+        self.assertEqual(rows_by_sku["MAT-001"]["price"], 4321.0)
+        self.client.get("/api/v1/projects/2/cost-model/prices", headers=headers)
+        self.assertEqual(average_prices_mock.call_count, 1)
+
+    @patch("app.services.erp._get_purchase_order_lines_for_products_batch")
+    @patch("app.services.erp._get_average_prices_for_products_batch")
+    @patch("app.services.erp._open_connection")
+    @patch("app.services.erp.erp_search_available")
     def test_cost_model_view_uses_purchase_order_price_when_average_price_is_zero(
         self,
         erp_search_available_mock,
@@ -2270,15 +2340,14 @@ class ServiceLayerTests(unittest.TestCase):
         open_connection_mock.return_value = _DummyContextManager()
         average_prices_mock.return_value = {"MAT-001": 0.0}
         purchase_order_lines_mock.return_value = {"MAT-001": [{"unit_price": 9876.0}]}
+        cost_model_service._live_prices.clear()
 
-        view_response = self.client.get(
-            "/api/v1/projects/2/cost-model",
+        prices_response = self.client.get(
+            "/api/v1/projects/2/cost-model/prices",
             headers={"X-Spec-Sheets-User": "editor"},
         )
-        self.assertEqual(view_response.status_code, 200)
-
-        rows_by_sku = {row["sku"]: row for row in view_response.json()["rows"]}
-        self.assertEqual(rows_by_sku["MAT-001"]["price"], 9876.0)
+        self.assertEqual(prices_response.status_code, 200)
+        self.assertEqual(prices_response.json()["prices"]["MAT-001"], 9876.0)
 
     def test_cost_model_view_endpoint_denies_viewer_edits_but_allows_read(self) -> None:
         view_response = self.client.get(

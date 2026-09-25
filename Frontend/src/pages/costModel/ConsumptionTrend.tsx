@@ -1,8 +1,8 @@
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
-import type { MaterialDashboardDetailData, MaterialDashboardMovementData, MaterialDashboardMappedHouseComparisonData } from "../../lib/types";
-import { detailCacheKey, historyCacheKey, houseComparisonCacheKey } from "../../lib/materialDashboardCacheKeys";
+import type { MaterialDashboardDetailData, MaterialDashboardGroupDetailData, MaterialDashboardGroupMovementData, MaterialDashboardMovementData, MaterialDashboardMappedHouseComparisonData } from "../../lib/types";
+import { detailCacheKey, groupDetailCacheKey, groupHistoryCacheKey, groupHouseComparisonCacheKey, historyCacheKey, houseComparisonCacheKey } from "../../lib/materialDashboardCacheKeys";
 import { useDashboardResource } from "../materialDashboard/useDashboardResource";
 import { HouseTrendChart, StockTrendChart } from "../materialDashboard/components/TrendCharts";
 import { useChartSelection } from "../materialDashboard/useChartSelection";
@@ -12,14 +12,32 @@ import { isDateWithinRange, isWeekend, moveToPreviousBusinessDay, toDateInputVal
 import { formatQuantity } from "./format";
 import { formatCurrency, formatNumber, getAdaptiveDecimalPlaces, percentFormatter } from "../materialDashboard/formatters";
 import { getConsumptionMetrics } from "./consumptionMetrics";
+import { seriesToComparison, studyPerHouse, sumSeries } from "./studySeries";
+import type { CostModelSeries } from "../../lib/types";
 
 type Range = { startDate: string; endDate: string };
+/** Consumed and expected in the selection, in the chart's unit. For a group, also each member's withdrawals in its own unit. */
+export type TrendTotals = { consumed: number; expected: number; houses: number; mappedHouses: number; bySku: Record<string, number> | null };
 
-export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeChange, disabled }: {
-  sku: string; name: string; unit: string; range: Range; onDetails: () => void; onRangeChange: (range: Range) => void; disabled: boolean;
+export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeChange, disabled, missingSubtypes = [], groupId = null, embedded = false, onTotals, projectId = null, studyKey = null, price = null }: {
+  sku: string; name: string; unit: string; range: Range; onDetails?: () => void; onRangeChange: (range: Range) => void; disabled: boolean;
+  /** Subtypes whose BOM leaves this material blank: the expected line leaves their houses out. */
+  missingSubtypes?: string[];
+  /** A material dashboard group instead of one material, in the group's study unit. */
+  groupId?: number | null;
+  /** Inside another dialog: drawn wide, without its own maximize. */
+  embedded?: boolean;
+  onTotals?: (totals: TrendTotals | null) => void;
+  /** Draw the project's houses in the budget study's terms instead of the dashboard's. */
+  projectId?: number | null;
+  /** Cost center exclusion policy, so editing it refetches. */
+  studyKey?: string | null;
+  /** Price the budget uses, for overconsumption in pesos. */
+  price?: number | null;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  const [maximized, setExpanded] = useState(false);
+  const expanded = maximized && !embedded;
   const dialogRef = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (!expanded) return;
@@ -29,6 +47,7 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   }, [expanded]);
   const [mode, setMode] = useState<"houses" | "stock">("houses");
   useEffect(() => {
+    if (embedded) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.code !== "Space" || event.altKey || event.metaKey || event.shiftKey) return;
       event.preventDefault();
@@ -37,7 +56,7 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [embedded]);
   const [revision, setRevision] = useState(0);
   // Same requests and cache keys as the material dashboard (all cost centers),
   // so both pages share the memory/IndexedDB cache and in-flight requests.
@@ -46,27 +65,38 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   const today = toDateInputValue(moveToPreviousBusinessDay(new Date()));
   const historyRange = { startDate: range.startDate, endDate: today };
   const enabled = !collapsed;
-  const detail = useDashboardResource<MaterialDashboardDetailData>({
-    cacheKey: detailCacheKey(sku, []), enabled, refreshNonce: revision,
-    fetcher: (refresh) => api.getMaterialDashboardDetail(sku, {}, { refresh }),
+  const detail = useDashboardResource<MaterialDashboardDetailData | MaterialDashboardGroupDetailData>({
+    cacheKey: groupId === null ? detailCacheKey(sku, []) : groupDetailCacheKey(groupId, []), enabled, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardDetail(sku, {}, { refresh }) : api.getMaterialStudyGroupDetail(groupId, {}, { refresh }),
     errorMessage: "No se pudo cargar el stock del material.",
   });
-  const history = useDashboardResource<MaterialDashboardMovementData>({
-    cacheKey: historyCacheKey(sku, [], historyRange), enabled, refreshNonce: revision,
-    fetcher: (refresh) => api.getMaterialDashboardHistory(sku, {}, { ...historyRange, refresh }),
+  const history = useDashboardResource<MaterialDashboardMovementData | MaterialDashboardGroupMovementData>({
+    cacheKey: groupId === null ? historyCacheKey(sku, [], historyRange) : groupHistoryCacheKey(groupId, [], historyRange), enabled, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHistory(sku, {}, { ...historyRange, refresh }) : api.getMaterialStudyGroupHistory(groupId, {}, { ...historyRange, refresh }),
     errorMessage: "No se pudieron cargar los movimientos.",
   });
+  // In the budget, the chart follows the study: only the project's houses, the
+  // excluded cost centers left out, other projects' BOM discounted.
+  const projectMode = projectId !== null && groupId === null;
+  const series = useDashboardResource<CostModelSeries>({
+    cacheKey: `cost-model-series::${projectId}::${sku}::${range.startDate}::${range.endDate}::${studyKey}`, enabled: enabled && projectMode && studyKey !== null, refreshNonce: revision,
+    fetcher: () => api.getCostModelSeries(projectId as number, sku, range),
+    errorMessage: "No se pudo cargar el consumo del proyecto.",
+  });
   const houses = useDashboardResource<MaterialDashboardMappedHouseComparisonData>({
-    cacheKey: houseComparisonCacheKey(sku, [], range), enabled, refreshNonce: revision,
-    fetcher: (refresh) => api.getMaterialDashboardHouseComparison(sku, {}, { ...range, refresh }),
+    cacheKey: groupId === null ? houseComparisonCacheKey(sku, [], range) : groupHouseComparisonCacheKey(groupId, [], range), enabled: enabled && !projectMode, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHouseComparison(sku, {}, { ...range, refresh }) : api.getMaterialStudyGroupHouseComparison(groupId, {}, { ...range, refresh }),
     errorMessage: "No se pudo cargar la producción.",
   });
-  const error = detail.error || history.error || houses.error;
-  const data = useMemo(() => detail.data && history.data && houses.data
-    ? { detail: detail.data, history: history.data, comparison: houses.data } : null, [detail.data, history.data, houses.data]);
-  const key = `${sku}:${range.startDate}:${range.endDate}`;
-  const height = expanded ? 360 : 140;
-  const width = expanded ? 1100 : 520;
+  const error = detail.error || history.error || (projectMode ? series.error : houses.error);
+  const comparisonData = useMemo(() => projectMode ? series.data ? seriesToComparison(series.data) : null : houses.data, [projectMode, series.data, houses.data]);
+  const data = useMemo(() => detail.data && history.data && comparisonData
+    ? { detail: detail.data, history: history.data, comparison: comparisonData } : null, [detail.data, history.data, comparisonData]);
+  const key = `${groupId ?? sku}:${range.startDate}:${range.endDate}`;
+  // Beside the table the chart fills the height the header row leaves it, drawn at its pixel size.
+  const [box, boxRef] = useElementSize();
+  const height = expanded ? 360 : embedded ? 260 : Math.min(400, Math.max(140, box?.height ?? 140));
+  const width = expanded ? 1100 : Math.max(320, box?.width ?? 520);
   const comparison = useMemo(() => getHouseComparisonForRange(data?.comparison ?? null, range), [data, range.startDate, range.endDate]);
   const stock = useMemo(() => data ? buildHistoricalStockSeries(data.history.movements, data.detail.stock_on_hand, { startDate: range.startDate, endDate: today }) : [], [data, range.startDate, today]);
   const stockChart = useMemo(() => buildLinePath(stock.filter(point => isDateWithinRange(point.date, range.startDate, range.endDate)), width, height, { fitValues: true }), [stock, range.startDate, range.endDate, height, width]);
@@ -84,7 +114,36 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   const stockSummary = stockChart ? getSeriesSummary(stockChart.points, activeSelection) : null;
   const selectedPeriod = edges ? { startDate: toDateInputValue(edges.start.date), endDate: toDateInputValue(edges.end.date) } : range;
   const hasSelection = edges !== null;
-  const metrics = houseSummary ? getConsumptionMetrics({
+  const consumed = houseSummary?.materialConsumed ?? null, expectedTotal = houseSummary?.projectedMaterialConsumed ?? null;
+  const details = groupId !== null && data && "group_id" in data.history ? data.history.movement_details : null;
+  const bySku = useMemo(() => {
+    if (!details) return null;
+    const totals: Record<string, number> = {};
+    for (const detail of details) {
+      const day = String(detail.date).slice(0, 10);
+      if (day < selectedPeriod.startDate || day > selectedPeriod.endDate) continue;
+      const sku = detail.sku.trim().toUpperCase();
+      totals[sku] = (totals[sku] ?? 0) + detail.source_quantity;
+    }
+    return totals;
+  }, [details, selectedPeriod.startDate, selectedPeriod.endDate]);
+  useEffect(() => {
+    onTotals?.(consumed !== null && expectedTotal !== null && houseSummary
+      ? { consumed, expected: expectedTotal, houses: houseSummary.housesProduced, mappedHouses: houseSummary.mappedHousesProduced, bySku } : null);
+  }, [consumed, expectedTotal, houseSummary?.housesProduced, houseSummary?.mappedHousesProduced, bySku]);
+  // The study's accounting over the selection: per equivalent house of the
+  // project, the BOM of its mix and BOM × real / expected (the table's Histórica).
+  const study = useMemo(() => {
+    if (!projectMode || !houseChart) return null;
+    const selected = bounds ? houseChart.points.slice(bounds.startIndex, bounds.endIndex + 1) : houseChart.points;
+    const totals = sumSeries(selected as unknown as Partial<CostModelSeries["points"][number]>[]);
+    return { totals, ...studyPerHouse(totals) };
+  }, [projectMode, houseChart, bounds?.startIndex, bounds?.endIndex]);
+  const metrics = study ? getConsumptionMetrics({
+    materialConsumed: study.ratio === null ? 0 : study.ratio * study.totals.target, projectedMaterialConsumed: study.totals.target,
+    housesProduced: study.totals.equivalentHouses, mappedHousesProduced: study.totals.equivalentHouses,
+    hasExpected: study.ratio !== null, averagePrice: price ?? data?.detail.average_price,
+  }) : houseSummary ? getConsumptionMetrics({
     materialConsumed: houseSummary.materialConsumed, projectedMaterialConsumed: houseSummary.projectedMaterialConsumed,
     housesProduced: houseSummary.housesProduced, mappedHousesProduced: houseSummary.mappedHousesProduced,
     hasExpected: (comparison?.link_count ?? 0) > 0, averagePrice: data?.detail.average_price,
@@ -105,54 +164,60 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [hasSelection, clearSelection]);
   const button = "px-2 py-1 text-[10px] border border-black/15 dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-red-500";
-  const content = <section className="min-w-0 border-l border-black/10 bg-zinc-50/50 px-4 py-3 dark:border-white/10 dark:bg-zinc-950" aria-label={`Estudio de consumo de ${name}`}>
+  const content = <section className={`flex min-w-0 flex-col ${embedded ? "" : "border-l border-black/10 bg-zinc-50/50 px-4 py-3 dark:border-white/10 dark:bg-zinc-950"}`} aria-label={`Estudio de consumo de ${name}`}>
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="min-w-0 truncate text-left text-xs font-semibold" title={name}>{collapsed ? "▸" : "▾"} {name}</button>
-      <span className="text-[10px] text-zinc-500">{sku} · Fábrica</span>
+      <span className="text-[10px] text-zinc-500">{groupId === null ? sku : `Grupo en ${unit}`} · Fábrica</span>
       <div className="flex w-full flex-wrap gap-1">
         {!collapsed ? <>
           <div role="group" aria-label="Vista del gráfico" className="flex">
             <button type="button" className={button} aria-pressed={mode === "houses"} onClick={() => setMode("houses")}>Stock + viviendas {mode === "houses" ? "✓" : ""}</button>
             <button type="button" className={button} aria-pressed={mode === "stock"} onClick={() => setMode("stock")}>Solo stock {mode === "stock" ? "✓" : ""}</button>
           </div>
-          <button type="button" className={button} aria-expanded={expanded} aria-keyshortcuts="Control+Space" title="Ctrl + Espacio" onClick={() => setExpanded(!expanded)}>{expanded ? "Reducir" : "Ampliar"}</button>
+          {embedded ? null : <button type="button" className={button} aria-expanded={expanded} aria-keyshortcuts="Control+Space" title="Ctrl + Espacio" onClick={() => setExpanded(!expanded)}>{expanded ? "Reducir" : "Ampliar"}</button>}
         </> : null}
-        <button type="button" className={button} onClick={onDetails}>Ver detalle</button>
+        {onDetails ? <button type="button" className={button} onClick={onDetails}>Ver detalle</button> : null}
       </div>
     </div>
     {!collapsed ? <>
+      {missingSubtypes.length ? <p role="note" className="mt-2 border-l-2 border-amber-500 bg-amber-50 px-2 py-1 text-[10px] text-amber-900 dark:bg-amber-500/10 dark:text-amber-300">
+        BOM incompleta: {missingSubtypes.join(", ")} sin cantidad. El esperado no cuenta esas viviendas, así que el sobreconsumo aparece inflado.</p> : null}
       <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px]">
         <span className="text-amber-600">━ Stock</span>
         {mode === "houses" ? <><span className="text-emerald-600">━ Esperado</span><span className="text-slate-500">━ Viviendas</span></> : null}
       </div>
       {error ? <p role="alert" className="py-4 text-xs text-red-700 dark:text-red-400">{error} <button className="underline" onClick={() => setRevision(revision + 1)}>Reintentar</button></p>
-        : !data ? <div style={{ height }} className="flex items-center text-xs text-zinc-500" role="status">Cargando stock y producción…</div>
-        : <div style={{ height }} className="relative mt-1">
+        : <div ref={boxRef} style={expanded || embedded ? { height } : undefined} className={`relative mt-1 ${expanded || embedded ? "" : "min-h-[140px] flex-1"}`}><div className="absolute inset-0">
+          {!data ? <p className="flex h-full items-center text-xs text-zinc-500" role="status">Cargando stock y producción…</p>
+          : <>
           {mode === "houses" && houseChart ? <HouseTrendChart chart={houseChart} selectionBounds={bounds} selectionEdges={edges} hoveredPoint={hoveredPointIndex === null ? null : houseChart.points[hoveredPointIndex] ?? null} pointerHandlers={pointerHandlers} />
             : mode === "stock" && stockChart ? <StockTrendChart chart={stockChart} selectionBounds={bounds} selectionEdges={edges} hoveredPoint={hoveredPointIndex === null ? null : stockChart.points[hoveredPointIndex] ?? null} pointerHandlers={pointerHandlers} />
             : <p className="py-8 text-xs text-zinc-500">No hay datos suficientes para este período.</p>}
-        </div>}
-      {!error ? <div className="border-t border-black/5 pt-2 text-xs dark:border-white/10">
+          </>}
+        </div></div>}
+      {!error ? <div className="mt-1 border-t border-black/5 pt-2 text-xs dark:border-white/10">
         {/* Same definitions as the material dashboard; they follow the chart selection. */}
         <div className="grid grid-cols-4 gap-x-3" aria-label="Métricas del período">
-          <Metric label="Cons./viv." title="Consumo real del período dividido por todas las viviendas iniciadas"
+          <Metric label="Cons./viv." title={study ? "Real ÷ esperado × BOM: la Histórica de la tabla, para la selección." : "Consumo real del período dividido por todas las viviendas iniciadas"}
             value={metrics ? `${formatNumber(metrics.consumedPerHouse, digits)} ${unit}` : "—"}
             detail={metrics?.deltaPercent != null ? `${metrics.deltaPercent > 0 ? "↑" : metrics.deltaPercent < 0 ? "↓" : "→"} ${percentFormatter.format(Math.abs(metrics.deltaPercent))}% vs est.` : "Sin estimado"}
-            tone={metrics?.deltaPercent != null && metrics.deltaPercent > 0 ? "bad" : undefined} />
-          <Metric label="Est./viv." title="Consumo estimado según el presupuesto de las viviendas vinculadas, por vivienda vinculada"
+            tone={metrics?.deltaPercent != null && metrics.deltaPercent > 0 && !missingSubtypes.length ? "bad" : undefined} />
+          <Metric label="Est./viv." title={study ? "BOM por vivienda del proyecto, según la mezcla de subtipologías del período." : "Consumo estimado según el presupuesto de las viviendas vinculadas, por vivienda vinculada"}
             value={metrics?.expectedPerHouse != null ? `${formatNumber(metrics.expectedPerHouse, digits)} ${unit}` : "—"}
-            detail={houseSummary ? `${formatNumber(houseSummary.mappedHousesProduced, 0)} viv. vinculadas` : "—"} />
+            detail={study ? `BOM · ${formatNumber(study.totals.starts, 0)} viv. del proyecto` : houseSummary ? `${formatNumber(houseSummary.mappedHousesProduced, 0)} viv. vinculadas` : "—"} />
           <Metric label={over !== null && over < 0 ? "Ahorro/viv." : "Sobrecons./viv."}
             title="(Consumo real − estimado) del período, dividido por todas las viviendas iniciadas. En pesos, al precio promedio ERP."
             value={over !== null ? `${formatNumber(Math.abs(over), digits)} ${unit}` : "—"}
             detail={metrics?.overcostPerHouse != null ? `${formatCurrency(Math.abs(metrics.overcostPerHouse))}/viv.` : "Sin precio"}
-            tone={over !== null && over > 0 ? "bad" : undefined} />
+            tone={over !== null && over > 0 && !missingSubtypes.length ? "bad" : undefined} />
           <Metric label="Stock" title="Stock disponible hoy y su cobertura al ritmo de salida de los últimos 30 días"
             value={data ? `${formatNumber(data.detail.stock_on_hand, 0)} ${unit}` : "—"}
             detail={stockDays != null ? `≈ ${formatNumber(stockDays, 0)} días háb.` : data?.detail.average_price ? `Prom. ${formatCurrency(data.detail.average_price)}` : "—"} />
         </div>
         <p className="mt-1.5 truncate text-[10px] text-zinc-500">
-          {mode === "houses"
+          {mode === "houses" && study
+            ? <>Real {formatQuantity(study.totals.actual)} {unit} · Esperado {formatQuantity(study.totals.target)} {unit}{study.totals.other > 0 ? ` + ${formatQuantity(study.totals.other)} de otros proyectos` : ""} · ×{study.ratio === null ? "—" : formatNumber(study.ratio, 3)} · Sin centros excluidos{series.data?.other_houses ? `, descontando ${series.data.other_houses} viv. de otros proyectos` : ""}</>
+            : mode === "houses"
             ? <>Consumo {formatQuantity(houseSummary?.materialConsumed)} {unit} · Esperado {formatQuantity(houseSummary?.projectedMaterialConsumed)} {unit} · {formatQuantity(houseSummary?.housesProduced)} viviendas{metrics?.unmappedHouses ? ` (${metrics.unmappedHouses} sin vincular)` : ""}{data?.detail.average_price ? ` · Precio prom. ${formatCurrency(data.detail.average_price)}` : ""}</>
             : <>Consumo {formatQuantity(stockSummary?.consumed)} {unit} · Promedio/semana {formatQuantity(stockSummary?.averageConsumptionPerWeek)} {unit}</>}
         </p>
@@ -183,4 +248,20 @@ function Metric({ label, value, detail, title, tone }: { label: string; value: s
     <p className={`truncate font-mono text-sm font-semibold tabular-nums ${tone === "bad" ? "text-red-700 dark:text-red-400" : "text-zinc-950 dark:text-white"}`}>{value}</p>
     <p className={`truncate text-[10px] ${tone === "bad" ? "text-red-700 dark:text-red-400" : "text-zinc-500"}`}>{detail}</p>
   </div>;
+}
+
+function useElementSize() {
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const observer = useRef<ResizeObserver | null>(null);
+  const ref = useCallback((element: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!element) return;
+    observer.current = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width), height = Math.round(entry.contentRect.height);
+      if (width && height) setSize((current) => current?.width === width && current.height === height ? current : { width, height });
+    });
+    observer.current.observe(element);
+  }, []);
+  return [size, ref] as const;
 }

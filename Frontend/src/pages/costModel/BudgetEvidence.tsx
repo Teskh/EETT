@@ -1,16 +1,16 @@
 import { Modal } from "../../components/Modal";
-import type { CostModelHistory } from "../../lib/types";
+import type { CostModelStudy } from "../../lib/types";
 import type { BudgetLine } from "./budget";
-import { formatMoney, formatQuantity, historyReasons, sourceLabels } from "./format";
+import { formatMoney, formatQuantity, gradeDescriptions, gradeLabels, studyReasons, sourceLabels } from "./format";
 
-export function BudgetEvidence({ line, subtypeId, subtypeName, history, onClose }: {
-  line: BudgetLine; subtypeId: number | null; subtypeName: string; history: CostModelHistory | null; onClose: () => void;
+export function BudgetEvidence({ line, subtypeId, subtypeName, study, onClose }: {
+  line: BudgetLine; subtypeId: number | null; subtypeName: string; study: CostModelStudy | null; onClose: () => void;
 }) {
-  const reference = line.reference;
+  const material = line.study;
   const instances = line.row.instances.filter((item) => item.subtype_id === null || item.subtype_id === subtypeId);
   const bars = [
     { label: "Estimada", value: line.estimate },
-    { label: "Histórica repartida", value: reference?.quantity_per_house ?? null },
+    { label: "Histórica", value: line.historic },
     { label: "Presupuestada", value: line.quantity },
   ];
   const maximum = Math.max(1, ...bars.map((bar) => bar.value ?? 0));
@@ -24,12 +24,27 @@ export function BudgetEvidence({ line, subtypeId, subtypeName, history, onClose 
           </div>)}
         </div>
         <section className="border border-black/10 p-4 dark:border-white/10">
-          <h3 className="font-semibold text-zinc-950 dark:text-white">Referencia del período</h3>
-          {history ? <p className="mt-1 text-xs text-zinc-500">{history.range_start} a {history.range_end} · {history.sample_houses} viviendas de esta subtipología · {history.total_houses} viviendas en fábrica</p> : null}
-          <p className="mt-3 text-xs leading-5">El consumo es compartido. Se reparte según las cantidades estimadas de todas las viviendas iniciadas en el período. No es una medición individual de esta subtipología.</p>
-          {reference?.quantity_per_house != null ? <p className="mt-3 font-mono text-xs leading-6">
-            {formatQuantity(reference.factory_consumption)} consumidas ÷ {formatQuantity(reference.factory_expected_consumption)} estimadas en fábrica × {formatQuantity(reference.estimated_quantity_per_house)} estimadas por vivienda = {formatQuantity(reference.quantity_per_house)} {line.row.unit}/viv.
-          </p> : <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">{historyReasons[reference?.reason ?? history?.blocked_reason ?? "no_movements"] ?? "Referencia no disponible."}</p>}
+          <h3 className="font-semibold text-zinc-950 dark:text-white">Referencia del período {material ? <span className={`ml-2 text-xs font-normal ${material.grade === "high" ? "text-emerald-700 dark:text-emerald-400" : material.grade === "medium" ? "text-amber-700 dark:text-amber-400" : "text-zinc-500"}`}>Confianza {gradeLabels[material.grade].toLowerCase()}</span> : null}</h3>
+          {study ? <p className="mt-1 text-xs text-zinc-500">{study.range_start} a {study.range_end} · {study.houses.target} viviendas del proyecto · {study.houses.other_projects} de otros proyectos{study.houses.unmapped ? ` · ${study.houses.unmapped} sin vincular` : ""}</p> : null}
+          {material && material.ratio !== null ? <>
+            <p className="mt-3 font-mono text-xs leading-6">
+              {formatQuantity(material.actual)} retiradas ÷ {formatQuantity(material.expected)} esperadas = ×{formatQuantity(Math.round(material.ratio * 1000) / 1000)}
+              {" "}→ {formatQuantity(line.estimate)} estimadas × {formatQuantity(Math.round(material.ratio * 1000) / 1000)} = {formatQuantity(line.historic)} {line.row.unit}/viv.
+            </p>
+            <p className="mt-2 text-xs leading-5">
+              {material.method === "separated"
+                ? "La mezcla de proyectos cambió durante el período, lo que permitió separar el consumo de este proyecto del de los demás."
+                : material.target_share !== null && material.target_share < 0.9
+                  ? `Este proyecto explica ${Math.round(material.target_share * 100)}% del consumo esperado. El resto se reparte suponiendo que los demás proyectos se desvían igual.`
+                  : "El período lo ocupa casi solo este proyecto."}
+              {material.site_share > 0.3 ? ` ${Math.round(material.site_share * 100)}% de sus salidas son de obra, que se retiran meses después del inicio.` : ""}
+            </p>
+            <p className="mt-2 text-xs leading-5 text-zinc-500">{gradeDescriptions[material.grade]}</p>
+            {material.reasons.length ? <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">{material.reasons.map((reason) => <li key={reason}>{studyReasons[reason] ?? reason}
+              {reason === "change_point" && material.signals.stability ? ` Semana del ${material.signals.stability.change_week}: ×${formatQuantity(Math.round(material.signals.stability.ratio_before * 100) / 100)} antes, ×${formatQuantity(Math.round(material.signals.stability.ratio_after * 100) / 100)} después`
+                + (line.estimate !== null ? ` (${formatQuantity(Math.round(line.estimate * material.signals.stability.ratio_after * 100) / 100)} ${line.row.unit}/viv. desde entonces). Si fue un reemplazo, búscalo en "Fuera de presupuesto".` : ".") : ""}</li>)}</ul> : null}
+            <WeeklyBars weeks={material.signals.weeks} actual={material.signals.weekly_actual} expected={material.signals.weekly_expected} />
+          </> : <p className="mt-3 text-xs text-amber-700 dark:text-amber-400">{material ? material.reasons.map((reason) => studyReasons[reason] ?? reason).join(" ") : "Este material no tiene referencia histórica en el período."}</p>}
         </section>
         <section>
           <h3 className="font-semibold text-zinc-950 dark:text-white">Decisión guardada</h3>
@@ -52,4 +67,19 @@ export function BudgetEvidence({ line, subtypeId, subtypeName, history, onClose 
       </div>
     </Modal>
   );
+}
+
+/** Weekly withdrawals against the consumption expected from started houses. */
+function WeeklyBars({ weeks, actual, expected }: { weeks: string[]; actual: number[]; expected: number[] }) {
+  const max = Math.max(1e-9, ...actual, ...expected);
+  if (!weeks.length) return null;
+  return <figure className="mt-4">
+    <div className="flex h-24 items-end gap-px" role="img" aria-label="Salidas semanales frente al consumo esperado">
+      {weeks.map((week, index) => <div key={week} className="relative flex h-full flex-1 items-end" title={`Semana del ${week}: ${formatQuantity(Math.round(actual[index] * 100) / 100)} retiradas, ${formatQuantity(Math.round(expected[index] * 100) / 100)} esperadas`}>
+        <div className="w-full bg-amber-500/80" style={{ height: `${actual[index] / max * 100}%` }} />
+        <div className="absolute inset-x-0 border-t-2 border-emerald-600" style={{ bottom: `${expected[index] / max * 100}%` }} />
+      </div>)}
+    </div>
+    <figcaption className="mt-1 flex gap-4 text-[10px] text-zinc-500"><span><span className="mr-1 inline-block h-2 w-2 bg-amber-500/80" />Retirado por semana</span><span><span className="mr-1 inline-block h-0.5 w-3 bg-emerald-600 align-middle" />Esperado según viviendas iniciadas</span></figcaption>
+  </figure>;
 }

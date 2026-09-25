@@ -1,5 +1,10 @@
 import type {
-  CostModelHistory,
+  CecoExclusions,
+  CostModelExtra,
+  CostModelExtras,
+  CostModelSeries,
+  CostModelStudy,
+  CostModelTimeline,
   ActivityGroup,
   ActivityProject,
   BackupCreateResponse,
@@ -836,10 +841,47 @@ export const api = {
   getCostModel(projectId: number) {
     return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model`);
   },
-  getCostModelHistory(projectId: number, subtypeId: number | null, range: { startDate: string; endDate: string }) {
-    return request<CostModelHistory>(`/api/v1/projects/${projectId}/cost-model/history`, {
+  getCostModelSeries(projectId: number, sku: string, range: { startDate: string; endDate: string }) {
+    return request<CostModelSeries>(`/api/v1/projects/${projectId}/cost-model/series`, {
       method: "POST",
-      body: JSON.stringify({ subtype_id: subtypeId, start_date: range.startDate, end_date: range.endDate }),
+      body: JSON.stringify({ sku, start_date: range.startDate, end_date: range.endDate }),
+    });
+  },
+  getCostModelStudy(projectId: number, range: { startDate: string; endDate: string }) {
+    return request<CostModelStudy>(`/api/v1/projects/${projectId}/cost-model/study`, {
+      method: "POST",
+      body: JSON.stringify({ start_date: range.startDate, end_date: range.endDate }),
+    });
+  },
+  getCostModelTimeline(projectId: number) {
+    return request<CostModelTimeline>(`/api/v1/projects/${projectId}/cost-model/timeline`);
+  },
+  getCostModelExtras(projectId: number) {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras`);
+  },
+  setCostModelExtrasDefault(projectId: number, mode: CostModelExtras["default"]) {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/default`, { method: "PUT", body: JSON.stringify({ mode }) });
+  },
+  upsertCostModelExtra(projectId: number, extra: Partial<CostModelExtra> & { sku: string; included: boolean }) {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras`, { method: "PUT", body: JSON.stringify(extra) });
+  },
+  deleteCostModelExtra(projectId: number, sku: string) {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/${encodeURIComponent(sku)}`, { method: "DELETE" });
+  },
+  getCecoExclusions() {
+    return request<CecoExclusions>("/api/v1/cost-model/ceco-exclusions");
+  },
+  updateCecoExclusions(rules: CecoExclusions["rules"]) {
+    return request<CecoExclusions>("/api/v1/cost-model/ceco-exclusions", { method: "PUT", body: JSON.stringify({ rules }) });
+  },
+  getCostModelPrices(projectId: number) {
+    return request<{ prices: Record<string, number | null> }>(`/api/v1/projects/${projectId}/cost-model/prices`);
+  },
+  upsertCostModelAdjustments(projectId: number, items: CostModelAdjustmentUpsertRequest[], mutationBatchId?: string) {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments/bulk`, {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+      headers: mutationHeaders(mutationBatchId),
     });
   },
   upsertCostModelAdjustment(projectId: number, payload: CostModelAdjustmentUpsertRequest, mutationBatchId?: string) {

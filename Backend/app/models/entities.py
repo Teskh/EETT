@@ -1137,6 +1137,55 @@ class ProjectCostModelAdjustment(Base):
     created_by: Mapped[User | None] = relationship()
 
 
+class ProjectCostModelExtra(Base):
+    """A material outside the project's BOM, taken into (or left out of) the
+    budget. Without a pinned quantity it follows the study period."""
+
+    __tablename__ = "project_cost_model_extras"
+    __table_args__ = (UniqueConstraint("project_id", "sku"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255), default=None)
+    unit: Mapped[str | None] = mapped_column(String(40), default=None)
+    included: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    quantity_per_house: Mapped[float | None] = mapped_column(Float, default=None)
+    unit_cost: Mapped[float | None] = mapped_column(Float, default=None)
+    replaces_sku: Mapped[str | None] = mapped_column(String(80), default=None)
+    source_range_start: Mapped[date | None] = mapped_column(Date, default=None)
+    source_range_end: Mapped[date | None] = mapped_column(Date, default=None)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class ProjectCostModelSetting(Base):
+    """Per-project cost model preferences."""
+
+    __tablename__ = "project_cost_model_settings"
+
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    # "include" or "exclude": whether materials outside the BOM count unless decided otherwise.
+    extras_default: Mapped[str] = mapped_column(String(10), default="include", server_default="include", nullable=False)
+
+
+class ConsumptionCecoExclusion(Base):
+    """A cost center rule left out of historic consumption: "05" (area),
+    "*-34" (site in any area) or an exact center code."""
+
+    __tablename__ = "consumption_ceco_exclusions"
+    __table_args__ = (UniqueConstraint("rule"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rule: Mapped[str] = mapped_column(String(20), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, default=None)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class ProjectComment(Base):
     __tablename__ = "project_comments"
 
