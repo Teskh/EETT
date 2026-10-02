@@ -33,3 +33,20 @@ deployment/*.log
 deployment/*.pid
 deployment/*.live-backup-*
 deployment/erp-probe.json
+
+# Local package cache and generated trial artifacts
+/.pnpm-store/
+/outputs/
+/tmp/
+
+# One-off ERP probes and source-rewrite experiments
+/erp_candidates.py
+/erp_candidates_more.py
+/erp_research_probe.py
+/erp_selected_details.py
+/get_layout.py
+/get_rest.py
+/move_ceco.py
+/replace_catalog.py
+/replace_layout.py
+/rewrite_layout.py
