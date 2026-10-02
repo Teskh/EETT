@@ -77,13 +77,37 @@ def iter_material_context_rows(project_data: dict[str, Any]):
                     }
 
 
-def iter_cost_model_rows(project_data: dict[str, Any]):
+def _basis_row_quantity(bom_entry: dict[str, Any], basis: str) -> tuple[Any, Any]:
+    """Quantity and state of a BOM row under a basis: Q_fábrica, Q_obra or
+    both. A blank Q_obra means nothing is installed on site."""
+    factory = bom_entry.get("effective_quantity", bom_entry.get("quantity"))
+    factory_state = bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state"))
+    if basis == "factory":
+        return factory, factory_state
+    work = bom_entry.get("effective_assembly_quantity", bom_entry.get("assembly_quantity"))
+    work_state = bom_entry.get("effective_assembly_quantity_state", bom_entry.get("assembly_quantity_state"))
+    work_value = float(work) if work_state == "value" and work is not None else 0.0
+    if basis == "work":
+        return (work_value, "value") if work_value else (0.0, "zero")
+    if factory_state == "value" and factory is not None:
+        return float(factory) + work_value, "value"
+    if factory_state == "blank":
+        return None, "blank"
+    return (work_value, "value") if work_value else (0.0, factory_state or "zero")
+
+
+def iter_cost_model_rows(project_data: dict[str, Any], basis: str = "factory"):
+    """BOM rows for the cost model. `basis` picks Q_fábrica ("factory"),
+    Q_obra ("work", only rows installed on site) or both ("total")."""
     for section in number_category_sections(project_data.get("categories", [])):
         category_label = f"{section['number']}. {section['name']}"
         for instance in section.get("instances", []):
             instance_label = instance.get("short_name") or instance["name"]
             for material in iter_existing_instance_materials(instance):
                 for bom_entry in material.get("bom_entries", []):
+                    quantity, quantity_state = _basis_row_quantity(bom_entry, basis)
+                    if basis == "work" and not quantity:
+                        continue
                     yield {
                         "category_label": category_label,
                         "instance_id": instance.get("id"),
@@ -95,8 +119,8 @@ def iter_cost_model_rows(project_data: dict[str, Any]):
                         "unit": material.get("unit") or "",
                         "subtype": bom_entry.get("subtype") or "General",
                         "subtype_id": bom_entry.get("subtype_id"),
-                        "quantity": bom_entry.get("effective_quantity", bom_entry.get("quantity")),
-                        "quantity_state": bom_entry.get("effective_quantity_state", bom_entry.get("quantity_state")),
+                        "quantity": quantity,
+                        "quantity_state": quantity_state,
                     }
 
 

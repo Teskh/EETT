@@ -16,12 +16,11 @@ from app.config import Settings
 from app.models import MaterialStudyGroup, MaterialStudyGroupMember
 from app.services.erp import (
     get_average_prices_for_products,
-    get_material_movement_details,
-    get_material_movement_history,
     get_material_procurement_details,
     get_purchase_order_price_stats_for_products,
     get_recent_movement_materials,
 )
+from app.services import erp_history
 from app.services.house_type_links import (
     build_mapped_house_comparison,
     expected_quantities_for_link,
@@ -290,9 +289,10 @@ def get_material_dashboard_group_history(
 
     for member in group.members:
         factor = float(member.factor_to_study_unit)
-        history = get_material_movement_history(
+        history = erp_history.movement_history(
             settings,
             member.sku,
+            session=session,
             days=window_days,
             start_day=requested_start_day,
             end_day=requested_end_day,
@@ -303,9 +303,10 @@ def get_material_dashboard_group_history(
             day_key = str(point.get("date"))
             quantity_by_day[day_key] += (float(point.get("quantity") or 0.0) * factor)
 
-        for detail in get_material_movement_details(
+        for detail in erp_history.movement_details(
             settings,
             member.sku,
+            session=session,
             days=window_days,
             start_day=requested_start_day,
             end_day=requested_end_day,
@@ -519,6 +520,7 @@ def get_material_dashboard_group_economic_metrics(
                 expected_maps=expected_maps,
                 prices_by_sku=prices_by_sku,
                 price_stats_by_sku=price_stats_by_sku,
+                session=session,
             )
             metrics.append(group_result)
 
@@ -558,6 +560,7 @@ def _build_group_economic_metric(
     expected_maps: dict,
     prices_by_sku: dict[str, float | None],
     price_stats_by_sku: dict[str, dict[str, float | None]],
+    session: Session | None = None,
 ) -> dict:
     members = list(group.members)
     factors_by_sku = {member.sku.strip().upper(): float(member.factor_to_study_unit) for member in members}
@@ -567,9 +570,10 @@ def _build_group_economic_metric(
     for member in members:
         sku = member.sku.strip().upper()
         factor = float(member.factor_to_study_unit)
-        history = get_material_movement_history(
+        history = erp_history.movement_history(
             settings,
             sku,
+            session=session,
             days=movement_window_days,
             start_day=requested_start_day,
             end_day=requested_end_day,

@@ -1920,14 +1920,21 @@ class ServiceLayerTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 403)
 
-    def test_cost_model_workbook_export_generates_restricted_formula_workbook(self) -> None:
+    def test_cost_model_workbook_export_lays_out_the_page_snapshot(self) -> None:
+        payload = {
+            "version": 2, "generated_at": "2026-09-27T12:00:00Z", "range": {"start": "2026-06-01", "end": "2026-08-31"},
+            "target_houses": 4, "selection": None, "extras": [], "detail": [],
+            "subtypes": [{"id": None, "name": "General", "houses": 4, "lines": [
+                {"sku": "MAT-001", "name": "Anchor", "unit": "un", "auxiliary": False, "price": 1000, "estimate": 2,
+                 "historic": None, "grade": None, "source": "Estimada", "quantity": 3, "note": None, "partial": False},
+            ]}],
+        }
         create_export = self.client.post(
             "/api/v1/projects/2/exports",
             headers={"X-Spec-Sheets-User": "ot"},
-            json={"kind": "cost_model_workbook", "payload": {}},
+            json={"kind": "cost_model_workbook", "payload": payload},
         )
         self.assertEqual(create_export.status_code, 200)
-        self.assertEqual(create_export.json()["kind"], "cost_model_workbook")
         self.assertEqual(create_export.json()["status"], "completed")
         artifact_uri = create_export.json()["artifact_uri"]
         self.assertTrue(artifact_uri.endswith(".xlsx"))
@@ -1937,128 +1944,21 @@ class ServiceLayerTests(unittest.TestCase):
 
         artifact_response = self.client.get(artifact_uri, headers={"X-Spec-Sheets-User": "ot"})
         self.assertEqual(artifact_response.status_code, 200)
-
         workbook = load_workbook(filename=BytesIO(artifact_response.content), data_only=False)
-        self.assertEqual(workbook.sheetnames, ["Por Instancia", "Total Materiales"])
+        self.assertEqual(workbook.sheetnames, ["Resumen", "Presupuesto"])
+        budget = workbook["Presupuesto"]
+        self.assertEqual(budget["B6"].value, "MAT-001")
+        self.assertEqual(budget["K6"].value, '=IF(OR(D6="",J6=""),"",D6*J6)')
 
-        by_instance = workbook["Por Instancia"]
-        self.assertEqual(
-            [by_instance.cell(row=1, column=column_index).value for column_index in range(1, 10)],
-            ["Instancia", "Categoria", "Subtipo", "Material", "SKU", "Unidad", "Q fabrica", "Precio unitario", "Costo"],
-        )
-
-        auxiliary_rows = [
-            row
-            for row in by_instance.iter_rows(min_row=2, values_only=True)
-            if row[4] in {"AUX-001", "AUX-002"}
-        ]
-        self.assertEqual(len(auxiliary_rows), 2)
-        aux_by_sku = {row[4]: row for row in auxiliary_rows}
-        self.assertEqual(aux_by_sku["AUX-001"][0], "Materiales auxiliares")
-        self.assertEqual(aux_by_sku["AUX-001"][6], 1)
-        self.assertEqual(aux_by_sku["AUX-001"][7], 185000)
-        self.assertEqual(aux_by_sku["AUX-002"][7], 32000)
-
-        anchor_row_index = next(
-            row_index
-            for row_index in range(2, by_instance.max_row + 1)
-            if by_instance.cell(row=row_index, column=5).value == "MAT-001"
-        )
-        self.assertEqual(by_instance.cell(row=anchor_row_index, column=9).value, f'=IF(OR(G{anchor_row_index}="",H{anchor_row_index}=""),"",G{anchor_row_index}*H{anchor_row_index})')
-        by_instance_total_general_row = next(
-            row_index
-            for row_index in range(2, by_instance.max_row + 1)
-            if by_instance.cell(row=row_index, column=4).value == "Total general"
-        )
-        self.assertEqual(
-            by_instance.cell(row=by_instance_total_general_row, column=9).value,
-            f'=SUMIFS(I2:I{by_instance_total_general_row - 1},C2:C{by_instance_total_general_row - 1},"General")',
-        )
-
-        totals = workbook["Total Materiales"]
-        self.assertEqual(
-            [totals.cell(row=1, column=column_index).value for column_index in range(1, 8)],
-            ["SKU", "Material", "Subtipo", "Unidad", "Q fabrica", "Precio unitario", "Costo"],
-        )
-        total_anchor_row_index = next(
-            row_index
-            for row_index in range(2, totals.max_row + 1)
-            if totals.cell(row=row_index, column=1).value == "MAT-001"
-        )
-        self.assertIn("SUMIFS('Por Instancia'!$G:$G", totals.cell(row=total_anchor_row_index, column=5).value)
-        self.assertEqual(
-            totals.cell(row=total_anchor_row_index, column=6).value,
-            f'=IF(OR(E{total_anchor_row_index}="",E{total_anchor_row_index}=0,G{total_anchor_row_index}=""),"",G{total_anchor_row_index}/E{total_anchor_row_index})',
-        )
-        self.assertIn("SUMIFS('Por Instancia'!$I:$I", totals.cell(row=total_anchor_row_index, column=7).value)
-        total_labels = [totals.cell(row=row_index, column=3).value for row_index in range(2, totals.max_row + 1)]
-        self.assertIn("Total general", total_labels)
-        totals_total_general_row = next(
-            row_index
-            for row_index in range(2, totals.max_row + 1)
-            if totals.cell(row=row_index, column=3).value == "Total general"
-        )
-        totals_last_material_row = max(
-            row_index for row_index in range(2, totals_total_general_row)
-            if totals.cell(row=row_index, column=1).value is not None
-        )
-        self.assertEqual(
-            totals.cell(row=totals_total_general_row, column=7).value,
-            f'=SUMIFS(G2:G{totals_last_material_row},C2:C{totals_last_material_row},"General")',
-        )
-
-    @patch("app.services.exports._get_purchase_order_lines_for_products_batch")
-    @patch("app.services.exports._get_average_prices_for_products_batch")
-    @patch("app.services.exports._open_connection")
-    @patch("app.services.exports.erp_search_available")
-    def test_cost_model_workbook_export_uses_purchase_order_price_when_average_price_is_zero(
-        self,
-        erp_search_available_mock,
-        open_connection_mock,
-        average_prices_mock,
-        purchase_order_lines_mock,
-    ) -> None:
-        with self.session_factory() as session:
-            cache = session.scalar(select(ErpMaterialCache).where(ErpMaterialCache.sku == "MAT-001"))
-            self.assertIsNotNone(cache)
-            cache.average_price = 0
-            cache.last_purchase_price = None
-            session.commit()
-
-        class _DummyConnection:
-            def cursor(self):
-                return object()
-
-        class _DummyContextManager:
-            def __enter__(self):
-                return _DummyConnection()
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-        erp_search_available_mock.return_value = True
-        open_connection_mock.return_value = _DummyContextManager()
-        average_prices_mock.return_value = {"MAT-001": 0.0}
-        purchase_order_lines_mock.return_value = {"MAT-001": [{"unit_price": 9876.0}]}
-
+    def test_cost_model_workbook_export_needs_the_page_snapshot(self) -> None:
         create_export = self.client.post(
             "/api/v1/projects/2/exports",
             headers={"X-Spec-Sheets-User": "ot"},
             json={"kind": "cost_model_workbook", "payload": {}},
         )
         self.assertEqual(create_export.status_code, 200)
-
-        artifact_response = self.client.get(create_export.json()["artifact_uri"], headers={"X-Spec-Sheets-User": "ot"})
-        self.assertEqual(artifact_response.status_code, 200)
-
-        workbook = load_workbook(filename=BytesIO(artifact_response.content), data_only=False)
-        by_instance = workbook["Por Instancia"]
-        anchor_row_index = next(
-            row_index
-            for row_index in range(2, by_instance.max_row + 1)
-            if by_instance.cell(row=row_index, column=5).value == "MAT-001"
-        )
-        self.assertEqual(by_instance.cell(row=anchor_row_index, column=8).value, 9876)
+        self.assertEqual(create_export.json()["status"], "failed")
+        self.assertIn("Recarga", create_export.json()["payload"]["error"])
 
     def test_cost_model_scenario_adjustment_round_trip(self) -> None:
         headers = {"X-Spec-Sheets-User": "editor"}
@@ -2137,6 +2037,33 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual([item["rule"] for item in saved.json()["rules"]], ["*-34", "06"])
         invalid = self.client.put("/api/v1/cost-model/ceco-exclusions", headers=headers, json={"rules": [{"rule": "fabrica"}]})
         self.assertEqual(invalid.status_code, 422)
+
+    def test_cost_model_quantity_bases_keep_their_own_exclusions_adjustments_and_extras(self) -> None:
+        headers = {"X-Spec-Sheets-User": "editor"}
+        # Exclusions: one list per basis.
+        self.client.put("/api/v1/cost-model/ceco-exclusions?basis=work", headers=headers, json={"rules": [{"rule": "02"}]})
+        self.client.put("/api/v1/cost-model/ceco-exclusions?basis=factory", headers=headers, json={"rules": [{"rule": "11"}]})
+        work = self.client.get("/api/v1/cost-model/ceco-exclusions?basis=work", headers=headers).json()
+        self.assertEqual((work["basis"], [item["rule"] for item in work["rules"]]), ("work", ["02"]))
+        factory = self.client.get("/api/v1/cost-model/ceco-exclusions", headers=headers).json()
+        self.assertEqual([item["rule"] for item in factory["rules"]], ["11"])
+        self.assertEqual(self.client.get("/api/v1/cost-model/ceco-exclusions?basis=obra", headers=headers).status_code, 422)
+
+        # Adjustments: saved under one basis, invisible in the others.
+        row = next(row for row in self.client.get("/api/v1/projects/2/cost-model?basis=total", headers=headers).json()["rows"] if not row["is_auxiliary"])
+        payload = {"material_id": row["material_id"], "subtype_id": None, "quantity_scope": "scenario", "adjusted_quantity": 3, "source_kind": "manual"}
+        saved = self.client.put("/api/v1/projects/2/cost-model/adjustments?basis=total", headers=headers, json=payload)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["basis"], "total")
+        adjusted = lambda basis: next((item["adjustments"] for item in self.client.get(f"/api/v1/projects/2/cost-model?basis={basis}", headers=headers).json()["rows"]
+                                       if item["material_id"] == row["material_id"]), [])
+        self.assertEqual([item["adjusted_quantity"] for item in adjusted("total")], [3])
+        self.assertEqual(adjusted("factory"), [])
+
+        # Materials outside the BOM: decisions per basis.
+        self.client.put("/api/v1/projects/2/cost-model/extras?basis=work", headers=headers, json={"sku": "OBRA1", "included": False})
+        self.assertEqual([item["sku"] for item in self.client.get("/api/v1/projects/2/cost-model/extras?basis=work", headers=headers).json()["items"]], ["OBRA1"])
+        self.assertEqual(self.client.get("/api/v1/projects/2/cost-model/extras", headers=headers).json()["items"], [])
 
     def test_cost_model_extras_default_include_exclude_and_reset(self) -> None:
         headers = {"X-Spec-Sheets-User": "editor"}
@@ -3197,8 +3124,8 @@ class ServiceLayerTests(unittest.TestCase):
         self.assertEqual(purchase_price_stats_mock.call_count, 1)
         self.assertEqual(len(cached_entries), 1)
 
-    @patch("app.services.dashboard.get_material_movement_details")
-    @patch("app.services.dashboard.get_material_movement_history")
+    @patch("app.services.erp.get_material_movement_details")
+    @patch("app.services.erp.get_material_movement_history")
     def test_material_dashboard_history_cache_hashes_long_filter_keys(
         self,
         movement_history_mock,
@@ -3361,8 +3288,8 @@ class MaterialStudyGroupTests(ServiceLayerTests):
         self.assertEqual(response["groups"][0]["last_movement_date"], "2026-03-12")
         self.assertEqual(response["groups"][0]["sku"], "GROUP:1")
 
-    @patch("app.services.material_groups.get_material_movement_details")
-    @patch("app.services.material_groups.get_material_movement_history")
+    @patch("app.services.erp.get_material_movement_details")
+    @patch("app.services.erp.get_material_movement_history")
     @patch("app.services.material_groups.get_material_procurement_details")
     def test_group_detail_and_history_normalize_member_values(
         self,
@@ -3496,7 +3423,7 @@ class MaterialDashboardBusinessDayTests(unittest.TestCase):
 
 
 class MaterialStudyGroupEconomicMetricTests(unittest.TestCase):
-    @patch("app.services.material_groups.get_material_movement_history")
+    @patch("app.services.erp.get_material_movement_history")
     def test_group_economic_metric_normalizes_quantities_and_costs(self, movement_history_mock) -> None:
         group = SimpleNamespace(
             id=1,

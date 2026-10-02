@@ -58,13 +58,28 @@ describe("budget per subtype", () => {
     expect(line.quantity).toBe(6);
     expect(line.change).toBe(1000);
   });
-  it("does not silently total a partially defined estimate", () => {
+  it("counts the filled instances of a partly blank material and flags it", () => {
+    // Subtype 8 has 3 in some instances and a blank in another.
     const changed = { ...row, subtypes: row.subtypes.map((entry) => entry.subtype_id === 8 ? { ...entry, has_missing_quantity: true } : entry) };
-    expect(buildBudgetLine(changed, 8).estimate).toBeNull();
+    const line = buildBudgetLine(changed, 8);
+    expect(line.estimate).toBe(5);
+    expect(line.budgetCost).toBe(5000);
+    expect(line.partial).toBe(true);
+    expect(buildBudgetLine(changed, 9).partial).toBe(false);
     expect(buildBudgetLine(changed, 9).missingSubtypes).toEqual(["A"]);
-    expect(buildBudgetLine(changed, 8).missingSubtypes).toEqual([]);
-    expect(summarizeBudget([buildBudgetLine(changed, 8)]).missingBudget).toBe(1);
-    expect(buildBudgetLine({ ...changed, adjustments: [adjustment({})] }, 8).budgetCost).toBe(6000);
+    expect(line.missingSubtypes).toEqual([]);
+    expect(summarizeBudget([line])).toMatchObject({ budget: 5000, missingBudget: 0, partial: 1, partialBudget: 1 });
+    // A chosen quantity replaces the estimate, blanks included.
+    const adjusted = buildBudgetLine({ ...changed, adjustments: [adjustment({})] }, 8);
+    expect(adjusted.budgetCost).toBe(6000);
+    expect(summarizeBudget([adjusted]).partialBudget).toBe(0);
+  });
+  it("leaves a material with no quantity at all unknown", () => {
+    const blank = { ...row, subtypes: row.subtypes.map((entry) => entry.subtype_id === 8 ? { ...entry, estimated_quantity: null, has_missing_quantity: true } : entry) };
+    const line = buildBudgetLine(blank, 8);
+    expect(line.estimate).toBeNull();
+    expect(line.partial).toBe(false);
+    expect(summarizeBudget([line]).missingBudget).toBe(1);
   });
   it("sorts increases and savings by absolute change with missing references last", () => {
     const base = buildBudgetLine(row, 8, reference);
@@ -94,21 +109,24 @@ describe("study suggestions and project mix", () => {
     expect(buildBudgetLine(row, null, reference).historic).toBeNull();
   });
   it("lists suggested lines until their historic quantity is in use", () => {
-    const line = buildBudgetLine(row, 8, reference);
+    // The fixture's impact is $1.000 / viv., under the default minimum.
+    const criteria = { ...defaultSuggestionCriteria, minImpact: 0 };
+    const line = buildBudgetLine(row, 8, reference, criteria);
     expect(pendingSuggestions([line])).toEqual([line]);
-    const adopted = buildBudgetLine({ ...row, adjustments: [adjustment({ source_kind: "historic_allocated", adjusted_quantity: 6 })] }, 8, reference);
+    const adopted = buildBudgetLine({ ...row, adjustments: [adjustment({ source_kind: "historic_allocated", adjusted_quantity: 6 })] }, 8, reference, criteria);
     expect(pendingSuggestions([adopted])).toEqual([]);
-    expect(pendingSuggestions([buildBudgetLine(row, 8, { ...reference, grade: "medium" })])).toEqual([]);
+    expect(pendingSuggestions([buildBudgetLine(row, 8, { ...reference, grade: "medium" }, criteria)])).toEqual([]);
   });
   it("follows the viewer's suggestion criteria", () => {
     // Subtype 8: estimate 5, historic 6, ratio 1.2, price 1000 → impact $1.000 / viv.
     const at = (criteria: Partial<typeof defaultSuggestionCriteria>, study = reference) => buildBudgetLine(row, 8, study, { ...defaultSuggestionCriteria, ...criteria }).suggestion;
-    expect(at({})).toBe("historic");
-    expect(at({ minDeviation: 0.25 })).toBe("estimated");
+    expect(at({})).toBe("estimated");
+    expect(at({ minImpact: 0 })).toBe("historic");
+    expect(at({ minImpact: 0, minDeviation: 0.25 })).toBe("estimated");
     expect(at({ minImpact: 1500 })).toBe("estimated");
     expect(at({ minImpact: 1000 })).toBe("historic");
-    expect(at({}, { ...reference, grade: "medium" })).toBe("review");
-    expect(at({ minGrade: "medium" }, { ...reference, grade: "medium" })).toBe("historic");
+    expect(at({ minImpact: 0 }, { ...reference, grade: "medium" })).toBe("review");
+    expect(at({ minImpact: 0, minGrade: "medium" }, { ...reference, grade: "medium" })).toBe("historic");
     expect(at({ minGrade: "medium" }, { ...reference, grade: "low" })).toBe("estimated");
   });
   it("weights each subtype by the houses it started in the period", () => {

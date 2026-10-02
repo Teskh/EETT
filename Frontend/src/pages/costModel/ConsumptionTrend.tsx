@@ -9,22 +9,26 @@ import { useChartSelection } from "../materialDashboard/useChartSelection";
 import { buildHistoricalStockSeries, buildLinePath, getClampedSelectionBounds, getSeriesSummary } from "../materialDashboard/stockSeries";
 import { buildHouseComparisonChart, buildProjectedStockByDay, getHouseComparisonForRange, getHouseSeriesSummary, getStockValueForDate } from "../materialDashboard/houseComparison";
 import { isDateWithinRange, isWeekend, moveToPreviousBusinessDay, toDateInputValue, toStartOfDay } from "../materialDashboard/dates";
-import { formatQuantity } from "./format";
+import { basisLabels, formatQuantity } from "./format";
 import { formatCurrency, formatNumber, getAdaptiveDecimalPlaces, percentFormatter } from "../materialDashboard/formatters";
 import { getConsumptionMetrics } from "./consumptionMetrics";
 import { seriesToComparison, studyPerHouse, sumSeries } from "./studySeries";
-import type { CostModelSeries } from "../../lib/types";
+import type { CostModelSeries, QuantityBasis } from "../../lib/types";
 
 type Range = { startDate: string; endDate: string };
 /** Consumed and expected in the selection, in the chart's unit. For a group, also each member's withdrawals in its own unit. */
 export type TrendTotals = { consumed: number; expected: number; houses: number; mappedHouses: number; bySku: Record<string, number> | null };
 
-export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeChange, disabled, missingSubtypes = [], groupId = null, embedded = false, onTotals, projectId = null, studyKey = null, price = null }: {
+export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeChange, disabled, missingSubtypes = [], groupId = null, excludedCecos = [], basis = "factory", embedded = false, onTotals, projectId = null, studyKey = null, price = null, showExpected = true }: {
   sku: string; name: string; unit: string; range: Range; onDetails?: () => void; onRangeChange: (range: Range) => void; disabled: boolean;
   /** Subtypes whose BOM leaves this material blank: the expected line leaves their houses out. */
   missingSubtypes?: string[];
   /** A material dashboard group instead of one material, in the group's study unit. */
   groupId?: number | null;
+  /** For a group: cost centers left out of its withdrawals, e.g. the study's exclusions. */
+  excludedCecos?: string[];
+  /** Quantity basis of the budget: the project series follows its BOM quantity and exclusions. */
+  basis?: QuantityBasis;
   /** Inside another dialog: drawn wide, without its own maximize. */
   embedded?: boolean;
   onTotals?: (totals: TrendTotals | null) => void;
@@ -34,6 +38,8 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   studyKey?: string | null;
   /** Price the budget uses, for overconsumption in pesos. */
   price?: number | null;
+  /** Unbudgeted materials have no estimated consumption to compare against. */
+  showExpected?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [maximized, setExpanded] = useState(false);
@@ -65,27 +71,30 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   const today = toDateInputValue(moveToPreviousBusinessDay(new Date()));
   const historyRange = { startDate: range.startDate, endDate: today };
   const enabled = !collapsed;
+  // A group follows the study's cost center exclusions; its cache keys carry them.
+  const groupFilters = { excludedCecos };
+  const excludedKey = excludedCecos.length ? `::excl:${[...excludedCecos].sort().join("|")}` : "";
   const detail = useDashboardResource<MaterialDashboardDetailData | MaterialDashboardGroupDetailData>({
-    cacheKey: groupId === null ? detailCacheKey(sku, []) : groupDetailCacheKey(groupId, []), enabled, refreshNonce: revision,
-    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardDetail(sku, {}, { refresh }) : api.getMaterialStudyGroupDetail(groupId, {}, { refresh }),
+    cacheKey: groupId === null ? detailCacheKey(sku, []) : `${groupDetailCacheKey(groupId, [])}${excludedKey}`, enabled, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardDetail(sku, {}, { refresh }) : api.getMaterialStudyGroupDetail(groupId, groupFilters, { refresh }),
     errorMessage: "No se pudo cargar el stock del material.",
   });
   const history = useDashboardResource<MaterialDashboardMovementData | MaterialDashboardGroupMovementData>({
-    cacheKey: groupId === null ? historyCacheKey(sku, [], historyRange) : groupHistoryCacheKey(groupId, [], historyRange), enabled, refreshNonce: revision,
-    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHistory(sku, {}, { ...historyRange, refresh }) : api.getMaterialStudyGroupHistory(groupId, {}, { ...historyRange, refresh }),
+    cacheKey: groupId === null ? historyCacheKey(sku, [], historyRange) : `${groupHistoryCacheKey(groupId, [], historyRange)}${excludedKey}`, enabled, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHistory(sku, {}, { ...historyRange, refresh }) : api.getMaterialStudyGroupHistory(groupId, groupFilters, { ...historyRange, refresh }),
     errorMessage: "No se pudieron cargar los movimientos.",
   });
   // In the budget, the chart follows the study: only the project's houses, the
   // excluded cost centers left out, other projects' BOM discounted.
   const projectMode = projectId !== null && groupId === null;
   const series = useDashboardResource<CostModelSeries>({
-    cacheKey: `cost-model-series::${projectId}::${sku}::${range.startDate}::${range.endDate}::${studyKey}`, enabled: enabled && projectMode && studyKey !== null, refreshNonce: revision,
-    fetcher: () => api.getCostModelSeries(projectId as number, sku, range),
+    cacheKey: `cost-model-series::${basis}::${projectId}::${sku}::${range.startDate}::${range.endDate}::${studyKey}`, enabled: enabled && projectMode && studyKey !== null, refreshNonce: revision,
+    fetcher: () => api.getCostModelSeries(projectId as number, sku, range, basis),
     errorMessage: "No se pudo cargar el consumo del proyecto.",
   });
   const houses = useDashboardResource<MaterialDashboardMappedHouseComparisonData>({
-    cacheKey: groupId === null ? houseComparisonCacheKey(sku, [], range) : groupHouseComparisonCacheKey(groupId, [], range), enabled: enabled && !projectMode, refreshNonce: revision,
-    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHouseComparison(sku, {}, { ...range, refresh }) : api.getMaterialStudyGroupHouseComparison(groupId, {}, { ...range, refresh }),
+    cacheKey: groupId === null ? houseComparisonCacheKey(sku, [], range) : `${groupHouseComparisonCacheKey(groupId, [], range)}${excludedKey}`, enabled: enabled && !projectMode, refreshNonce: revision,
+    fetcher: (refresh) => groupId === null ? api.getMaterialDashboardHouseComparison(sku, {}, { ...range, refresh }) : api.getMaterialStudyGroupHouseComparison(groupId, groupFilters, { ...range, refresh }),
     errorMessage: "No se pudo cargar la producción.",
   });
   const error = detail.error || history.error || (projectMode ? series.error : houses.error);
@@ -102,9 +111,9 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   const stockChart = useMemo(() => buildLinePath(stock.filter(point => isDateWithinRange(point.date, range.startDate, range.endDate)), width, height, { fitValues: true }), [stock, range.startDate, range.endDate, height, width]);
   const houseChart = useMemo(() => comparison ? buildHouseComparisonChart(
     { ...comparison, points: comparison.points.filter(point => !isWeekend(toStartOfDay(point.date))) }, stock, width, height,
-    getStockValueForDate(stock, range.endDate), data?.detail.stock_on_hand ?? null, buildProjectedStockByDay(comparison, stock),
+    getStockValueForDate(stock, range.endDate), data?.detail.stock_on_hand ?? null, showExpected ? buildProjectedStockByDay(comparison, stock) : null,
     { fitStockValues: true },
-  ) : null, [comparison, stock, height, width, data, range.endDate]);
+  ) : null, [comparison, stock, height, width, data, range.endDate, showExpected]);
   const chart = mode === "houses" ? houseChart : stockChart;
   const { activeSelection, hoveredPointIndex, pointerHandlers, clearSelection, reset } = useChartSelection(chart);
   useEffect(() => { reset(); }, [key, mode, collapsed]);
@@ -139,14 +148,14 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
     const totals = sumSeries(selected as unknown as Partial<CostModelSeries["points"][number]>[]);
     return { totals, ...studyPerHouse(totals) };
   }, [projectMode, houseChart, bounds?.startIndex, bounds?.endIndex]);
-  const metrics = study ? getConsumptionMetrics({
+  const metrics = study && showExpected ? getConsumptionMetrics({
     materialConsumed: study.ratio === null ? 0 : study.ratio * study.totals.target, projectedMaterialConsumed: study.totals.target,
     housesProduced: study.totals.equivalentHouses, mappedHousesProduced: study.totals.equivalentHouses,
     hasExpected: study.ratio !== null, averagePrice: price ?? data?.detail.average_price,
   }) : houseSummary ? getConsumptionMetrics({
     materialConsumed: houseSummary.materialConsumed, projectedMaterialConsumed: houseSummary.projectedMaterialConsumed,
     housesProduced: houseSummary.housesProduced, mappedHousesProduced: houseSummary.mappedHousesProduced,
-    hasExpected: (comparison?.link_count ?? 0) > 0, averagePrice: data?.detail.average_price,
+    hasExpected: showExpected && (comparison?.link_count ?? 0) > 0, averagePrice: price ?? data?.detail.average_price,
   }) : null;
   const digits = getAdaptiveDecimalPlaces(metrics?.consumedPerHouse, metrics?.expectedPerHouse);
   const over = metrics?.overconsumptionPerHouse ?? null;
@@ -167,7 +176,7 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
   const content = <section className={`flex min-w-0 flex-col ${embedded ? "" : "border-l border-black/10 bg-zinc-50/50 px-4 py-3 dark:border-white/10 dark:bg-zinc-950"}`} aria-label={`Estudio de consumo de ${name}`}>
     <div className="flex flex-wrap items-center gap-2">
       <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)} className="min-w-0 truncate text-left text-xs font-semibold" title={name}>{collapsed ? "▸" : "▾"} {name}</button>
-      <span className="text-[10px] text-zinc-500">{groupId === null ? sku : `Grupo en ${unit}`} · Fábrica</span>
+      <span className="text-[10px] text-zinc-500">{groupId === null ? sku : `Grupo en ${unit}${excludedCecos.length ? " · sin centros excluidos" : ""}`} · {basisLabels[basis]}</span>
       <div className="flex w-full flex-wrap gap-1">
         {!collapsed ? <>
           <div role="group" aria-label="Vista del gráfico" className="flex">
@@ -184,7 +193,7 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
         BOM incompleta: {missingSubtypes.join(", ")} sin cantidad. El esperado no cuenta esas viviendas, así que el sobreconsumo aparece inflado.</p> : null}
       <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px]">
         <span className="text-amber-600">━ Stock</span>
-        {mode === "houses" ? <><span className="text-emerald-600">━ Esperado</span><span className="text-slate-500">━ Viviendas</span></> : null}
+        {mode === "houses" ? <>{showExpected ? <span className="text-emerald-600">━ Esperado</span> : null}<span className="text-slate-500">━ Viviendas</span></> : null}
       </div>
       {error ? <p role="alert" className="py-4 text-xs text-red-700 dark:text-red-400">{error} <button className="underline" onClick={() => setRevision(revision + 1)}>Reintentar</button></p>
         : <div ref={boxRef} style={expanded || embedded ? { height } : undefined} className={`relative mt-1 ${expanded || embedded ? "" : "min-h-[140px] flex-1"}`}><div className="absolute inset-0">
@@ -198,24 +207,26 @@ export function ConsumptionTrend({ sku, name, unit, range, onDetails, onRangeCha
       {!error ? <div className="mt-1 border-t border-black/5 pt-2 text-xs dark:border-white/10">
         {/* Same definitions as the material dashboard; they follow the chart selection. */}
         <div className="grid grid-cols-4 gap-x-3" aria-label="Métricas del período">
-          <Metric label="Cons./viv." title={study ? "Real ÷ esperado × BOM: la Histórica de la tabla, para la selección." : "Consumo real del período dividido por todas las viviendas iniciadas"}
+          <Metric label="Cons./viv." title={study && showExpected ? "Real ÷ esperado × BOM: la Histórica de la tabla, para la selección." : "Consumo real del período dividido por todas las viviendas iniciadas"}
             value={metrics ? `${formatNumber(metrics.consumedPerHouse, digits)} ${unit}` : "—"}
-            detail={metrics?.deltaPercent != null ? `${metrics.deltaPercent > 0 ? "↑" : metrics.deltaPercent < 0 ? "↓" : "→"} ${percentFormatter.format(Math.abs(metrics.deltaPercent))}% vs est.` : "Sin estimado"}
-            tone={metrics?.deltaPercent != null && metrics.deltaPercent > 0 && !missingSubtypes.length ? "bad" : undefined} />
+            detail={data ? `Stock: ${formatNumber(data.detail.stock_on_hand, 0)} ${unit}${stockDays != null ? ` · ≈ ${formatNumber(stockDays, 0)} días háb.` : ""}` : "Stock: —"} />
           <Metric label="Est./viv." title={study ? "BOM por vivienda del proyecto, según la mezcla de subtipologías del período." : "Consumo estimado según el presupuesto de las viviendas vinculadas, por vivienda vinculada"}
             value={metrics?.expectedPerHouse != null ? `${formatNumber(metrics.expectedPerHouse, digits)} ${unit}` : "—"}
-            detail={study ? `BOM · ${formatNumber(study.totals.starts, 0)} viv. del proyecto` : houseSummary ? `${formatNumber(houseSummary.mappedHousesProduced, 0)} viv. vinculadas` : "—"} />
+            detail={!showExpected ? "Sin estimado" : study ? `BOM · ${formatNumber(study.totals.starts, 0)} viv. del proyecto` : houseSummary ? `${formatNumber(houseSummary.mappedHousesProduced, 0)} viv. vinculadas` : "—"} />
           <Metric label={over !== null && over < 0 ? "Ahorro/viv." : "Sobrecons./viv."}
             title="(Consumo real − estimado) del período, dividido por todas las viviendas iniciadas. En pesos, al precio promedio ERP."
             value={over !== null ? `${formatNumber(Math.abs(over), digits)} ${unit}` : "—"}
             detail={metrics?.overcostPerHouse != null ? `${formatCurrency(Math.abs(metrics.overcostPerHouse))}/viv.` : "Sin precio"}
             tone={over !== null && over > 0 && !missingSubtypes.length ? "bad" : undefined} />
-          <Metric label="Stock" title="Stock disponible hoy y su cobertura al ritmo de salida de los últimos 30 días"
-            value={data ? `${formatNumber(data.detail.stock_on_hand, 0)} ${unit}` : "—"}
-            detail={stockDays != null ? `≈ ${formatNumber(stockDays, 0)} días háb.` : data?.detail.average_price ? `Prom. ${formatCurrency(data.detail.average_price)}` : "—"} />
+          <Metric label="% vs est." title="Diferencia porcentual entre el consumo real y el estimado para el período seleccionado"
+            value={metrics?.deltaPercent != null ? `${metrics.deltaPercent > 0 ? "↑" : metrics.deltaPercent < 0 ? "↓" : "→"} ${percentFormatter.format(Math.abs(metrics.deltaPercent))}%` : "—"}
+            detail={metrics?.deltaPercent != null ? metrics.deltaPercent > 0 ? "Sobre el estimado" : metrics.deltaPercent < 0 ? "Bajo el estimado" : "Igual al estimado" : "Sin estimado"}
+            tone={metrics?.deltaPercent != null && metrics.deltaPercent > 0 && !missingSubtypes.length ? "bad" : undefined} />
         </div>
         <p className="mt-1.5 truncate text-[10px] text-zinc-500">
-          {mode === "houses" && study
+          {mode === "houses" && !showExpected
+            ? <>Consumo {formatQuantity(houseSummary?.materialConsumed)} {unit} · {formatQuantity(houseSummary?.housesProduced)} viviendas</>
+            : mode === "houses" && study
             ? <>Real {formatQuantity(study.totals.actual)} {unit} · Esperado {formatQuantity(study.totals.target)} {unit}{study.totals.other > 0 ? ` + ${formatQuantity(study.totals.other)} de otros proyectos` : ""} · ×{study.ratio === null ? "—" : formatNumber(study.ratio, 3)} · Sin centros excluidos{series.data?.other_houses ? `, descontando ${series.data.other_houses} viv. de otros proyectos` : ""}</>
             : mode === "houses"
             ? <>Consumo {formatQuantity(houseSummary?.materialConsumed)} {unit} · Esperado {formatQuantity(houseSummary?.projectedMaterialConsumed)} {unit} · {formatQuantity(houseSummary?.housesProduced)} viviendas{metrics?.unmappedHouses ? ` (${metrics.unmappedHouses} sin vincular)` : ""}{data?.detail.average_price ? ` · Precio prom. ${formatCurrency(data.detail.average_price)}` : ""}</>

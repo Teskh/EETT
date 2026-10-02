@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.models.entities import MaterialMode
 from app.services.auth import can_view_project
+from app.services.effective_bom import QUANTITY_BASES
 from app.services.export_projection import iter_cost_model_rows, iter_existing_instance_materials
 from app.services.projects import get_project_view_data, get_project_with_details
 
@@ -48,10 +49,15 @@ def get_cost_model_view(
     settings: Settings | None = None,
     user: User | None = None,
     live_prices: bool = True,
+    basis: str = "factory",
 ) -> dict[str, Any] | None:
     """The project's budget rows. Without `live_prices` it does not wait on the
     ERP: prices come from recent ERP reads or the stored cache, and
-    `prices_pending` tells the client to ask `get_cost_model_prices`."""
+    `prices_pending` tells the client to ask `get_cost_model_prices`.
+    `basis` picks Q_fábrica ("factory"), Q_obra ("work") or both ("total");
+    each has its own adjustments."""
+    if basis not in QUANTITY_BASES:
+        raise ValueError(f"Base de cantidad no válida: {basis}")
     project = get_project_with_details(session, project_id)
     if project is None:
         return None
@@ -64,7 +70,7 @@ def get_cost_model_view(
 
     adjustments = session.scalars(
         select(ProjectCostModelAdjustment)
-        .where(ProjectCostModelAdjustment.project_id == project_id)
+        .where(ProjectCostModelAdjustment.project_id == project_id, ProjectCostModelAdjustment.quantity_basis == basis)
         .options(selectinload(ProjectCostModelAdjustment.created_by))
     ).all()
     adjustments_by_material: dict[int, list[ProjectCostModelAdjustment]] = defaultdict(list)
@@ -78,7 +84,7 @@ def get_cost_model_view(
     rows_by_material: dict[int, dict[str, Any]] = {}
     materials_order: list[int] = []
 
-    for row in iter_cost_model_rows(project_data):
+    for row in iter_cost_model_rows(project_data, basis):
         material_id = row.get("material_id")
         if material_id is None:
             continue
@@ -192,7 +198,8 @@ def get_cost_model_view(
             }
         )
 
-    for auxiliary in sorted(
+    # Auxiliary materials are factory purchases: none are installed on site.
+    for auxiliary in [] if basis == "work" else sorted(
         project_data.get("auxiliary_materials", []),
         key=lambda item: ((item.get("code") or ""), (item.get("name") or "")),
     ):
@@ -231,6 +238,7 @@ def get_cost_model_view(
         "flat_subtypes": flat_subtypes,
         "rows": serialized_rows,
         "prices_pending": prices_pending,
+        "basis": basis,
     }
 
 
@@ -249,8 +257,8 @@ def get_cost_model_prices(
     project_data = get_project_view_data(session, project_id, user=user)
     if project_data is None:
         return None
-    prices, _ = _load_cost_model_prices(session, settings=settings, project_data=project_data, live=True)
-    return {"prices": prices}
+    prices, pending = _load_cost_model_prices(session, settings=settings, project_data=project_data, live=True)
+    return {"prices": prices, "prices_pending": pending}
 
 
 def upsert_cost_model_adjustment(
@@ -268,6 +276,7 @@ def upsert_cost_model_adjustment(
     source_range_end: date | None = None,
     source_sample_houses: int | None = None,
     source_total_consumption: float | None = None,
+    quantity_basis: str = "factory",
     actor: User | None = None,
     commit: bool = True,
 ) -> ProjectCostModelAdjustment:
@@ -275,6 +284,8 @@ def upsert_cost_model_adjustment(
         raise ValueError("Quantity must be a finite, nonnegative number")
     if quantity_scope not in {"component", "scenario"}:
         raise ValueError("Unknown quantity scope")
+    if quantity_basis not in QUANTITY_BASES:
+        raise ValueError("Unknown quantity basis")
     material = session.get(Material, material_id)
     if material is None:
         raise ValueError("Material not found")
@@ -286,6 +297,7 @@ def upsert_cost_model_adjustment(
 
     query = select(ProjectCostModelAdjustment).where(
         ProjectCostModelAdjustment.project_id == project.id,
+        ProjectCostModelAdjustment.quantity_basis == quantity_basis,
         ProjectCostModelAdjustment.material_id == material_id,
     )
     if subtype_id is None:
@@ -297,6 +309,7 @@ def upsert_cost_model_adjustment(
     if adjustment is None:
         adjustment = ProjectCostModelAdjustment(
             project_id=project.id,
+            quantity_basis=quantity_basis,
             material_id=material_id,
             subtype_id=subtype_id,
             adjusted_quantity=adjusted_quantity,
@@ -349,9 +362,11 @@ def delete_cost_model_adjustment(
     project: Project,
     material_id: int,
     subtype_id: int | None,
+    quantity_basis: str = "factory",
 ) -> bool:
     query = select(ProjectCostModelAdjustment).where(
         ProjectCostModelAdjustment.project_id == project.id,
+        ProjectCostModelAdjustment.quantity_basis == quantity_basis,
         ProjectCostModelAdjustment.material_id == material_id,
     )
     if subtype_id is None:
@@ -450,10 +465,12 @@ def _load_cost_model_prices(
     with _live_prices_lock:
         for sku in unique_skus:
             cached = _live_prices.get(sku)
+            # Expiration requires a refresh; it does not make a known price disappear.
+            # Quantity saves never wait for ERP and must still return usable totals.
+            if cached is not None and _is_positive_price(cached[1]):
+                price_map[sku] = cached[1]
             if cached is None or now - cached[0] > LIVE_PRICE_TTL_SECONDS:
                 missing.append(sku)
-            elif cached[1] is not None:
-                price_map[sku] = cached[1]
     if not missing or not live:
         return price_map, bool(missing)
 
@@ -469,7 +486,7 @@ def _load_cost_model_prices(
                 if sku in read and _is_positive_price(value):
                     read[sku] = value
 
-            missing_price_skus = [sku for sku in missing if not _is_positive_price(read[sku]) and not _is_positive_price(price_map.get(sku))]
+            missing_price_skus = [sku for sku in missing if not _is_positive_price(read[sku]) and not _is_positive_price(prices.get(sku))]
             if missing_price_skus:
                 purchase_order_lines = _get_purchase_order_lines_for_products_batch(
                     connection.cursor(),
@@ -485,14 +502,19 @@ def _load_cost_model_prices(
         # Keep what was read, but read again next time.
         complete = False
 
+    retained_stale = False
     if complete:
         with _live_prices_lock:
             for sku, value in read.items():
+                previous = _live_prices.get(sku)
+                if not _is_positive_price(value) and previous is not None and _is_positive_price(previous[1]):
+                    retained_stale = True
+                    continue
                 _live_prices[sku] = (now, value)
     for sku, value in read.items():
         if value is not None:
             price_map[sku] = value
-    return price_map, False
+    return price_map, not complete or retained_stale
 
 
 def _select_cost_model_price(average_price: float | None, last_purchase_price: float | None) -> float | None:

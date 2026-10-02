@@ -5,7 +5,14 @@ const twoDecimals = new Intl.NumberFormat("es-CL", { minimumFractionDigits: 2, m
 export const formatQuantity2 = (value: number | null | undefined) => value == null ? "—" : twoDecimals.format(value);
 export const formatMoney = (value: number | null | undefined) => value == null ? "—" : currency.format(value);
 export const formatChange = (value: number | null | undefined) => value == null ? "—" : `${value > 0 ? "+" : value < 0 ? "−" : ""}${currency.format(Math.abs(value))}`;
-export const sourceLabels = { estimated: "Estimada", historic_allocated: "Histórica", manual: "Manual", legacy: "Ajuste anterior" };
+/** The BOM quantity the budget follows. */
+export const basisLabels = { factory: "Fábrica", work: "Obra", total: "Fábrica + obra" } as const;
+export const basisDescriptions = {
+  factory: "Q_fábrica: lo que se consume en la planta. Excluye las salidas a Obra.",
+  work: "Q_obra: lo que se instala en terreno. Solo cuentan las salidas a Obra.",
+  total: "Q_fábrica + Q_obra: la vivienda instalada. Cuentan fábrica y Obra.",
+} as const;
+export const sourceLabels = { estimated: "Estimada", historic_allocated: "Histórica", manual: "Manual", legacy: "Ajuste anterior", mixed: "Mixto" };
 export const gradeLabels = { high: "Alta", medium: "Media", low: "Baja", none: "—" } as const;
 export const gradeDescriptions = {
   high: "Confianza alta: en pruebas con períodos anteriores, la referencia se mantuvo dentro de ~10%.",

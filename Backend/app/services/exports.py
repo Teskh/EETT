@@ -16,7 +16,6 @@ from app.models import (
     ExportKind,
     ExportStatus,
     Project,
-    ProjectCostModelAdjustment,
     ProjectExportJob,
     User,
 )
@@ -120,6 +119,7 @@ def execute_project_export(
                     session,
                     project_id=job.project_id,
                     job_id=job.id,
+                    payload=payload,
                 )
             case ExportKind.FULL_TECHNICAL_PDF:
                 artifact_uri = _build_full_technical_pdf_export(
@@ -174,12 +174,15 @@ def _build_cost_model_workbook_export(
     *,
     project_id: int,
     job_id: int,
+    payload: dict,
 ) -> str:
-    project_data = get_project_view_data(session, project_id)
-    if project_data is None:
-        raise ValueError("Project not found")
+    from app.services.export_cost_model import validate_cost_model_payload
 
-    artifact_name = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
+    project = session.get(Project, project_id)
+    if project is None:
+        raise ValueError("Project not found")
+    validate_cost_model_payload(payload)
+    artifact_name = _artifact_name(job_id, project.name, "cost-model", "xlsx")
     return f"/exports/{artifact_name}"
 
 
@@ -245,10 +248,7 @@ def build_project_export_artifact(
         case ExportKind.MATERIALS_WORKBOOK:
             return _render_materials_workbook_export(session, project_id=job.project_id, job_id=job.id)
         case ExportKind.COST_MODEL_WORKBOOK:
-            return _render_cost_model_workbook_export(
-                session, project_id=job.project_id, job_id=job.id, settings=settings,
-                extras=(job.payload or {}).get("extras") or [],
-            )
+            return _render_cost_model_workbook_export(job)
         case ExportKind.FULL_TECHNICAL_PDF:
             return _render_full_technical_pdf_export(
                 session,
@@ -288,41 +288,15 @@ def _render_materials_workbook_export(session: Session, *, project_id: int, job_
     )
 
 
-def _render_cost_model_workbook_export(
-    session: Session,
-    *,
-    project_id: int,
-    job_id: int,
-    settings: Settings,
-    extras: list[dict] | None = None,
-) -> ExportArtifact:
-    from app.services.export_workbooks import build_cost_model_workbook
+def _render_cost_model_workbook_export(job: ProjectExportJob) -> ExportArtifact:
+    """Lays out the snapshot the cost model page sent: its totals are the page's."""
+    from app.services.export_cost_model import build_cost_model_workbook
 
-    project_data = get_project_view_data(session, project_id)
-    if project_data is None:
+    if job.project is None:
         raise ValueError("Project not found")
-
     output = BytesIO()
-    adjustments = session.scalars(
-        select(ProjectCostModelAdjustment).where(ProjectCostModelAdjustment.project_id == project_id)
-    ).all()
-    build_cost_model_workbook(
-        project_data,
-        output,
-        prices_by_sku=_load_cost_model_price_map(session, settings=settings, project_data=project_data),
-        adjustments=[
-            {
-                "material_id": adjustment.material_id,
-                "subtype_id": adjustment.subtype_id,
-                "adjusted_quantity": adjustment.adjusted_quantity,
-                "quantity_scope": adjustment.quantity_scope,
-                "source_kind": adjustment.source_kind,
-            }
-            for adjustment in adjustments
-        ],
-        extras=extras or [],
-    )
-    filename = _artifact_name(job_id, project_data["project"]["name"], "cost-model", "xlsx")
+    build_cost_model_workbook(job.project.name, job.payload or {}, output)
+    filename = _artifact_name(job.id, job.project.name, "cost-model", "xlsx")
     return ExportArtifact(
         output.getvalue(),
         filename,
@@ -603,100 +577,6 @@ def _load_detailed_material_erp_details(
         return {}
 
     return details
-
-
-def _load_cost_model_price_map(
-    session: Session,
-    *,
-    settings: Settings,
-    project_data: dict[str, object],
-) -> dict[str, float | None]:
-    from app.services.erp import (
-        _get_average_prices_for_products_batch,
-        _get_purchase_order_lines_for_products_batch,
-        _open_connection,
-        erp_search_available,
-    )
-
-    unique_skus: list[str] = []
-    seen_skus: set[str] = set()
-    for section in project_data.get("categories", []):
-        for instance in section.get("instances", []):
-            for material in iter_existing_instance_materials(instance):
-                sku = str(material.get("sku") or "").strip().upper()
-                if not sku or sku in seen_skus:
-                    continue
-                seen_skus.add(sku)
-                unique_skus.append(sku)
-    for auxiliary in project_data.get("auxiliary_materials", []):
-        sku = str(auxiliary.get("code") or "").strip().upper()
-        if not sku or sku in seen_skus:
-            continue
-        seen_skus.add(sku)
-        unique_skus.append(sku)
-
-    if not unique_skus:
-        return {}
-
-    prices = {
-        cache.sku.strip().upper(): _select_cost_model_price(
-            cache.average_price,
-            cache.last_purchase_price,
-        )
-        for cache in session.scalars(select(ErpMaterialCache).order_by(ErpMaterialCache.sku)).all()
-        if cache.sku
-    }
-    price_map = {sku: prices.get(sku) for sku in unique_skus}
-
-    if not erp_search_available(settings):
-        return price_map
-
-    try:
-        with _open_connection(settings) as connection:
-            live_prices = _get_average_prices_for_products_batch(
-                connection.cursor(),
-                unique_skus,
-                datetime.utcnow().strftime("%d/%m/%Y"),
-            )
-            for sku, value in live_prices.items():
-                if _is_positive_price(value):
-                    price_map[sku] = value
-
-            missing_price_skus = [sku for sku in unique_skus if not _is_positive_price(price_map.get(sku))]
-            if missing_price_skus:
-                purchase_order_lines = _get_purchase_order_lines_for_products_batch(
-                    connection.cursor(),
-                    missing_price_skus,
-                    include_receipt_units=False,
-                )
-                for sku, lines in purchase_order_lines.items():
-                    purchase_order_price = _select_purchase_order_price(lines)
-                    if purchase_order_price is not None:
-                        price_map[sku] = purchase_order_price
-    except Exception:
-        return price_map
-
-    return price_map
-
-
-def _select_cost_model_price(average_price: float | None, last_purchase_price: float | None) -> float | None:
-    if _is_positive_price(average_price):
-        return average_price
-    if _is_positive_price(last_purchase_price):
-        return last_purchase_price
-    return average_price if average_price is not None else last_purchase_price
-
-
-def _is_positive_price(value: float | None) -> bool:
-    return value is not None and value > 0
-
-
-def _select_purchase_order_price(lines: list[dict[str, Any]]) -> float | None:
-    for line in lines:
-        unit_price = line.get("unit_price")
-        if _is_positive_price(unit_price):
-            return unit_price
-    return None
 
 
 def _should_show_prices(user: User | None) -> bool:

@@ -494,6 +494,105 @@ def get_outgoing_withdrawals(settings: Settings, *, start_day: date, end_day: da
         raise RuntimeError("Could not load ERP withdrawals") from exc
 
 
+def fetch_withdrawal_documents(settings: Settings, *, start_day: date, end_day: date) -> dict[str, Any]:
+    """Every production withdrawal ("Guía de Salida") dated in the period, one
+    row per document and material, for the stored copy in `erp_history`.
+
+    Also returns the name and unit of each material in the period and the
+    name of every cost center. Kept to one connection and a few plain queries
+    so a scheduled sync stays gentle on the ERP."""
+    try:
+        with _open_connection(settings) as connection:
+            cursor = connection.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    CAST(h.NroInt AS NVARCHAR(50)) AS DocumentNumber,
+                    RTRIM(LTRIM(d.CodProd)) AS CodProd,
+                    MAX(CONVERT(date, h.Fecha)) AS MovementDate,
+                    MAX(RTRIM(LTRIM(h.CodiCC))) AS CecoCode,
+                    MAX(sm.DescSub) AS DescSub,
+                    SUM(COALESCE(d.CantDespachada, 0)) AS Quantity,
+                    SUM(COALESCE(d.TotLinea, 0)) AS Value,
+                    COUNT(*) AS LineCount
+                FROM softland.iw_gsaen h
+                INNER JOIN softland.iw_gmovi d ON h.Tipo = d.Tipo AND h.NroInt = d.NroInt
+                LEFT JOIN (
+                    SELECT
+                        NroInt,
+                        RTRIM(LTRIM(Tipo)) AS Tipo,
+                        MAX(NULLIF(RTRIM(LTRIM(desc_sub)), '')) AS DescSub
+                    FROM dbo.cr_solicitudes_materiales
+                    GROUP BY NroInt, RTRIM(LTRIM(Tipo))
+                ) sm ON sm.NroInt = h.NroInt AND sm.Tipo = RTRIM(LTRIM(h.Tipo))
+                WHERE
+                    h.Fecha >= ?
+                    AND h.Fecha < ?
+                    AND h.Tipo = 'S'
+                    AND RTRIM(LTRIM(h.Concepto)) = '07'
+                    AND RTRIM(LTRIM(h.Estado)) = 'V'
+                    AND RTRIM(LTRIM(h.Proceso)) = 'Guía de Salida'
+                    AND RTRIM(LTRIM(d.CodProd)) <> ''
+                GROUP BY CAST(h.NroInt AS NVARCHAR(50)), RTRIM(LTRIM(d.CodProd))
+                """,
+                [start_day.strftime("%Y%m%d"), (end_day + timedelta(days=1)).strftime("%Y%m%d")],
+            )
+            documents: list[dict[str, Any]] = []
+            for row in cursor.fetchall():
+                sku = (getattr(row, "CodProd", None) or "").strip().upper()
+                day = _coerce_date(getattr(row, "MovementDate", None))
+                document_number = str(getattr(row, "DocumentNumber", "") or "").strip()
+                if not sku or day is None or not document_number:
+                    continue
+                documents.append(
+                    {
+                        "document_number": document_number,
+                        "sku": sku,
+                        "movement_date": day,
+                        "cost_center": (getattr(row, "CecoCode", None) or "").strip(),
+                        "request_note": (getattr(row, "DescSub", None) or "").strip() or None,
+                        "quantity": float(getattr(row, "Quantity", 0.0) or 0.0),
+                        "value": float(getattr(row, "Value", 0.0) or 0.0),
+                        "line_count": int(getattr(row, "LineCount", 0) or 0),
+                    }
+                )
+            skus = sorted({document["sku"] for document in documents})
+            products: dict[str, dict[str, str | None]] = {}
+            for index in range(0, len(skus), 500):
+                chunk = skus[index:index + 500]
+                cursor.execute(
+                    f"""
+                    SELECT RTRIM(LTRIM(CodProd)) AS CodProd, RTRIM(LTRIM(DesProd)) AS DesProd, RTRIM(LTRIM(CodUMed)) AS CodUMed
+                    FROM softland.iw_tprod
+                    WHERE RTRIM(LTRIM(CodProd)) IN ({",".join(["?"] * len(chunk))})
+                    """,
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    code = (getattr(row, "CodProd", None) or "").strip().upper()
+                    if code:
+                        products[code] = {
+                            "name": (getattr(row, "DesProd", None) or "").strip() or code,
+                            "unit": (getattr(row, "CodUMed", None) or "").strip() or None,
+                        }
+            cursor.execute(
+                """
+                SELECT RTRIM(LTRIM(CodiCC)) AS Code, MAX(RTRIM(LTRIM(DescCC))) AS Name
+                FROM softland.cwtccos
+                WHERE RTRIM(LTRIM(CodiCC)) <> ''
+                GROUP BY RTRIM(LTRIM(CodiCC))
+                """
+            )
+            cost_center_names = {
+                (getattr(row, "Code", None) or "").strip(): (getattr(row, "Name", None) or "").strip() or None
+                for row in cursor.fetchall()
+            }
+            return {"documents": documents, "products": products, "cost_center_names": cost_center_names}
+    except Exception as exc:
+        logger.warning("ERP withdrawal document lookup failed for %s..%s: %s", start_day, end_day, exc)
+        raise RuntimeError("Could not load ERP withdrawal documents") from exc
+
+
 def get_material_movement_history(
     settings: Settings,
     sku: str,

@@ -26,12 +26,11 @@ from app.services.erp import (
     _open_connection,
     get_cost_centers,
     get_average_prices_for_products,
-    get_material_movement_details,
-    get_material_movement_history,
     get_material_procurement_details,
     get_purchase_order_price_stats_for_products,
     get_recent_movement_materials,
 )
+from app.services import erp_history
 from app.services.effective_bom import build_project_expected_quantity_map, effective_occurrence_rows
 from app.services.house_type_links import (
     expected_quantities_for_link,
@@ -302,9 +301,11 @@ def get_production_house_starts_with_links_and_maps(
     end_date: date | None = None,
     history_days: int = 90,
     extra_project_ids: Iterable[int] = (),
+    basis: str = "factory",
 ) -> tuple[dict, dict]:
     """Like get_production_house_starts_with_links, also returning the expected
-    quantity maps it built (plus extra_project_ids), which are costly to load."""
+    quantity maps it built (plus extra_project_ids), which are costly to load.
+    `basis` picks the BOM quantity houses are expected to consume."""
 
     production = get_production_house_starts(
         settings,
@@ -320,6 +321,7 @@ def get_production_house_starts_with_links_and_maps(
     expected_maps = get_project_expected_quantity_maps(
         session,
         {link.project_id for link in links_by_key.values() if link.project_id is not None} | set(extra_project_ids),
+        basis=basis,
     )
 
     houses = []
@@ -1111,7 +1113,7 @@ def get_material_dashboard_history(
         }
     )
 
-    def loader() -> dict:
+    def loader(store_session: Session | None = None) -> dict:
         return _build_material_dashboard_history(
             settings,
             normalized_sku,
@@ -1120,7 +1122,15 @@ def get_material_dashboard_history(
             end_date=end_date,
             cost_centers=normalized_cost_centers,
             excluded_cost_centers=normalized_excluded_cost_centers,
+            session=store_session,
         )
+
+    # When our stored copy of the ERP covers the period, reading it is quicker
+    # than the response cache and never stale, so skip the cache entirely.
+    requested_end = end_date or datetime.utcnow().date()
+    requested_start = start_date or (requested_end - timedelta(days=max(int(history_days), 1) - 1))
+    if erp_history.store_covers(session, requested_start, requested_end):
+        return loader(session)
 
     return _load_material_dashboard_cache(
         session,
@@ -1141,20 +1151,23 @@ def _build_material_dashboard_history(
     end_date: date | None,
     cost_centers: list[str],
     excluded_cost_centers: list[str],
+    session: Session | None = None,
 ) -> dict:
     normalized_sku = sku.strip().upper()
-    series = get_material_movement_history(
+    series = erp_history.movement_history(
         settings,
         normalized_sku,
+        session=session,
         days=history_days,
         start_day=start_date,
         end_day=end_date,
         cost_centers=cost_centers,
         excluded_cost_centers=excluded_cost_centers,
     )
-    movement_details = get_material_movement_details(
+    movement_details = erp_history.movement_details(
         settings,
         normalized_sku,
+        session=session,
         days=history_days,
         start_day=start_date,
         end_day=end_date,

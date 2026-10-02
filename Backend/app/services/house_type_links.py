@@ -500,6 +500,8 @@ def build_links_by_key(
 def get_project_expected_quantity_maps(
     session: Session,
     project_ids: Iterable[int],
+    *,
+    basis: str = "factory",
 ) -> dict[int, dict[str, Any]]:
     """Per-project SKU quantity maps split into the general bucket (entries
     with no subtype, common to every house) and per-subtype buckets. The
@@ -520,7 +522,7 @@ def get_project_expected_quantity_maps(
             selectinload(Project.material_occurrence_modes),
         )
     ).all()
-    return {project.id: build_project_expected_quantity_map(project) for project in projects}
+    return {project.id: build_project_expected_quantity_map(project, basis) for project in projects}
 
 
 def linked_projects_bom_fingerprint(session: Session) -> str:

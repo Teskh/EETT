@@ -1,0 +1,56 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Cost model price regression</title></head><body><div id="root"></div><pre id="result">Running isolated regression. All API calls are mocked.</pre>
+<script type="module">
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+// Open /tests/browser/costModelPrices.html on the Vite dev server.
+// Every API method used by the hook is replaced; no real budget is read or saved.
+import { useCostBudget } from '../../src/pages/costModel/useCostBudget.ts';
+import { api } from '../../src/lib/api.ts';
+import { buildBudgetLine } from '../../src/pages/costModel/budget.ts';
+
+const row = { material_id: 1, sku: 'VENT0238', material_name: 'Ventana', unit: 'UN', price: 371909.86,
+  estimated_total_quantity: 1, is_auxiliary: false, instances: [], adjustments: [],
+  subtypes: [{subtype_id:null, subtype_name:'General', estimated_quantity:1}] };
+const base = {project:{id:4,name:'Test'},basis:'factory', rows:[row,{...row,material_id:2,sku:'SECOND',price:100}], subtypes:[], flat_subtypes:[],prices_pending:false};
+let state, refreshes=0, bulkSaves=0, resolveRefresh, rejectRefresh;
+api.getCostModel = async(id) => ({...base,project:{id,name:'Test'}});
+api.getCostModelPrices = () => {refreshes++;return new Promise((resolve,reject)=>{resolveRefresh=resolve;rejectRefresh=reject;});};
+const save = async(id,payload) => ({...base, project:{id,name:'Test'}, prices_pending:true, rows:[{...row,price:null,adjustments:[{...payload,id:1}]}]});
+api.upsertCostModelAdjustment = save;
+api.upsertCostModelAdjustments = (id,payloads) => {bulkSaves++;return save(id,payloads[0]);};
+function Probe({id}) {state=useCostBudget(id);return React.createElement('div',null, state.view ? `price=${state.view.rows[0].price}` : 'loading');}
+const root=createRoot(document.querySelector('#root'));
+const check=(condition,message)=>{if(!condition)throw new Error(message);};
+const until=async(condition)=>{for(let i=0;i<100;i++){if(condition())return;await new Promise(resolve=>setTimeout(resolve,20));}throw new Error('Timed out');};
+try {
+ root.render(React.createElement(Probe,{id:4}));
+ await until(()=>state?.view&&!state.loading);
+ check(refreshes===0,'Initial complete view should not need a price request');
+ const line=()=>buildBudgetLine(state.view.rows[0],null);
+ await state.saveMany([{line:line(),subtypeId:null,source:'manual',quantity:2}],null);
+ await until(()=>state?.pricesLoading&&line().quantity===2);
+ check(refreshes===1,'Save with pending prices must request a refresh');
+ check(line().estimatedCost===371909.86,'Save must retain the BOM estimate');
+ check(line().budgetCost===743819.72,'Saved quantity must retain its loaded price');
+ resolveRefresh({prices:{VENT0238:380000},prices_pending:false});
+ await until(()=>!state.pricesLoading&&line().budgetCost===760000);
+ await state.saveMany([{line:line(),subtypeId:null,source:'manual',quantity:3}],null);
+ await until(()=>state.pricesLoading&&line().quantity===3);
+ rejectRefresh(new Error('ERP unavailable'));
+ await until(()=>!state.pricesLoading&&state.priceError);
+ check(line().budgetCost===1140000,'Failed refresh must retain the valid price and saved quantity');
+ await state.saveMany([
+   {line:line(),subtypeId:null,source:'manual',quantity:4},
+   {line:buildBudgetLine({...row,material_id:2,sku:'SECOND',price:100},null),subtypeId:null,source:'manual',quantity:2},
+ ],null);
+ await until(()=>state.pricesLoading&&line().quantity===4);
+ check(bulkSaves===1&&line().budgetCost===1520000,'Bulk save must retain prices and request a refresh');
+ const stale=resolveRefresh;
+ root.render(React.createElement(Probe,{id:9}));
+ await until(()=>state?.view?.project.id===9&&!state.loading);
+ stale({prices:{VENT0238:999999},prices_pending:false});
+ await new Promise(resolve=>setTimeout(resolve,30));
+ check(state.view.rows[0].price===371909.86,'Late refresh must not change another project');
+ document.querySelector('#result').textContent='PASS: complete initial view; single and bulk saves retain prices and refresh; failed refresh preserves saved quantity and warns; late refresh cannot change another project. No real budget API calls.';
+} catch(error) {document.querySelector('#result').textContent='FAIL: '+error.stack;}
+</script></body></html>

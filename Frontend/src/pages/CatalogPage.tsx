@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 
 import { Modal } from "../components/Modal";
 import { CatalogAttributeEditor } from "../components/CatalogAttributeEditor";
@@ -57,6 +57,11 @@ const initialComponentForm: CreateComponentRequest = {
   unit_type: "",
 };
 
+const control = "border border-black/15 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 disabled:opacity-50 dark:border-white/15 dark:bg-zinc-900 dark:text-white";
+const field = "mt-0.5 block h-8 w-full border border-black/15 bg-white px-2 py-1 text-xs text-zinc-900 outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 disabled:opacity-50 dark:border-white/15 dark:bg-zinc-900 dark:text-white";
+const primaryButton = "border border-zinc-950 bg-zinc-950 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50 dark:border-white dark:bg-white dark:text-zinc-950";
+const scopeLabels: Record<string, string> = { item: "Ítem", accessory: "Accesorio", mixed: "Mixto" };
+
 function formatCondition(rule: CatalogMaterialRule) {
   if (!rule.conditions.length) {
     return <span className="text-zinc-500 text-xs italic">Siempre aplica</span>;
@@ -106,7 +111,7 @@ function CatalogTree({
   depth?: number;
 }) {
   return (
-    <ul className={depth === 0 ? "space-y-1" : "ml-5 border-l border-black/10 dark:border-white/10 mt-1 pl-3 space-y-1"}>
+    <ul className={depth === 0 ? "" : "ml-4 border-l border-black/10 pl-2 dark:border-white/10"}>
       {nodes
         .filter((node) => treeMatches(node, filterTerm))
         .map((node) => {
@@ -116,59 +121,31 @@ function CatalogTree({
             : [];
           return (
             <li key={node.id}>
-              {depth === 0 ? (
-                <div className="group/category flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onSelect(node.id)}
-                    className={`min-w-0 flex-1 flex items-center justify-between text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                      active
-                        ? "bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/5 text-zinc-900 dark:text-zinc-200 font-medium"
-                        : "hover:bg-black/5 dark:hover:bg-white/5 border border-transparent text-zinc-600 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300"
-                    }`}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <i className={`${active ? "ph-fill ph-folder-open text-accent-600 dark:text-accent-400" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} />
-                      <span className="truncate">{node.name}</span>
-                    </span>
-                    <span className="shrink-0 font-mono text-[10px] text-zinc-500">{node.component_count} ítems</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onManageCategory(node)}
-                    aria-label={`Editar o eliminar ${node.name}`}
-                    title="Editar categoría"
-                    className="pointer-events-none flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-all hover:bg-black/5 hover:text-zinc-900 focus:pointer-events-auto focus:opacity-100 group-hover/category:pointer-events-auto group-hover/category:opacity-100 dark:hover:bg-white/10 dark:hover:text-zinc-100"
-                  >
-                    <i className="ph-bold ph-dots-three" />
-                  </button>
-                </div>
-              ) : (
-                <div className="group/category flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onSelect(node.id)}
-                    className={`min-w-0 flex-1 block text-left px-2 py-1 text-sm transition-colors relative before:absolute before:w-2 before:h-px before:-left-3 before:top-1/2 ${
-                      active
-                        ? "text-accent-600 dark:text-accent-400 font-semibold before:bg-accent-600/50 dark:before:bg-accent-400/50"
-                        : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 before:bg-black/10 dark:before:bg-white/10"
-                    }`}
-                  >
-                    <span className="block truncate">{node.name}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onManageCategory(node)}
-                    aria-label={`Editar o eliminar ${node.name}`}
-                    title="Editar subcategoría"
-                    className="pointer-events-none flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-all hover:bg-black/5 hover:text-zinc-900 focus:pointer-events-auto focus:opacity-100 group-hover/category:pointer-events-auto group-hover/category:opacity-100 dark:hover:bg-white/10 dark:hover:text-zinc-100"
-                  >
-                    <i className="ph-bold ph-dots-three" />
-                  </button>
-                </div>
-              )}
+              <div className={`group/category flex items-center border-l-2 ${active ? "border-red-600 bg-zinc-100 dark:bg-white/[0.06]" : "border-transparent hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"}`}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(node.id)}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs ${
+                    active ? "font-semibold text-zinc-950 dark:text-white" : "text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100"
+                  }`}
+                >
+                  {depth === 0 ? <i className={`${active ? "ph-fill ph-folder-open text-red-600" : "ph-fill ph-folder text-zinc-400 dark:text-zinc-500"}`} aria-hidden="true" /> : null}
+                  <span className="min-w-0 flex-1 truncate">{node.name}</span>
+                  {depth === 0 ? <span className="shrink-0 font-mono text-[10px] font-normal tabular-nums text-zinc-500">{node.component_count}</span> : null}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onManageCategory(node)}
+                  aria-label={`Editar o eliminar ${node.name}`}
+                  title={depth === 0 ? "Editar categoría" : "Editar subcategoría"}
+                  className="pointer-events-none flex h-7 w-7 shrink-0 items-center justify-center text-zinc-500 opacity-0 hover:bg-black/5 hover:text-zinc-900 focus:pointer-events-auto focus:opacity-100 group-hover/category:pointer-events-auto group-hover/category:opacity-100 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+                >
+                  <i className="ph-bold ph-dots-three" />
+                </button>
+              </div>
               {matchingComponents.length ? (
-                <ul className="ml-5 mt-1 space-y-1 border-l border-black/10 pl-3 dark:border-white/10">
+                <ul className="ml-4 border-l border-black/10 pl-2 dark:border-white/10">
                   {matchingComponents.map((component) => {
                     const isAccessory = component.type === "accessory";
                     return (
@@ -176,13 +153,11 @@ function CatalogTree({
                         <button
                           type="button"
                           onClick={() => onSelectComponent(node.id, component.id)}
-                          className="relative flex w-full items-center gap-2 px-2 py-1 text-left text-sm text-zinc-600 transition-colors before:absolute before:-left-3 before:top-1/2 before:h-px before:w-2 before:bg-black/10 hover:text-zinc-900 dark:text-zinc-400 dark:before:bg-white/10 dark:hover:text-zinc-200"
+                          className="flex w-full items-center gap-2 px-2 py-1 text-left text-xs text-zinc-600 hover:bg-black/[0.03] hover:text-zinc-950 dark:text-zinc-400 dark:hover:bg-white/[0.03] dark:hover:text-zinc-100"
                         >
-                          <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"} text-zinc-400 dark:text-zinc-500`} />
+                          <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"} text-zinc-400 dark:text-zinc-500`} aria-hidden="true" />
                           <span className="min-w-0 flex-1 truncate">{component.name}</span>
-                          <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-zinc-500">
-                            {isAccessory ? "Accesorio" : "Ítem"}
-                          </span>
+                          <span className="shrink-0 text-[10px] text-zinc-500">{isAccessory ? "Accesorio" : "Ítem"}</span>
                         </button>
                       </li>
                     );
@@ -207,14 +182,18 @@ function CatalogTree({
   );
 }
 
-function ComponentCard({ component, focused, onComponentSaved, onComponentDeleted }: ComponentCardProps) {
-  const [expanded, setExpanded] = useState(focused);
-  const [saving, setSaving] = useState(false);
-  const [attributeSaving, setAttributeSaving] = useState(false);
-  const [materialSaving, setMaterialSaving] = useState(false);
-  const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
-  const isAccessory = component.type === "accessory";
-  const [form, setForm] = useState<UpdateComponentRequest>({
+/** Categories from the root down to the given one, for the breadcrumb. */
+function categoryPath(nodes: CatalogTreeNode[], categoryId: number): CatalogTreeNode[] {
+  for (const node of nodes) {
+    if (node.id === categoryId) return [node];
+    const below = categoryPath(node.children, categoryId);
+    if (below.length) return [node, ...below];
+  }
+  return [];
+}
+
+function componentForm(component: CatalogComponent): UpdateComponentRequest {
+  return {
     name: component.name,
     short_name: component.short_name || "",
     description: component.description || "",
@@ -222,18 +201,38 @@ function ComponentCard({ component, focused, onComponentSaved, onComponentDelete
     installation: component.installation || "",
     unit_type: component.unit_type || "",
     component_type: component.type,
-  });
+  };
+}
+
+type TextField = "description" | "short_description" | "installation";
+const textFields: [TextField, string][] = [["description", "Descripción"], ["short_description", "Descripción comercial"], ["installation", "Instalación"]];
+
+function SectionTitle({ icon, children, action }: { icon: string; children: ReactNode; action?: ReactNode }) {
+  return (
+    <div className="mb-2 flex items-center justify-between gap-3">
+      <h4 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+        <i className={`ph-bold ${icon}`} aria-hidden="true" /> {children}
+      </h4>
+      {action}
+    </div>
+  );
+}
+
+function ComponentCard({ component, focused, onComponentSaved, onComponentDeleted }: ComponentCardProps) {
+  const [expanded, setExpanded] = useState(focused);
+  const [saving, setSaving] = useState(false);
+  const [attributeSaving, setAttributeSaving] = useState(false);
+  const [materialSaving, setMaterialSaving] = useState(false);
+  const [materialEditorOpen, setMaterialEditorOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [textTab, setTextTab] = useState<TextField>("description");
+  const isAccessory = component.type === "accessory";
+  const [form, setForm] = useState<UpdateComponentRequest>(() => componentForm(component));
+  const dirty = JSON.stringify(form) !== JSON.stringify(componentForm(component));
+  const attributeCount = component.base_attributes.length + (isAccessory ? component.usage_attributes.length : 0);
 
   useEffect(() => {
-    setForm({
-      name: component.name,
-      short_name: component.short_name || "",
-      description: component.description || "",
-      short_description: component.short_description || "",
-      installation: component.installation || "",
-      unit_type: component.unit_type || "",
-      component_type: component.type,
-    });
+    setForm(componentForm(component));
   }, [component]);
 
   useEffect(() => {
@@ -242,45 +241,50 @@ function ComponentCard({ component, focused, onComponentSaved, onComponentDelete
     }
   }, [focused]);
 
-  async function handleSaveComponent(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true);
+  // Every save reports its failure in the card instead of failing silently.
+  async function run(setBusy: (busy: boolean) => void, action: () => Promise<void>, fallback: string) {
+    setBusy(true);
+    setError(null);
     try {
+      await action();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : fallback);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleSaveComponent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run(setSaving, async () => {
       const result = await api.updateComponent(component.id, form);
       if (result.component) {
         onComponentSaved(result.component);
       }
-    } finally {
-      setSaving(false);
-    }
+    }, "No se pudo guardar el componente.");
   }
 
-  async function handleDeleteComponent() {
-    const confirmed = window.confirm("¿Eliminar este componente del catálogo?");
+  function handleDeleteComponent() {
+    const confirmed = window.confirm(`¿Eliminar «${component.name}» del catálogo?`);
     if (!confirmed) {
       return;
     }
-    setSaving(true);
-    try {
+    void run(setSaving, async () => {
       await api.deleteComponent(component.id);
       onComponentDeleted(component.id);
-    } finally {
-      setSaving(false);
-    }
+    }, "No se pudo eliminar el componente. Si está en uso en algún proyecto, la eliminación se bloquea.");
   }
 
   async function handleSaveAttributes(scope: string, attributes: CatalogAttribute[]) {
-    setAttributeSaving(true);
-    try {
+    await run(setAttributeSaving, async () => {
       const result = await api.replaceComponentAttributes(component.id, scope, attributes);
       if (result.component) {
         onComponentSaved(result.component);
       }
-    } finally {
-      setAttributeSaving(false);
-    }
+    }, "No se pudieron guardar los atributos.");
   }
 
+  // The rule editor shows its own errors and stays open on failure, so this one rethrows.
   async function handleSaveMaterialRules(rules: CatalogMaterialRule[]) {
     setMaterialSaving(true);
     try {
@@ -293,215 +297,162 @@ function ComponentCard({ component, focused, onComponentSaved, onComponentDelete
     }
   }
 
-  async function handleMediaChange(asset: MediaAsset | null) {
-    setSaving(true);
-    try {
+  function handleMediaChange(asset: MediaAsset | null) {
+    void run(setSaving, async () => {
       const result = await api.updateComponentMedia(component.id, asset?.id ?? null);
       if (result.component) {
         onComponentSaved(result.component);
       }
-    } finally {
-      setSaving(false);
-    }
+    }, "No se pudo actualizar la imagen.");
   }
 
+  const busy = saving || attributeSaving || materialSaving;
+
   return (
-    <div id={`component-${component.id}`} className="scroll-mt-6 border-b border-black/10 dark:border-white/10 last:border-0">
-      <div 
-        className="flex items-center justify-between p-4 bg-white dark:bg-black/20 shadow-sm group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors cursor-pointer"
+    <div id={`component-${component.id}`} className={`scroll-mt-24 border-b border-black/10 dark:border-white/10 ${focused ? "bg-red-50/40 dark:bg-red-500/[0.04]" : ""}`}>
+      <button
+        type="button"
+        aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
+        className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 text-left text-xs hover:bg-black/[0.03] dark:hover:bg-white/[0.03] md:grid-cols-[auto_minmax(0,1fr)_6rem_7rem_6rem_auto] md:px-6 ${expanded ? "bg-zinc-100 dark:bg-white/[0.05]" : ""}`}
       >
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center text-zinc-600 dark:text-zinc-400">
-            <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"}`} />
-          </div>
-          <div>
-            <div className="font-bold text-zinc-900 dark:text-white text-[15px] flex items-center gap-2">
-              {component.name}
-              <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-white dark:bg-black/40 rounded text-[10px] font-mono text-zinc-500 align-middle ml-2">
-                {component.short_name || ""}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={`px-2 py-1 text-[10px] font-bold uppercase tracking-widest border rounded ${
-              isAccessory
-                ? "bg-white dark:bg-white/10 shadow-sm text-zinc-800 dark:text-zinc-300 border-black/20 dark:border-white/20"
-                : "bg-white dark:bg-black/40 text-zinc-600 dark:text-zinc-400 border-black/10 dark:border-white/10"
-            }`}
-          >
-            {isAccessory ? "ACCESORIO" : "ÍTEM"}
-          </span>
-          <div
-            className="px-3 py-1.5 text-xs font-semibold text-zinc-800 dark:text-zinc-300 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 group-hover:bg-zinc-100 dark:group-hover:bg-white/10 rounded transition-colors flex items-center gap-2"
-          >
-            <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} /> Detalles
-          </div>
-        </div>
-      </div>
+        <i className={`ph-fill ${isAccessory ? "ph-flask" : "ph-wall"} text-base text-zinc-400 dark:text-zinc-500`} aria-hidden="true" />
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-semibold text-zinc-950 dark:text-white">{component.name}</span>
+          {component.short_name ? <span className="shrink-0 border border-black/10 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-white/10">{component.short_name}</span> : null}
+        </span>
+        <span className="hidden text-zinc-500 md:block">{isAccessory ? "Accesorio" : "Ítem"}</span>
+        <span className={`hidden text-right tabular-nums md:block ${component.material_rules.length ? "text-zinc-600 dark:text-zinc-400" : "text-amber-700 dark:text-amber-400"}`}>
+          {component.material_rules.length ? `${component.material_rules.length} materiales` : "Sin materiales"}
+        </span>
+        <span className="hidden text-right tabular-nums text-zinc-500 md:block">{attributeCount} atributos</span>
+        <span className="flex items-center gap-2 text-zinc-500">
+          {busy ? <i className="ph ph-circle-notch animate-spin" aria-label="Guardando" /> : null}
+          <i className={`ph-bold ${expanded ? "ph-caret-up" : "ph-caret-down"}`} aria-hidden="true" />
+        </span>
+      </button>
       {expanded ? (
-        <div className="border-t border-black/5 dark:border-white/5 bg-white dark:bg-black/40 p-4">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">{component.description || "Sin descripción."}</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div className="flex flex-col gap-4">
-              <form className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3" onSubmit={handleSaveComponent}>
-                <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-                  <i className="ph-bold ph-pencil-simple text-zinc-500" /> Editar Componente
-                </h6>
-                <div className="flex gap-2">
-                  <input
-                    value={form.name}
-                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                    required
-                    placeholder="Nombre"
-                    className="w-2/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  />
-                  <input
-                    value={form.short_name || ""}
-                    onChange={(event) => setForm((current) => ({ ...current, short_name: event.target.value }))}
-                    placeholder="SKU"
-                    className="w-1/3 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <select
-                    value={form.component_type}
-                    onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))}
-                    className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  >
+        <div className="border-t border-black/10 bg-zinc-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.025] md:px-6">
+          {error ? <div role="alert" className="mb-3 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/20 dark:bg-red-950/20 dark:text-red-300">{error}</div> : null}
+          <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
+            <div className="min-w-0">
+              <p className="mb-0.5 text-[10px] text-zinc-500">Imagen de catálogo</p>
+              <MediaPicker value={component.media[0] || null} onChange={(asset) => handleMediaChange(asset)} tile />
+            </div>
+            <form className="flex min-w-0 flex-col gap-3" onSubmit={handleSaveComponent}>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_8rem_7rem]">
+                <label className="col-span-2 text-[10px] text-zinc-500 lg:col-span-1">Nombre
+                  <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required className={`${field} font-medium`} />
+                </label>
+                <label className="col-span-2 text-[10px] text-zinc-500 lg:col-span-1">Nombre comercial
+                  <input value={form.short_name || ""} onChange={(event) => setForm((current) => ({ ...current, short_name: event.target.value }))} className={field} />
+                </label>
+                <label className="text-[10px] text-zinc-500">Tipo
+                  <select value={form.component_type} onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))} className={field}>
                     <option value="item">Ítem</option>
                     <option value="accessory">Accesorio</option>
                   </select>
-                  <input
-                    value={form.unit_type || ""}
-                    onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))}
-                    placeholder="Tipo de unidad"
-                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  />
-                </div>
-                <textarea
-                  value={form.description || ""}
-                  onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                  rows={2}
-                  placeholder="Descripción"
-                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                />
-                <textarea
-                  value={form.short_description || ""}
-                  onChange={(event) => setForm((current) => ({ ...current, short_description: event.target.value }))}
-                  rows={2}
-                  placeholder="Descripción comercial"
-                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                />
-                <textarea
-                  value={form.installation || ""}
-                  onChange={(event) => setForm((current) => ({ ...current, installation: event.target.value }))}
-                  rows={2}
-                  placeholder="Instalación"
-                  className="description-textarea w-full bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                />
-                <div className="flex justify-between items-center mt-2">
-                  <button className="px-3 py-1.5 bg-white dark:bg-white/10 shadow-sm hover:bg-zinc-50 dark:hover:bg-white/20 text-zinc-900 dark:text-white rounded text-xs font-semibold transition-colors" type="submit" disabled={saving}>
-                    {saving ? "Guardando..." : "Guardar cambios"}
-                  </button>
-                </div>
-              </form>
-
-              <div className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-4 flex flex-col gap-3">
-                <h6 className="text-xs font-bold text-zinc-800 dark:text-zinc-300 uppercase tracking-widest flex items-center gap-2">
-                  <i className="ph-bold ph-image text-zinc-500" /> Imagen de Catálogo
-                </h6>
-                <MediaPicker value={component.media[0] || null} onChange={(asset) => void handleMediaChange(asset)} compact />
+                </label>
+                <label className="text-[10px] text-zinc-500">Unidad
+                  <input value={form.unit_type || ""} onChange={(event) => setForm((current) => ({ ...current, unit_type: event.target.value }))} placeholder="m2, set…" className={field} />
+                </label>
               </div>
-
-              <div className="flex items-center justify-between bg-red-100 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-lg p-3">
-                <span className="text-[10px] text-red-700 dark:text-red-400 font-mono">La eliminación se bloquea si está en uso.</span>
-                <button className="px-2 py-1 bg-red-200 dark:bg-red-500/20 hover:bg-red-300 dark:bg-red-500/30 text-red-700 dark:text-red-300 rounded text-xs font-semibold transition-colors flex items-center gap-1" type="button" onClick={() => void handleDeleteComponent()}>
-                  <i className="ph-bold ph-trash" /> Eliminar
+              {/* The three texts share one box; a dot marks the ones with content. */}
+              <div className="border border-black/15 bg-white focus-within:border-red-600 focus-within:ring-1 focus-within:ring-red-600 dark:border-white/15 dark:bg-zinc-900">
+                <div role="tablist" aria-label="Textos del componente" className="flex border-b border-black/10 dark:border-white/10">
+                  {textFields.map(([key, label]) => (
+                    <button key={key} type="button" role="tab" aria-selected={textTab === key} onClick={() => setTextTab(key)}
+                      className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-1.5 text-xs ${textTab === key ? "border-red-600 font-semibold text-zinc-950 dark:text-white" : "border-transparent text-zinc-500 hover:text-zinc-950 dark:hover:text-white"}`}>
+                      {label}
+                      <span aria-label={form[key] ? "con texto" : "vacío"} className={`h-1.5 w-1.5 rounded-full ${form[key] ? "bg-zinc-500" : "border border-zinc-300 dark:border-zinc-600"}`} />
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  role="tabpanel"
+                  aria-label={textFields.find(([key]) => key === textTab)?.[1]}
+                  value={form[textTab] || ""}
+                  onChange={(event) => setForm((current) => ({ ...current, [textTab]: event.target.value }))}
+                  placeholder="Sin texto."
+                  className="description-textarea block min-h-[6rem] w-full bg-transparent px-3 py-2 text-sm leading-relaxed text-zinc-900 outline-none dark:text-zinc-100"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <button className="border border-zinc-950 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 dark:border-white dark:bg-white dark:text-zinc-950" type="submit" disabled={saving || !dirty}>
+                  {saving ? "Guardando…" : "Guardar cambios"}
+                </button>
+                {dirty && !saving ? <span className="text-[10px] text-amber-700 dark:text-amber-400">Cambios sin guardar</span> : null}
+                {dirty && !saving ? <button type="button" className="text-[10px] text-zinc-500 underline" onClick={() => setForm(componentForm(component))}>Descartar</button> : null}
+                <button className="ml-auto flex items-center gap-1 text-[10px] text-zinc-500 hover:text-red-700 disabled:opacity-50 dark:hover:text-red-400" type="button" disabled={saving}
+                  title="La eliminación se bloquea si el componente está en uso en algún proyecto." onClick={handleDeleteComponent}>
+                  <i className="ph-bold ph-trash" aria-hidden="true" /> Eliminar componente
                 </button>
               </div>
-            </div>
-
-            <div>
-              <div className="space-y-5">
-                <div>
-                  <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <i className="ph-bold ph-list-dashes text-zinc-600" /> Atributos Base
-                  </h6>
-                  <CatalogAttributeEditor
-                    initialAttributes={component.base_attributes}
-                    saving={attributeSaving}
-                    onSave={(attributes) => handleSaveAttributes("base", attributes)}
-                  />
-                </div>
-                {isAccessory ? (
-                  <div>
-                    <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-                      <i className="ph-bold ph-flow-arrow text-zinc-600" /> Atributos de Uso
-                    </h6>
-                    <CatalogAttributeEditor
-                      initialAttributes={component.usage_attributes}
-                      saving={attributeSaving}
-                      onSave={(attributes) => handleSaveAttributes("usage", attributes)}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            </div>
+            </form>
           </div>
 
-          <div>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h6 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                <i className="ph-bold ph-boxes text-zinc-600" /> Reglas de Materiales
-              </h6>
-              <button
-                type="button"
-                onClick={() => setMaterialEditorOpen(true)}
-                className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 rounded text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2"
-              >
-                <i className="ph-bold ph-sliders-horizontal" />
-                Administrar materiales
-              </button>
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <div className="flex min-w-0 flex-col gap-3">
+              <div>
+                <SectionTitle icon="ph-list-dashes">Atributos base</SectionTitle>
+                <CatalogAttributeEditor
+                  initialAttributes={component.base_attributes}
+                  saving={attributeSaving}
+                  onSave={(attributes) => handleSaveAttributes("base", attributes)}
+                />
+              </div>
+              {isAccessory ? (
+                <div>
+                  <SectionTitle icon="ph-flow-arrow">Atributos de uso</SectionTitle>
+                  <CatalogAttributeEditor
+                    initialAttributes={component.usage_attributes}
+                    saving={attributeSaving}
+                    onSave={(attributes) => handleSaveAttributes("usage", attributes)}
+                  />
+                </div>
+              ) : null}
             </div>
-            <table className="w-full text-left border-collapse text-sm border border-black/10 dark:border-white/10 rounded overflow-hidden">
-              <thead className="bg-white dark:bg-black/60 border-b border-black/10 dark:border-white/10">
-                <tr>
-                  <th className="px-3 py-2 text-zinc-500 font-medium w-1/3">Material</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium w-1/4">SKU / Unidad</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium text-right w-1/4"><FactoryQuantityLabel /> por unidad</th>
-                  <th className="px-3 py-2 text-zinc-500 font-medium text-right">Condiciones</th>
-                </tr>
-              </thead>
-              <tbody className="bg-zinc-50 dark:bg-white/5 divide-y divide-white/5">
-                {component.material_rules.length ? (
-                  component.material_rules.map((rule) => (
-                    <tr key={`${rule.sku}-${rule.material_name}`} className="group hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors">
-                      <td className="px-3 py-3 text-zinc-900 dark:text-zinc-200 font-medium text-sm">
-                        {rule.material_name}
-                      </td>
-                      <td className="px-3 py-3 text-zinc-500 font-mono text-xs">
-                        {rule.sku} <br /> ({rule.unit || "-"})
-                      </td>
-                      <td className="px-3 py-3 text-right font-mono text-sm text-accent-700 dark:text-accent-400">
-                        {rule.unit_qty_per_unit ?? "n/d"}
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        <div className="flex flex-wrap justify-end gap-1">{formatCondition(rule)}</div>
-                      </td>
+
+            <div className="min-w-0">
+              <SectionTitle icon="ph-boxes" action={
+                <button type="button" onClick={() => setMaterialEditorOpen(true)} className="flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white">
+                  <i className="ph-bold ph-sliders-horizontal" aria-hidden="true" /> Administrar
+                </button>
+              }>Reglas de materiales ({component.material_rules.length})</SectionTitle>
+              <div className="overflow-x-auto border border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
+                <table className="w-full text-xs">
+                  <thead className="bg-zinc-100 text-[10px] text-zinc-500 dark:bg-zinc-900">
+                    <tr>
+                      <th className="border-b border-black/10 px-2 py-1.5 text-left font-semibold dark:border-white/10">Material</th>
+                      <th className="border-b border-black/10 px-2 py-1.5 text-right font-semibold dark:border-white/10"><FactoryQuantityLabel /> / un.</th>
+                      <th className="border-b border-black/10 px-2 py-1.5 text-right font-semibold dark:border-white/10">Condiciones</th>
                     </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="py-4 text-center text-zinc-500 font-mono text-xs">
-                      No hay reglas de materiales definidas.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {component.material_rules.length ? (
+                      component.material_rules.map((rule) => (
+                        <tr key={`${rule.sku}-${rule.material_name}`} className="border-b border-black/5 align-top last:border-0 dark:border-white/5">
+                          <td className="px-2 py-1.5">
+                            <span className="block font-medium text-zinc-900 dark:text-zinc-200">{rule.material_name}</span>
+                            <span className="font-mono text-[10px] text-zinc-500">{rule.sku} · {rule.unit || "-"}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono tabular-nums text-zinc-900 dark:text-zinc-100">{rule.unit_qty_per_unit ?? "n/d"}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            <div className="flex flex-wrap justify-end gap-1">{formatCondition(rule)}</div>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={3} className="px-2 py-4 text-center text-zinc-500">
+                          No hay reglas de materiales definidas.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
 
           <CatalogMaterialRuleEditor
@@ -800,7 +751,7 @@ function AddComponentModal({ open, onClose, form, setForm, saving, onSubmit }: {
         <div className="space-y-3">
           <div className="flex gap-3">
             <input value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required placeholder="Nombre" className="flex-1 bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
-            <input value={form.short_name || ""} onChange={(event) => setForm((current) => ({ ...current, short_name: event.target.value }))} placeholder="SKU" className="w-1/3 bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
+            <input value={form.short_name || ""} onChange={(event) => setForm((current) => ({ ...current, short_name: event.target.value }))} placeholder="Nombre comercial" className="w-1/3 bg-zinc-50 dark:bg-black/40 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono" />
           </div>
           <div className="flex gap-3">
             <select value={form.component_type} onChange={(event) => setForm((current) => ({ ...current, component_type: event.target.value }))} className="w-1/2 bg-zinc-50 dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded-lg p-2.5 text-sm text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 focus:ring-1 focus:ring-accent-500/50 transition-all font-mono">
@@ -876,24 +827,33 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [componentModalOpen, setComponentModalOpen] = useState(false);
   const [linksModalOpen, setLinksModalOpen] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<"all" | "item" | "accessory">("all");
+  const [componentFilter, setComponentFilter] = useState("");
 
+
+  // Only the latest request may update the page: fast category clicks can
+  // otherwise land out of order.
+  const loadRequest = useRef(0);
 
   async function loadCatalog() {
+    const request = ++loadRequest.current;
     setLoading(true);
     setError(null);
     try {
       const next = await api.getCatalog(categoryId);
-      setData(next);
+      if (request === loadRequest.current) setData(next);
     } catch (err) {
+      if (request !== loadRequest.current) return;
       const message = err instanceof ApiError ? err.message : "No se pudo cargar el catálogo.";
       setError(message);
     } finally {
-      setLoading(false);
+      if (request === loadRequest.current) setLoading(false);
     }
   }
 
   useEffect(() => {
     void loadCatalog();
+    setComponentFilter("");
   }, [categoryId]);
 
   useEffect(() => {
@@ -1082,158 +1042,165 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
     onNavigate(`/catalog?category_id=${nextCategoryId}#component-${componentId}`);
   }
 
+  // The previous category stays on screen while the next one loads.
+  const refreshing = loading && data !== null;
+  const pendingCategory = refreshing && categoryId !== null && selected?.id !== categoryId;
+  const path = selected && data ? categoryPath(data.tree, selected.id) : [];
+  const filteredComponents = selected
+    ? selected.components.filter((component) =>
+        (typeFilter === "all" || component.type === typeFilter) &&
+        matchesSearchText(componentFilter, component.name, component.short_name, ...component.material_rules.map((rule) => rule.sku), ...component.material_rules.map((rule) => rule.material_name)),
+      )
+    : [];
+
   return (
-    <div className="max-w-[1600px] mx-auto grid grid-cols-1 xl:grid-cols-12 gap-6">
-      <div className="xl:col-span-3 space-y-6">
-        <div className="liquid-glass rounded-2xl p-4 flex flex-col h-[500px]">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-              <i className="ph-bold ph-tree-structure" /> Taxonomía
-            </h2>
-            <i className="ph-bold ph-magnifying-glass text-zinc-600" />
+    <section className="absolute inset-0 top-16 flex flex-col overflow-auto bg-white text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 lg:overflow-hidden" aria-busy={loading}>
+      {refreshing ? <div aria-hidden="true" className="absolute inset-x-0 top-0 z-20 h-0.5 animate-pulse bg-red-600" /> : null}
+      <h1 className="sr-only">Editor de base de datos</h1>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="flex shrink-0 flex-col border-b border-black/10 dark:border-white/10 lg:w-[300px] lg:border-b-0 lg:border-r xl:w-[340px]" aria-label="Taxonomía">
+          <div className="shrink-0 border-b border-black/10 px-4 py-2 dark:border-white/10">
+            <label htmlFor="catalog-search" className="mb-1 block text-[10px] uppercase tracking-wider text-zinc-500">Taxonomía</label>
+            <SearchField
+              value={searchTerm}
+              onChange={setSearchTerm}
+              placeholder="Buscar categoría, ítem o SKU…"
+              className="relative"
+              inputClassName={`${control} w-full pr-14 text-xs`}
+            />
           </div>
-          <SearchField value={searchTerm} onChange={setSearchTerm} />
-          <div className="flex-1 overflow-y-auto pr-2">
+          <nav className="max-h-72 min-h-0 flex-1 overflow-y-auto py-1 lg:max-h-none">
             {data ? (
               data.tree.some((node) => treeMatches(node, searchTerm)) ? (
                 <CatalogTree
                   nodes={data.tree}
-                  selectedCategoryId={selected?.id || categoryId}
+                  selectedCategoryId={categoryId ?? selected?.id ?? null}
                   filterTerm={searchTerm}
                   onSelect={selectCategory}
                   onSelectComponent={selectComponent}
                   onManageCategory={openCategoryActions}
                 />
               ) : (
-                <p className="px-2 py-3 text-xs text-zinc-500">No hay categorías, ítems ni accesorios que coincidan.</p>
+                <p className="px-4 py-3 text-xs text-zinc-500">No hay categorías, ítems ni accesorios que coincidan.</p>
               )
             ) : (
-              <p className="text-xs text-zinc-500 font-mono">Cargando categorías...</p>
+              <p className="px-4 py-3 text-xs text-zinc-500" role="status">
+                <i className="ph ph-circle-notch mr-1 animate-spin align-[-1px]" aria-hidden="true" />Cargando categorías…
+              </p>
             )}
-          </div>
-        </div>
-
-        {data ? (
-          <div className="liquid-glass rounded-2xl p-5 flex flex-col gap-4">
-            <div className="flex justify-between items-end mb-2">
-              <span className="text-xs text-zinc-500 uppercase tracking-widest font-bold">Alcance Total</span>
-              <i className="ph-bold ph-chart-bar text-zinc-600 dark:text-zinc-400" />
-            </div>
+          </nav>
+          <div className="grid shrink-0 grid-cols-3 border-t border-black/10 dark:border-white/10" aria-label="Alcance total">
             {[
-              ["Categorías", data.summary.categories],
-              ["Componentes", data.summary.components],
-              ["Materiales", data.summary.materials],
+              ["Categorías", data?.summary.categories],
+              ["Componentes", data?.summary.components],
+              ["Materiales", data?.summary.materials],
             ].map(([label, value]) => (
-              <div key={label} className="flex flex-col gap-1 border-b border-black/5 dark:border-white/5 pb-3 last:border-0 last:pb-0">
-                <div className="flex justify-between items-end">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">{label}</span>
-                </div>
-                <div className="font-mono text-2xl font-bold text-zinc-900 dark:text-white tracking-tighter">{value}</div>
+              <div key={label} className="min-w-0 border-r border-black/10 px-4 py-2 last:border-r-0 dark:border-white/10">
+                <p className="truncate text-[10px] uppercase tracking-wider text-zinc-500">{label}</p>
+                <p className={`font-mono text-base font-semibold tabular-nums ${value === undefined ? "animate-pulse opacity-40" : ""}`}>{value ?? "—"}</p>
               </div>
             ))}
           </div>
-        ) : null}
-      </div>
+        </aside>
 
-      <div className="xl:col-span-9">
-        {error ? (
-          <div className="mb-4 rounded-xl border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 px-4 py-3 text-sm text-red-800 dark:text-red-200">{error}</div>
-        ) : null}
-
-        {loading ? (
-          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">Cargando catálogo...</div>
-        ) : selected && data ? (
-          <div className="flex flex-col gap-6">
-            <div className="flex items-end justify-between border-b border-black/10 dark:border-white/10 pb-4">
-              <div>
-                <h2 className="text-3xl font-bold text-zinc-900 dark:text-white tracking-tight flex items-center gap-3">
-                  {selected.name}
-                  <span className="px-2 py-0.5 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 rounded-md text-[10px] font-mono text-zinc-600 dark:text-zinc-400 align-middle uppercase">
-                    {selected.scope}
-                  </span>
-                </h2>
-                <p className="text-sm text-zinc-500 mt-1.5">{selected.description || "Sin descripción."}</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setCategoryModalOpen(true)}
-                  className="px-4 py-2 border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 rounded-lg text-sm font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2 shadow-sm"
-                >
-                  <i className="ph-bold ph-folder-plus" />
-                  Nueva Categoría
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setComponentModalOpen(true)}
-                  className="px-4 py-2 bg-accent-500 hover:bg-accent-400 text-zinc-950 border border-transparent rounded-lg text-sm font-bold transition-colors flex items-center gap-2 shadow-sm shadow-accent-500/20"
-                >
-                  <i className="ph-bold ph-cube" />
-                  Nuevo Componente
-                </button>
-              </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {error ? (
+            <div role="alert" className="shrink-0 border-b border-red-200 bg-red-50 px-6 py-2 text-xs text-red-800 dark:bg-red-950/20 dark:text-red-300">
+              {error} <button type="button" onClick={() => void loadCatalog()} className="underline">Reintentar</button>
             </div>
+          ) : null}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="liquid-glass rounded-2xl p-5 border border-black/5 dark:border-white/5">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                  <i className="ph-bold ph-folders text-zinc-600 dark:text-zinc-400" /> Subcategorías
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  {selected.child_categories.length ? (
-                    selected.child_categories.map((child) => (
-                      <button
-                        key={child.id}
-                        type="button"
-                        className="px-3 py-1.5 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/10 border border-black/10 dark:border-white/10 rounded-lg text-sm font-semibold text-zinc-800 dark:text-zinc-300 transition-colors shadow-sm"
-                        onClick={() => selectCategory(child.id)}
-                      >
-                        {child.name} <span className="text-zinc-500 font-mono text-[10px] ml-2">{child.scope}</span>
+          {!data && loading ? (
+            <div className="m-auto p-8 text-sm text-zinc-500" role="status">Cargando catálogo…</div>
+          ) : selected && data ? (
+            <>
+              <header className="shrink-0 border-b border-black/10 px-4 py-2 dark:border-white/10 md:px-6">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div className="min-w-0">
+                    <nav aria-label="Ruta" className="mb-1 flex min-w-0 items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+                      {path.slice(0, -1).map((node) => (
+                        <span key={node.id} className="flex min-w-0 items-center gap-1">
+                          <button type="button" className="truncate hover:text-zinc-950 hover:underline dark:hover:text-white" onClick={() => selectCategory(node.id)}>{node.name}</button>
+                          <i className="ph ph-caret-right" aria-hidden="true" />
+                        </span>
+                      ))}
+                      <span>{scopeLabels[selected.scope] ?? selected.scope}</span>
+                    </nav>
+                    <h2 className={`flex items-center gap-2 truncate text-lg font-semibold text-zinc-950 transition-opacity dark:text-white ${pendingCategory ? "opacity-40" : ""}`}>
+                      {selected.name}
+                      <button type="button" onClick={() => openCategoryActions(selected)} title="Editar categoría" aria-label={`Editar o eliminar ${selected.name}`}
+                        className="flex h-6 w-6 items-center justify-center text-sm font-normal text-zinc-500 hover:bg-black/5 hover:text-zinc-950 dark:hover:bg-white/10 dark:hover:text-white">
+                        <i className="ph ph-pencil-simple" aria-hidden="true" />
                       </button>
-                    ))
-                  ) : (
-                    <p className="text-sm text-zinc-500">No hay subcategorías.</p>
-                  )}
+                    </h2>
+                    {selected.description ? <p className="truncate text-xs text-zinc-500" title={selected.description}>{selected.description}</p> : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {refreshing ? (
+                      <span role="status" className="flex items-center gap-1.5 text-xs text-zinc-500">
+                        <i className="ph ph-circle-notch animate-spin" aria-hidden="true" />Cargando {pendingCategory ? "categoría" : "catálogo"}…
+                      </span>
+                    ) : null}
+                    <button type="button" onClick={() => setCategoryModalOpen(true)} disabled={pendingCategory} className={`${control} flex items-center gap-1.5 text-xs`}>
+                      <i className="ph-bold ph-folder-plus" aria-hidden="true" /> Nueva subcategoría
+                    </button>
+                    <button type="button" onClick={() => setComponentModalOpen(true)} disabled={pendingCategory} className={`${primaryButton} flex items-center gap-1.5`}>
+                      <i className="ph-bold ph-plus" aria-hidden="true" /> Nuevo componente
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              <div className="grid shrink-0 border-b border-black/10 dark:border-white/10 sm:grid-cols-2">
+                <div className="min-w-0 border-b border-black/10 px-4 py-2 dark:border-white/10 sm:border-b-0 sm:border-r md:px-6">
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-zinc-500">Subcategorías</p>
+                  <div className="flex flex-wrap gap-1">
+                    {selected.child_categories.length ? (
+                      selected.child_categories.map((child) => (
+                        <button key={child.id} type="button" onClick={() => selectCategory(child.id)}
+                          className="flex items-center gap-1.5 border border-black/10 px-2 py-1 text-xs hover:border-black/30 hover:bg-black/[0.03] dark:border-white/10 dark:hover:border-white/30 dark:hover:bg-white/[0.03]">
+                          {child.name} <span className="text-[10px] text-zinc-500">{scopeLabels[child.scope] ?? child.scope}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="py-1 text-xs text-zinc-500">No hay subcategorías.</p>
+                    )}
+                  </div>
+                </div>
+                <div className="min-w-0 px-4 py-2 md:px-6">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wider text-zinc-500">Categorías vinculadas</p>
+                    <button type="button" onClick={() => setLinksModalOpen(true)} disabled={pendingCategory} className="text-[10px] text-zinc-500 underline hover:text-zinc-950 disabled:opacity-50 dark:hover:text-white">Editar</button>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {selected.linked_categories.length ? (
+                      selected.linked_categories.map((category) => (
+                        <span key={category.id} className="flex items-center gap-1 border border-black/10 px-2 py-1 text-xs text-zinc-600 dark:border-white/10 dark:text-zinc-400">
+                          <i className="ph ph-link text-zinc-400" aria-hidden="true" />{category.name}
+                        </span>
+                      ))
+                    ) : (
+                      <p className="py-1 text-xs text-zinc-500">Ninguna</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="liquid-glass rounded-2xl p-5 border border-black/5 dark:border-white/5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                    <i className="ph-bold ph-link text-accent-600 dark:text-accent-500" /> Categorías Vinculadas
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setLinksModalOpen(true)}
-                    className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-300 transition-colors"
-                  >
-                    Editar
-                  </button>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-black/10 px-4 py-2 dark:border-white/10 md:px-6">
+                <h3 className="mr-2 text-xs font-semibold">Componentes <span className="font-normal text-zinc-500">({selected.components.length})</span></h3>
+                <div role="group" aria-label="Tipo" className="flex">
+                  {([["all", "Todos"], ["item", "Ítems"], ["accessory", "Accesorios"]] as const).map(([value, label], index) => (
+                    <button key={value} type="button" aria-pressed={typeFilter === value} onClick={() => setTypeFilter(value)}
+                      className={`border border-black/15 px-3 py-2 text-xs outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 dark:border-white/15 ${index ? "-ml-px" : ""} ${typeFilter === value ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" : "bg-white text-zinc-900 hover:bg-black/5 dark:bg-zinc-900 dark:text-white dark:hover:bg-white/5"}`}>{label}</button>
+                  ))}
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {selected.linked_categories.length ? (
-                    selected.linked_categories.map((category) => (
-                      <div key={category.id} className="px-2 py-1 bg-white dark:bg-black/40 border border-black/5 dark:border-white/5 rounded text-xs text-zinc-600 dark:text-zinc-400 font-mono shadow-sm">
-                        {category.name}
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-zinc-500">Ninguna</p>
-                  )}
-                </div>
+                <input type="search" aria-label="Filtrar componentes" placeholder="Filtrar por nombre, SKU o material…" value={componentFilter}
+                  onChange={(event) => setComponentFilter(event.target.value)} className={`${control} min-w-[7rem] flex-1 basis-40 text-xs`} />
               </div>
-            </div>
 
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-                  <i className="ph-bold ph-stack text-zinc-600 dark:text-zinc-400" /> Componentes
-                </h3>
-                <div className="text-xs font-mono text-zinc-500 bg-black/5 dark:bg-white/5 px-2 py-1 rounded-md">{selected.components.length} instancias</div>
-              </div>
-              <div className="w-full border border-black/10 dark:border-white/10 rounded-2xl overflow-hidden bg-white dark:bg-zinc-900/50 backdrop-blur-sm shadow-sm">
-                {selected.components.length ? (
-                  selected.components.map((component) => (
+              <div className={`min-h-[300px] shrink-0 overflow-auto transition-opacity lg:min-h-0 lg:flex-1 ${pendingCategory ? "pointer-events-none opacity-40" : ""}`}>
+                {filteredComponents.length ? (
+                  filteredComponents.map((component) => (
                     <ComponentCard
                       key={component.id}
                       component={component}
@@ -1247,19 +1214,23 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
                     />
                   ))
                 ) : (
-                  <div className="p-8 text-center text-zinc-500 font-mono text-sm border border-black/5 dark:border-white/5 bg-zinc-50 dark:bg-white/5 rounded-lg">
-                    Aún no hay componentes.
-                  </div>
+                  <p className="p-12 text-center text-sm text-zinc-500">
+                    {selected.components.length ? "No hay componentes que coincidan con estos filtros." : "Aún no hay componentes en esta categoría."}
+                  </p>
                 )}
               </div>
-            </div>
-            <AddCategoryModal open={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} form={categoryForm} setForm={setCategoryForm} saving={savingCategory} onSubmit={handleCreateCategory} />
-            <AddComponentModal open={componentModalOpen} onClose={() => setComponentModalOpen(false)} form={componentForm} setForm={setComponentForm} saving={savingComponent} onSubmit={handleCreateComponent} />
-            <ManageLinksModal open={linksModalOpen} onClose={() => setLinksModalOpen(false)} targets={data.link_targets} selectedLinks={selectedLinks} setSelectedLinks={setSelectedLinks} saving={savingLinks} onSave={() => void handleSaveLinks()} />
-          </div>
-        ) : (
-          <div className="liquid-glass rounded-2xl p-6 text-center text-zinc-500 font-mono text-sm">No hay categoría seleccionada.</div>
-        )}
+              <footer className="flex shrink-0 flex-wrap justify-between gap-2 border-t border-black/10 px-6 py-2 text-[10px] text-zinc-500 dark:border-white/10">
+                <span>{filteredComponents.length} de {selected.components.length} componentes</span>
+                <span>Haz clic en un componente para editarlo · Ctrl K busca en toda la taxonomía</span>
+              </footer>
+              <AddCategoryModal open={categoryModalOpen} onClose={() => setCategoryModalOpen(false)} form={categoryForm} setForm={setCategoryForm} saving={savingCategory} onSubmit={handleCreateCategory} />
+              <AddComponentModal open={componentModalOpen} onClose={() => setComponentModalOpen(false)} form={componentForm} setForm={setComponentForm} saving={savingComponent} onSubmit={handleCreateComponent} />
+              <ManageLinksModal open={linksModalOpen} onClose={() => setLinksModalOpen(false)} targets={data.link_targets} selectedLinks={selectedLinks} setSelectedLinks={setSelectedLinks} saving={savingLinks} onSave={() => void handleSaveLinks()} />
+            </>
+          ) : (
+            <div className="m-auto p-8 text-center text-sm text-zinc-500">Selecciona una categoría en la taxonomía.</div>
+          )}
+        </div>
       </div>
       <CategoryActionsModal
         target={categoryActionTarget}
@@ -1277,6 +1248,6 @@ export function CatalogPage({ categoryId, onNavigate }: CatalogPageProps) {
           setCategoryActionError(null);
         }}
       />
-    </div>
+    </section>
   );
 }

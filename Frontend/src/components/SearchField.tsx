@@ -4,10 +4,14 @@ export function SearchField({
   value,
   onChange,
   placeholder = "Buscar categorías, ítems, accesorios o SKU de material...",
+  className = "relative mb-4",
+  inputClassName = "w-full rounded-lg border border-black/10 bg-white py-1.5 pl-3 pr-16 font-mono text-sm text-zinc-800 placeholder:text-zinc-500 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/40 dark:text-zinc-300 dark:placeholder:text-zinc-600",
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  className?: string;
+  inputClassName?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -25,7 +29,7 @@ export function SearchField({
   }, []);
 
   return (
-    <div className="relative mb-4">
+    <div className={className}>
       <input
         ref={inputRef}
         type="search"
@@ -34,7 +38,7 @@ export function SearchField({
         placeholder={placeholder}
         aria-label={placeholder.replace(/\.{3}$/, "")}
         aria-keyshortcuts="Control+K Meta+K"
-        className="w-full rounded-lg border border-black/10 bg-white py-1.5 pl-3 pr-16 font-mono text-sm text-zinc-800 placeholder:text-zinc-500 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/40 dark:text-zinc-300 dark:placeholder:text-zinc-600"
+        className={inputClassName}
       />
       <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-black/10 bg-zinc-50 px-1.5 py-0.5 font-mono text-[9px] text-zinc-500 dark:border-white/10 dark:bg-white/5">
         Ctrl K

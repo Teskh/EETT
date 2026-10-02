@@ -3,11 +3,12 @@ import type { CostModelStudy } from "../../lib/types";
 import type { BudgetLine } from "./budget";
 import { formatMoney, formatQuantity, gradeDescriptions, gradeLabels, studyReasons, sourceLabels } from "./format";
 
-export function BudgetEvidence({ line, subtypeId, subtypeName, study, onClose }: {
-  line: BudgetLine; subtypeId: number | null; subtypeName: string; study: CostModelStudy | null; onClose: () => void;
+export function BudgetEvidence({ line, subtypeIds, subtypeName, study, onClose }: {
+  line: BudgetLine; subtypeIds: (number | null)[]; subtypeName: string; study: CostModelStudy | null; onClose: () => void;
 }) {
   const material = line.study;
-  const instances = line.row.instances.filter((item) => item.subtype_id === null || item.subtype_id === subtypeId);
+  const instances = line.row.instances.filter((item) => item.subtype_id === null || subtypeIds.includes(item.subtype_id));
+  const parts = line.parts && line.parts.length > 1 ? line.parts : null;
   const bars = [
     { label: "Estimada", value: line.estimate },
     { label: "Histórica", value: line.historic },
@@ -48,7 +49,9 @@ export function BudgetEvidence({ line, subtypeId, subtypeName, study, onClose }:
         </section>
         <section>
           <h3 className="font-semibold text-zinc-950 dark:text-white">Decisión guardada</h3>
-          <p className="mt-2">{sourceLabels[line.source]} · {formatQuantity(line.quantity)} {line.row.unit}/viv. · {formatMoney(line.budgetCost)}/viv.</p>
+          {parts ? <ul className="mt-2 space-y-1">{parts.map((part) => <li key={part.id ?? "general"}>
+            {part.name} <span className="text-xs text-zinc-500">({Math.round(part.weight * 100)}% de la mezcla)</span>: {sourceLabels[part.line.source]} · {formatQuantity(part.line.quantity)} {line.row.unit}/viv. · {formatMoney(part.line.budgetCost)}/viv.</li>)}</ul>
+            : <p className="mt-2">{sourceLabels[line.source]} · {formatQuantity(line.quantity)} {line.row.unit}/viv. · {formatMoney(line.budgetCost)}/viv.</p>}
           {line.adjustment?.source_range_start ? <p className="mt-1 text-xs text-zinc-500">Período utilizado: {line.adjustment.source_range_start} a {line.adjustment.source_range_end} · {line.adjustment.source_sample_houses ?? 0} viviendas</p> : null}
           {line.adjustment?.source_note ? <p className="mt-2 text-xs leading-5">{line.adjustment.source_note}</p> : null}
           {line.source === "historic_allocated" ? <p className="mt-2 text-xs text-zinc-500">La cantidad guardada se mantiene al cambiar el período. Puedes adoptar la nueva referencia desde la tabla.</p> : null}

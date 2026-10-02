@@ -136,6 +136,7 @@ from app.database import create_engine_for_url, schema_is_ready, session_scope
 from app.models import Project, ProjectComment, ProjectExportJob
 from app.seed import seed_demo_data_if_empty
 from app.services import backups as backup_service
+from app.services import erp_history as erp_history_service
 from app.services import database_sync as database_sync_service
 from app.services.audit import normalize_mutation_batch_id
 from app.services.auth import (
@@ -319,6 +320,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 logger.warning("Backup scheduler error: %s", exc)
             await asyncio.sleep(poll_seconds)
 
+    async def _run_erp_history_scheduler() -> None:
+        # Keeps our stored copy of ERP withdrawals current. Each check is cheap
+        # when nothing is due; the sync itself paces its ERP queries.
+        while True:
+            try:
+                ran = await asyncio.to_thread(erp_history_service.run_due_sync, settings, session_factory)
+                if ran:
+                    logger.info("ERP withdrawal sync: %s", ran)
+            except Exception as exc:  # pragma: no cover - defensive against scheduler errors
+                logger.warning("ERP withdrawal scheduler error: %s", exc)
+            await asyncio.sleep(60)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if settings.require_schema and not schema_is_ready(engine):
@@ -333,9 +346,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.backup_scheduler_enabled:
             backup_task = asyncio.create_task(_run_backup_scheduler())
             app.state.backup_task = backup_task
+        erp_history_task: asyncio.Task | None = None
+        if erp_history_service.sync_enabled(settings):
+            erp_history_service.allow_runs()
+            erp_history_task = asyncio.create_task(_run_erp_history_scheduler())
+            app.state.erp_history_task = erp_history_task
         try:
             yield
         finally:
+            if erp_history_task is not None:
+                erp_history_service.request_stop()
+                erp_history_task.cancel()
+                try:
+                    await erp_history_task
+                except asyncio.CancelledError:
+                    pass
             if backup_task is not None:
                 backup_task.cancel()
                 try:
@@ -2207,10 +2232,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "changed_by": material_mode.changed_by.username if material_mode and material_mode.changed_by else None,
         }
 
+    def _cost_model_basis(basis: str) -> str:
+        """Quantity basis of a cost model request: Q_fábrica, Q_obra or both."""
+        if basis not in {"factory", "work", "total"}:
+            raise HTTPException(status_code=422, detail="La base de cantidad debe ser factory, work o total.")
+        return basis
+
     @app.get("/api/v1/projects/{project_id}/cost-model", response_model=CostModelViewResponse)
     def get_project_cost_model_api(
         project_id: int,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2223,6 +2255,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings=request.app.state.settings,
             user=current_user,
             live_prices=False,
+            basis=_cost_model_basis(basis),
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2248,6 +2281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         payload: CostModelAdjustmentsBulkRequest,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2259,10 +2293,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         require_page_edit(current_user, "cost_model")
         require_project_edit(current_user, project)
         try:
-            upsert_cost_model_adjustments(session, project=project, items=[item.model_dump() for item in payload.items], actor=current_user)
+            upsert_cost_model_adjustments(
+                session, project=project, items=[{**item.model_dump(), "quantity_basis": _cost_model_basis(basis)} for item in payload.items], actor=current_user,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        view = get_cost_model_view(session, project_id, settings=request.app.state.settings, user=current_user, live_prices=False)
+        view = get_cost_model_view(session, project_id, settings=request.app.state.settings, user=current_user, live_prices=False, basis=basis)
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return view
@@ -2280,6 +2316,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         payload: CostModelStudyRequest,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2289,7 +2326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             return get_cost_model_study(
                 request.app.state.settings, session=session, project_id=project_id,
-                start_date=payload.start_date, end_date=payload.end_date,
+                start_date=payload.start_date, end_date=payload.end_date, basis=_cost_model_basis(basis),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2301,6 +2338,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         payload: CostModelSeriesRequest,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2310,7 +2348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             return get_cost_model_material_series(
                 request.app.state.settings, session=session, project_id=project_id, sku=payload.sku,
-                start_date=payload.start_date, end_date=payload.end_date,
+                start_date=payload.start_date, end_date=payload.end_date, basis=_cost_model_basis(basis),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2339,56 +2377,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return project
 
     @app.get("/api/v1/projects/{project_id}/cost-model/extras")
-    def get_project_cost_model_extras_api(project_id: int, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def get_project_cost_model_extras_api(project_id: int, basis: str = "factory", session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         from app.services.cost_model_extras import get_cost_model_extras
 
         _require_cost_model_project(session, current_user, project_id)
-        return get_cost_model_extras(session, project_id)
+        return get_cost_model_extras(session, project_id, _cost_model_basis(basis))
 
     @app.put("/api/v1/projects/{project_id}/cost-model/extras/default")
     def update_project_cost_model_extras_default_api(
-        project_id: int, payload: CostModelExtrasDefaultUpdate, session: Session = Depends(get_session), current_user=Depends(get_actor_user),
+        project_id: int, payload: CostModelExtrasDefaultUpdate, basis: str = "factory", session: Session = Depends(get_session), current_user=Depends(get_actor_user),
     ):
         from app.services.cost_model_extras import set_cost_model_extras_default
 
         _require_cost_model_edit(session, current_user, project_id)
         try:
-            return set_cost_model_extras_default(session, project_id, payload.mode)
+            return set_cost_model_extras_default(session, project_id, payload.mode, _cost_model_basis(basis))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.put("/api/v1/projects/{project_id}/cost-model/extras")
     def upsert_project_cost_model_extra_api(
-        project_id: int, payload: CostModelExtraUpsert, session: Session = Depends(get_session), current_user=Depends(get_actor_user),
+        project_id: int, payload: CostModelExtraUpsert, basis: str = "factory", session: Session = Depends(get_session), current_user=Depends(get_actor_user),
     ):
         from app.services.cost_model_extras import upsert_cost_model_extra
 
         _require_cost_model_edit(session, current_user, project_id)
         try:
-            return upsert_cost_model_extra(session, project_id, payload.model_dump(), actor=current_user)
+            return upsert_cost_model_extra(session, project_id, payload.model_dump(), actor=current_user, basis=_cost_model_basis(basis))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.delete("/api/v1/projects/{project_id}/cost-model/extras/{sku}")
-    def delete_project_cost_model_extra_api(project_id: int, sku: str, session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
+    def delete_project_cost_model_extra_api(project_id: int, sku: str, basis: str = "factory", session: Session = Depends(get_session), current_user=Depends(get_actor_user)):
         from app.services.cost_model_extras import delete_cost_model_extra
 
         _require_cost_model_edit(session, current_user, project_id)
-        return delete_cost_model_extra(session, project_id, sku)
+        return delete_cost_model_extra(session, project_id, sku, _cost_model_basis(basis))
 
     @app.get("/api/v1/cost-model/ceco-exclusions")
     def get_cost_model_ceco_exclusions_api(
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
         from app.services.cost_model_study import list_ceco_exclusions
 
         require_page_read(current_user, "cost_model")
-        return list_ceco_exclusions(session)
+        return list_ceco_exclusions(session, _cost_model_basis(basis))
 
     @app.put("/api/v1/cost-model/ceco-exclusions")
     def update_cost_model_ceco_exclusions_api(
         payload: CecoExclusionsUpdate,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2396,7 +2436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         require_page_edit(current_user, "cost_model")
         try:
-            return replace_ceco_exclusions(session, [rule.model_dump() for rule in payload.rules], actor=current_user)
+            return replace_ceco_exclusions(session, [rule.model_dump() for rule in payload.rules], actor=current_user, basis=_cost_model_basis(basis))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -2405,6 +2445,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         payload: CostModelAdjustmentUpsertRequest,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2430,6 +2471,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 source_range_end=payload.source_range_end,
                 source_sample_houses=payload.source_sample_houses,
                 source_total_consumption=payload.source_total_consumption,
+                quantity_basis=_cost_model_basis(basis),
                 actor=current_user,
             )
         except ValueError as exc:
@@ -2441,6 +2483,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings=request.app.state.settings,
             user=current_user,
             live_prices=False,
+            basis=_cost_model_basis(basis),
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2451,6 +2494,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         project_id: int,
         payload: CostModelAdjustmentDeleteRequest,
         request: Request,
+        basis: str = "factory",
         session: Session = Depends(get_session),
         current_user=Depends(get_actor_user),
     ):
@@ -2466,6 +2510,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project=project,
             material_id=payload.material_id,
             subtype_id=payload.subtype_id,
+            quantity_basis=_cost_model_basis(basis),
         )
         view = get_cost_model_view(
             session,
@@ -2473,6 +2518,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings=request.app.state.settings,
             user=current_user,
             live_prices=False,
+            basis=_cost_model_basis(basis),
         )
         if view is None:
             raise HTTPException(status_code=404, detail="Project not found")

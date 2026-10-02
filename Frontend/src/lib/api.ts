@@ -2,6 +2,7 @@ import type {
   CecoExclusions,
   CostModelExtra,
   CostModelExtras,
+  QuantityBasis,
   CostModelSeries,
   CostModelStudy,
   CostModelTimeline,
@@ -838,17 +839,17 @@ export const api = {
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  getCostModel(projectId: number) {
-    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model`);
+  getCostModel(projectId: number, basis: QuantityBasis = "factory") {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model?basis=${basis}`);
   },
-  getCostModelSeries(projectId: number, sku: string, range: { startDate: string; endDate: string }) {
-    return request<CostModelSeries>(`/api/v1/projects/${projectId}/cost-model/series`, {
+  getCostModelSeries(projectId: number, sku: string, range: { startDate: string; endDate: string }, basis: QuantityBasis = "factory") {
+    return request<CostModelSeries>(`/api/v1/projects/${projectId}/cost-model/series?basis=${basis}`, {
       method: "POST",
       body: JSON.stringify({ sku, start_date: range.startDate, end_date: range.endDate }),
     });
   },
-  getCostModelStudy(projectId: number, range: { startDate: string; endDate: string }) {
-    return request<CostModelStudy>(`/api/v1/projects/${projectId}/cost-model/study`, {
+  getCostModelStudy(projectId: number, range: { startDate: string; endDate: string }, basis: QuantityBasis = "factory") {
+    return request<CostModelStudy>(`/api/v1/projects/${projectId}/cost-model/study?basis=${basis}`, {
       method: "POST",
       body: JSON.stringify({ start_date: range.startDate, end_date: range.endDate }),
     });
@@ -856,43 +857,43 @@ export const api = {
   getCostModelTimeline(projectId: number) {
     return request<CostModelTimeline>(`/api/v1/projects/${projectId}/cost-model/timeline`);
   },
-  getCostModelExtras(projectId: number) {
-    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras`);
+  getCostModelExtras(projectId: number, basis: QuantityBasis = "factory") {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras?basis=${basis}`);
   },
-  setCostModelExtrasDefault(projectId: number, mode: CostModelExtras["default"]) {
-    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/default`, { method: "PUT", body: JSON.stringify({ mode }) });
+  setCostModelExtrasDefault(projectId: number, mode: CostModelExtras["default"], basis: QuantityBasis = "factory") {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/default?basis=${basis}`, { method: "PUT", body: JSON.stringify({ mode }) });
   },
-  upsertCostModelExtra(projectId: number, extra: Partial<CostModelExtra> & { sku: string; included: boolean }) {
-    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras`, { method: "PUT", body: JSON.stringify(extra) });
+  upsertCostModelExtra(projectId: number, extra: Partial<CostModelExtra> & { sku: string; included: boolean }, basis: QuantityBasis = "factory") {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras?basis=${basis}`, { method: "PUT", body: JSON.stringify(extra) });
   },
-  deleteCostModelExtra(projectId: number, sku: string) {
-    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/${encodeURIComponent(sku)}`, { method: "DELETE" });
+  deleteCostModelExtra(projectId: number, sku: string, basis: QuantityBasis = "factory") {
+    return request<CostModelExtras>(`/api/v1/projects/${projectId}/cost-model/extras/${encodeURIComponent(sku)}?basis=${basis}`, { method: "DELETE" });
   },
-  getCecoExclusions() {
-    return request<CecoExclusions>("/api/v1/cost-model/ceco-exclusions");
+  getCecoExclusions(basis: QuantityBasis = "factory") {
+    return request<CecoExclusions>(`/api/v1/cost-model/ceco-exclusions?basis=${basis}`);
   },
-  updateCecoExclusions(rules: CecoExclusions["rules"]) {
-    return request<CecoExclusions>("/api/v1/cost-model/ceco-exclusions", { method: "PUT", body: JSON.stringify({ rules }) });
+  updateCecoExclusions(rules: CecoExclusions["rules"], basis: QuantityBasis = "factory") {
+    return request<CecoExclusions>(`/api/v1/cost-model/ceco-exclusions?basis=${basis}`, { method: "PUT", body: JSON.stringify({ rules }) });
   },
   getCostModelPrices(projectId: number) {
-    return request<{ prices: Record<string, number | null> }>(`/api/v1/projects/${projectId}/cost-model/prices`);
+    return request<{ prices: Record<string, number | null>; prices_pending?: boolean }>(`/api/v1/projects/${projectId}/cost-model/prices`);
   },
-  upsertCostModelAdjustments(projectId: number, items: CostModelAdjustmentUpsertRequest[], mutationBatchId?: string) {
-    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments/bulk`, {
+  upsertCostModelAdjustments(projectId: number, items: CostModelAdjustmentUpsertRequest[], mutationBatchId?: string, basis: QuantityBasis = "factory") {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments/bulk?basis=${basis}`, {
       method: "PUT",
       body: JSON.stringify({ items }),
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  upsertCostModelAdjustment(projectId: number, payload: CostModelAdjustmentUpsertRequest, mutationBatchId?: string) {
-    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments`, {
+  upsertCostModelAdjustment(projectId: number, payload: CostModelAdjustmentUpsertRequest, mutationBatchId?: string, basis: QuantityBasis = "factory") {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments?basis=${basis}`, {
       method: "PUT",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),
     });
   },
-  deleteCostModelAdjustment(projectId: number, payload: CostModelAdjustmentDeleteRequest, mutationBatchId?: string) {
-    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments`, {
+  deleteCostModelAdjustment(projectId: number, payload: CostModelAdjustmentDeleteRequest, mutationBatchId?: string, basis: QuantityBasis = "factory") {
+    return request<CostModelView>(`/api/v1/projects/${projectId}/cost-model/adjustments?basis=${basis}`, {
       method: "DELETE",
       body: JSON.stringify(payload),
       headers: mutationHeaders(mutationBatchId),

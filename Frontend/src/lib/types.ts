@@ -1193,7 +1193,11 @@ export type CostModelSeries = {
   points: { date: string; actual: number; expected_target: number; expected_other: number; target_starts: number; equivalent_houses: number }[];
 };
 
+/** Which BOM quantity the cost model budgets: Q_fábrica, Q_obra or both. */
+export type QuantityBasis = "factory" | "work" | "total";
+
 export type CostModelView = {
+  basis?: QuantityBasis;
   project: {
     id: number;
     name: string;
@@ -1303,12 +1307,13 @@ export type CostModelExtra = {
   updated_at: string | null;
 };
 
-export type CostModelExtras = { stored: boolean; default: "include" | "exclude"; items: CostModelExtra[] };
+export type CostModelExtras = { stored: boolean; basis?: QuantityBasis; default: "include" | "exclude"; items: CostModelExtra[] };
 
-export type CecoExclusions = { stored: boolean; rules: { rule: string; note: string | null }[] };
+export type CecoExclusions = { stored: boolean; basis?: QuantityBasis; rules: { rule: string; note: string | null }[] };
 
 export type CostModelStudy = {
   project_id: number;
+  basis?: QuantityBasis;
   range_start: string;
   range_end: string;
   houses: {

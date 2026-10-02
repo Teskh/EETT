@@ -78,6 +78,18 @@ Un material que se retira principalmente (más de 50%) por centros excluidos que
 
 Mientras la migración no se aplique, se usan las reglas predeterminadas y no se pueden editar.
 
+### Base de cantidad: fábrica, obra o ambas
+
+La página elige qué cantidad del BOM presupuesta: `factory` (Q_fábrica, por defecto), `work` (Q_obra) o `total` (Q_fábrica + Q_obra). Todos los endpoints del modelo de costos reciben `?basis=`, y el esperado del estudio usa la misma cantidad.
+
+- Q_fábrica vacía es una cantidad faltante. Q_obra vacía significa que no se instala nada en terreno: vale cero. Con `work`, el presupuesto solo muestra los materiales con Q_obra.
+- Cada base tiene su lista de centros excluidos, sus ajustes y sus decisiones sobre materiales fuera del presupuesto. Las listas iniciales (revisión `20260927_0021`) son:
+  - `factory`: la lista anterior, que excluye 11 Obra.
+  - `work`: solo cuenta Obra. Excluye lo mismo que `factory` salvo 11, y además las áreas de fábrica: 01 Preparación de materiales, 02 Paneles, 03 Armado, 04 Terminaciones y 13 Maestranza.
+  - `total`: lo mismo que `factory`, pero sin excluir 11 Obra.
+- El histórico de Obra es menos confiable. La obra ocurre meses después del inicio en fábrica, que es la fecha con que el estudio reparte el consumo, y sus centros son por sitio (11-41-41 es Sol de Quillón; 11-16-16, Jardines). Conviene preferir la estimada o un período desplazado.
+- El gráfico de un grupo usa el esperado del Material Dashboard, que sigue Q_fábrica. Con otra base muestra solo retiros, y la comparación válida es la del resumen del grupo.
+
 ### Materiales fuera del presupuesto como líneas
 
 `GET /api/v1/projects/{project_id}/cost-model/extras` devuelve el criterio del proyecto y sus decisiones. `PUT .../extras/default` fija el criterio: `include` (se cuentan salvo que se excluyan) o `exclude` (se muestran, pero solo cuentan si se incluyen). `PUT .../extras` guarda una decisión por material y `DELETE .../extras/{sku}` la borra.
@@ -103,6 +115,7 @@ Antes de iniciar el backend actualizado, ejecuta `alembic upgrade head` desde `B
 - La revisión `20260824_0018` no cambia el esquema. Producción registra ese identificador, pero su archivo nunca llegó al repositorio, y su esquema coincide con `20260813_0017`. Esta revisión puente permite ejecutar `alembic upgrade head` en bases sincronizadas desde producción.
 - La revisión `20260923_0018` agrega `quantity_scope` a `project_cost_model_adjustments`, con el valor inicial `component`. No cambia las cantidades existentes.
 - La revisión `20260924_0019` crea `consumption_ceco_exclusions`, con las 16 reglas predeterminadas por área. También crea `project_cost_model_extras` y `project_cost_model_settings`.
+- La revisión `20260927_0021` agrega la base de cantidad (`basis` en `consumption_ceco_exclusions`, `quantity_basis` en ajustes y decisiones fuera del presupuesto). Lo existente queda como `factory`, y siembra las listas de `work` y `total`.
 
 Si la base registra una revisión que no existe en el checkout, recupera primero la cadena de migraciones correspondiente. No uses `alembic stamp` para ocultar la diferencia.
 

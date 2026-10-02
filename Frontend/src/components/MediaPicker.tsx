@@ -8,9 +8,11 @@ type MediaPickerProps = {
   value: MediaAsset | null;
   onChange: (asset: MediaAsset | null) => void;
   compact?: boolean;
+  /** A large preview with the gallery and actions below it, in the catalog's flat style. */
+  tile?: boolean;
 };
 
-export function MediaPicker({ value, onChange, compact = false }: MediaPickerProps) {
+export function MediaPicker({ value, onChange, compact = false, tile = false }: MediaPickerProps) {
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -63,6 +65,55 @@ export function MediaPicker({ value, onChange, compact = false }: MediaPickerPro
     } finally {
       setUploading(false);
     }
+  }
+
+  if (tile) {
+    const src = selectedAsset ? toAppPath(selectedAsset.uri) : null;
+    return (
+      <div className="flex flex-col gap-1.5">
+        {src ? (
+          <a href={src} target="_blank" rel="noreferrer" title="Abrir imagen en tamaño completo"
+            className="flex aspect-[4/3] w-full items-center justify-center overflow-hidden border border-black/10 bg-white hover:border-black/30 dark:border-white/10 dark:bg-zinc-950 dark:hover:border-white/30">
+            <img src={src} alt={selectedAsset?.original_filename || "Imagen"} className="h-full w-full object-contain" />
+          </a>
+        ) : (
+          <label className="flex aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center gap-1 border border-dashed border-black/15 text-xs text-zinc-400 hover:border-black/40 hover:text-zinc-600 dark:border-white/15 dark:hover:border-white/40 dark:hover:text-zinc-300">
+            <i className="ph ph-image text-3xl" aria-hidden="true" />
+            {uploading ? "Subiendo…" : "Subir imagen"}
+            <input type="file" accept="image/png,image/jpeg,image/gif" className="hidden" disabled={uploading} onChange={(event) => void handleUpload(event.target.files?.[0])} />
+          </label>
+        )}
+        <select
+          value={selectedAsset?.id || ""}
+          onChange={(event) => {
+            const id = Number(event.target.value);
+            onChange(assets.find((asset) => asset.id === id) || null);
+          }}
+          disabled={loading}
+          aria-label="Imagen de la galería"
+          className="h-7 w-full border border-black/10 bg-white px-2 text-xs text-zinc-900 outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 dark:border-white/10 dark:bg-zinc-900 dark:text-zinc-100"
+        >
+          <option value="">{loading ? "Cargando galería…" : "Sin imagen"}</option>
+          {assets.map((asset) => (
+            <option key={asset.id} value={asset.id}>
+              {asset.original_filename || `Imagen ${asset.id}`}
+            </option>
+          ))}
+        </select>
+        {selectedAsset ? (
+          <div className="flex gap-3 text-[10px] text-zinc-500">
+            <label className="cursor-pointer hover:text-zinc-950 dark:hover:text-white">
+              <i className="ph-bold ph-upload-simple mr-1" aria-hidden="true" />{uploading ? "Subiendo…" : "Subir otra"}
+              <input type="file" accept="image/png,image/jpeg,image/gif" className="hidden" disabled={uploading} onChange={(event) => void handleUpload(event.target.files?.[0])} />
+            </label>
+            <button type="button" onClick={() => onChange(null)} className="hover:text-red-700 dark:hover:text-red-400">
+              <i className="ph-bold ph-x mr-1" aria-hidden="true" />Quitar
+            </button>
+          </div>
+        ) : null}
+        {error ? <div className="text-[11px] text-red-600 dark:text-red-400">{error}</div> : null}
+      </div>
+    );
   }
 
   return (

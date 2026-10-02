@@ -9,6 +9,9 @@ from app.models import Project, ProjectBomEntry, ProjectSubtype
 from app.models.entities import MaterialMode
 
 
+# Which BOM quantity a house consumes: Q_fábrica, Q_obra or both.
+QUANTITY_BASES = ("factory", "work", "total")
+
 SUBTYPE_KIND_GROUP = "group"
 SUBTYPE_KIND_VARIANT = "variant"
 VALID_SUBTYPE_KINDS = {SUBTYPE_KIND_GROUP, SUBTYPE_KIND_VARIANT}
@@ -198,14 +201,28 @@ def build_project_instance_quantity_map(project: Project) -> dict[str, Any]:
     }
 
 
-def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
+def basis_quantity(factory: float | None, work: float | None, basis: str) -> float | None:
+    """A BOM row's quantity under a basis. Q_fábrica is required: blank is
+    missing. Q_obra is only filled for what is installed on site, so blank
+    means none. Both is Q_fábrica plus Q_obra, missing when Q_fábrica is."""
+    if basis == "work":
+        return float(work or 0.0)
+    if factory is None:
+        return None
+    return float(factory) + (float(work or 0.0) if basis == "total" else 0.0)
+
+
+def build_project_expected_quantity_map(project: Project, basis: str = "factory") -> dict[str, Any]:
     """Build the effective per-house BOM used by every production comparison.
 
     General-mode occurrences contribute to every house. Per-subtype occurrences
     resolve the nearest nonblank value along the selected variant's ancestry.
     Dormant rows are excluded. Missing values remain visible as completeness
-    warnings instead of silently becoming zero.
+    warnings instead of silently becoming zero. `basis` picks Q_fábrica
+    ("factory", the default), Q_obra ("work") or both ("total").
     """
+    if basis not in QUANTITY_BASES:
+        raise ValueError(f"Unknown quantity basis: {basis}")
 
     entries_by_occurrence: dict[tuple[int, str, int], list[ProjectBomEntry]] = defaultdict(list)
     for entry in project.bom_entries:
@@ -230,18 +247,21 @@ def build_project_expected_quantity_map(project: Project) -> dict[str, Any]:
         mode = active_occurrence_mode(entries, explicit_modes.get(key))
         if mode == MaterialMode.GENERAL.value:
             entry = next((row for row in entries if row.subtype_id is None), None)
-            if entry is None or entry.quantity is None:
+            value = basis_quantity(entry.quantity, entry.assembly_quantity, basis) if entry is not None else None
+            if value is None:
                 missing_general += 1
                 missing_general_skus.add(sku)
             else:
-                general[sku] += float(entry.quantity)
+                general[sku] += value
             continue
 
         entries_by_subtype = {int(row.subtype_id): row for row in entries if row.subtype_id is not None}
         subtype_only_occurrences += 1
         subtype_only_skus.add(sku)
         for variant in variants:
-            value, _source = inherited_entry_value(entries_by_subtype, variant, "quantity")
+            factory, _source = inherited_entry_value(entries_by_subtype, variant, "quantity")
+            work, _work_source = inherited_entry_value(entries_by_subtype, variant, "assembly_quantity")
+            value = basis_quantity(factory, work, basis)
             if value is None:
                 missing_by_subtype[variant.id] += 1
                 missing_skus[variant.id].add(sku)

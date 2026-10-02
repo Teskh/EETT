@@ -1,45 +1,72 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../lib/api";
-import type { CecoExclusions, CostModelAdjustment, CostModelExtra, CostModelExtras, CostModelStudy, CostModelTimeline, CostModelView } from "../../lib/types";
+import type { CecoExclusions, CostModelAdjustment, CostModelExtra, CostModelExtras, CostModelStudy, CostModelTimeline, CostModelView, QuantityBasis } from "../../lib/types";
 import type { BudgetLine, BudgetSource } from "./budget";
 import { gradeLabels } from "./format";
+import { mergePrices, type PriceSnapshot } from "./prices";
 import { useDashboardResource } from "../materialDashboard/useDashboardResource";
 
 export type BudgetSave = { line: BudgetLine; subtypeId: number | null; source: BudgetSource; quantity: number; note?: string | null };
 
-export function useCostBudget(projectId: number | null) {
+export function useCostBudget(projectId: number | null, basis: QuantityBasis = "factory") {
   const [view, setView] = useState<CostModelView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   // Live ERP prices arrive after the rows, which load from cached prices.
-  const [prices, setPrices] = useState<{ projectId: number; values: Record<string, number | null> } | null>(null);
+  const [prices, setPrices] = useState<PriceSnapshot | null>(null);
+  const [pricesLoading, setPricesLoading] = useState(false);
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const priceRequest = useRef(0);
   const projectRef = useRef(projectId);
   projectRef.current = projectId;
+  const basisRef = useRef(basis);
+  basisRef.current = basis;
   const saveLock = useRef(false);
   // Saves must build on the latest view, not one captured before an await.
   const viewRef = useRef(view);
   viewRef.current = view;
   const commit = (next: CostModelView | null) => { viewRef.current = next; setView(next); };
 
+  async function refreshPrices(id: number, version: number) {
+    const request = ++priceRequest.current;
+    const current = () => generation.current === version && projectRef.current === id && priceRequest.current === request;
+    setPricesLoading(true);
+    setPriceError(null);
+    try {
+      const result = await api.getCostModelPrices(id);
+      if (!current()) return;
+      setPrices((previous) => mergePrices(previous, id, result.prices));
+      if (result.prices_pending) setPriceError("No se pudieron actualizar todos los precios ERP. Se conservan los últimos precios disponibles.");
+    } catch {
+      if (current()) setPriceError("No se pudieron actualizar los precios ERP. Se conservan los últimos precios disponibles.");
+    } finally {
+      if (current()) setPricesLoading(false);
+    }
+  }
+
   useEffect(() => {
     let active = true;
-    setView(null);
+    const version = ++generation.current;
+    commit(null);
     setError(null);
+    setPriceError(null);
     if (projectId === null) { setLoading(false); return; }
     setLoading(true);
-    api.getCostModel(projectId).then((data) => {
+    api.getCostModel(projectId, basis).then((data) => {
       if (!active) return;
-      setView(data);
-      if (data.prices_pending) {
-        api.getCostModelPrices(projectId).then(({ prices: values }) => { if (active) setPrices({ projectId, values }); }).catch(() => { /* cached prices stay */ });
-      }
+      // The initial view can already contain live prices and skip the price request.
+      // Remember those too, before any quantity save replaces the view.
+      setPrices((previous) => mergePrices(previous, projectId, Object.fromEntries(data.rows.map((row) => [row.sku, row.price]))));
+      commit(data);
+      if (data.prices_pending) void refreshPrices(projectId, version);
     })
       .catch((err: Error) => { if (active) setError(err.message || "No se pudo cargar el presupuesto."); })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [projectId, revision]);
+    return () => { active = false; generation.current++; setPricesLoading(false); };
+  }, [projectId, basis, revision]);
 
   const priced = useMemo(() => {
     if (!view || prices?.projectId !== view.project.id) return view;
@@ -56,6 +83,8 @@ export function useCostBudget(projectId: number | null) {
     if (!view || projectId === null || !valid.length || saveLock.current) return false;
     saveLock.current = true;
     const previous = view;
+    const version = generation.current;
+    const isCurrent = () => generation.current === version && projectRef.current === projectId && basisRef.current === basis;
     const payloads = valid.map(({ line, subtypeId, source, quantity, note = null }) => {
       const material = line.study;
       const historic = source === "historic_allocated" && study && material;
@@ -82,11 +111,14 @@ export function useCostBudget(projectId: number | null) {
       return { ...row, adjustments: [...row.adjustments.filter((item) => !mine.some((payload) => payload.subtype_id === item.subtype_id)), ...optimistic] };
     }) });
     try {
-      const next = payloads.length === 1 ? await api.upsertCostModelAdjustment(projectId, payloads[0]) : await api.upsertCostModelAdjustments(projectId, payloads);
-      if (projectRef.current === projectId) commit(next);
+      const next = payloads.length === 1 ? await api.upsertCostModelAdjustment(projectId, payloads[0], undefined, basis) : await api.upsertCostModelAdjustments(projectId, payloads, undefined, basis);
+      if (isCurrent()) {
+        commit(next);
+        if (next.prices_pending) void refreshPrices(projectId, version);
+      }
       return true;
     } catch (err) {
-      if (projectRef.current === projectId) {
+      if (isCurrent()) {
         commit(previous);
         setError(err instanceof Error ? err.message : "No se pudo guardar la cantidad.");
       }
@@ -98,22 +130,24 @@ export function useCostBudget(projectId: number | null) {
   }
   const save = (line: BudgetLine, subtypeId: number | null, source: BudgetSource, quantity: number, study: CostModelStudy | null, note: string | null = null) =>
     saveMany([{ line, subtypeId, source, quantity, note }], study);
-  return { view: priced?.project.id === projectId ? priced : null, loading, error, saving, save, saveMany, reload: () => setRevision((value) => value + 1) };
+  // A view of another basis is still loading: never show it under this one.
+  const current = priced?.project.id === projectId && (priced.basis ?? "factory") === basis ? priced : null;
+  return { view: current, loading, pricesLoading, priceError, error, saving, save, saveMany, reload: () => setRevision((value) => value + 1) };
 }
 
-export function useCostStudy(projectId: number | null, range: { startDate: string } & { endDate: string }, policyKey: string | null) {
+export function useCostStudy(projectId: number | null, range: { startDate: string } & { endDate: string }, policyKey: string | null, basis: QuantityBasis = "factory") {
   const [revision, setRevision] = useState(0);
   // Stale-while-revalidate through the dashboard cache. The key includes the
   // exclusion policy, so editing it never serves a study computed without it.
   // Budget choices never enter the study, so saving does not invalidate it.
   const resource = useDashboardResource<CostModelStudy>({
-    cacheKey: projectId === null || policyKey === null ? null : `cost-study::v1::${projectId}::${range.startDate}::${range.endDate}::${policyKey}`,
+    cacheKey: projectId === null || policyKey === null ? null : `cost-study::v2::${basis}::${projectId}::${range.startDate}::${range.endDate}::${policyKey}`,
     refreshNonce: revision,
-    fetcher: () => api.getCostModelStudy(projectId as number, range),
+    fetcher: () => api.getCostModelStudy(projectId as number, range, basis),
     errorMessage: "No se pudo calcular la referencia histórica.",
   });
   const data = resource.data;
-  const current = data?.project_id === projectId && data.range_start === range.startDate && data.range_end === range.endDate ? data : null;
+  const current = data?.project_id === projectId && data.range_start === range.startDate && data.range_end === range.endDate && (data.basis ?? "factory") === basis ? data : null;
   return { data: current, loading: resource.loading && current === null, error: resource.error, reload: () => setRevision((value) => value + 1) };
 }
 
@@ -125,25 +159,28 @@ export function useCostTimeline(projectId: number | null) {
   });
 }
 
-export function useCecoExclusions() {
+/** The cost centers the study leaves out, one list per quantity basis. */
+export function useCecoExclusions(basis: QuantityBasis = "factory") {
   const [data, setData] = useState<CecoExclusions | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    api.getCecoExclusions().then((value) => { if (active) setData(value); })
+    setData(null);
+    setError(null);
+    api.getCecoExclusions(basis).then((value) => { if (active) setData(value); })
       .catch((err: Error) => { if (active) setError(err.message || "No se pudieron cargar los centros de costo excluidos."); });
     return () => { active = false; };
-  }, []);
+  }, [basis]);
   async function save(rules: CecoExclusions["rules"]) {
-    const next = await api.updateCecoExclusions(rules);
+    const next = await api.updateCecoExclusions(rules, basis);
     setData(next);
     return next;
   }
-  const key = data ? data.rules.map((item) => item.rule).sort().join("|") || "none" : error ? "default" : null;
+  const key = data ? `${basis}:${data.rules.map((item) => item.rule).sort().join("|") || "none"}` : error ? `${basis}:default` : null;
   return { data, error, save, key };
 }
 
-export function useCostExtras(projectId: number | null) {
+export function useCostExtras(projectId: number | null, basis: QuantityBasis = "factory") {
   const [data, setData] = useState<CostModelExtras | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -151,10 +188,10 @@ export function useCostExtras(projectId: number | null) {
     setData(null);
     setError(null);
     if (projectId === null) return;
-    api.getCostModelExtras(projectId).then((value) => { if (active) setData(value); })
+    api.getCostModelExtras(projectId, basis).then((value) => { if (active) setData(value); })
       .catch((err: Error) => { if (active) setError(err.message || "No se pudieron cargar los materiales fuera de presupuesto."); });
     return () => { active = false; };
-  }, [projectId]);
+  }, [projectId, basis]);
   async function run(action: () => Promise<CostModelExtras>) {
     setError(null);
     try { setData(await action()); return true; }
@@ -162,8 +199,8 @@ export function useCostExtras(projectId: number | null) {
   }
   return {
     data: data && projectId !== null ? data : null, error,
-    setDefault: (mode: CostModelExtras["default"]) => run(() => api.setCostModelExtrasDefault(projectId as number, mode)),
-    upsert: (extra: Partial<CostModelExtra> & { sku: string; included: boolean }) => run(() => api.upsertCostModelExtra(projectId as number, extra)),
-    reset: (sku: string) => run(() => api.deleteCostModelExtra(projectId as number, sku)),
+    setDefault: (mode: CostModelExtras["default"]) => run(() => api.setCostModelExtrasDefault(projectId as number, mode, basis)),
+    upsert: (extra: Partial<CostModelExtra> & { sku: string; included: boolean }) => run(() => api.upsertCostModelExtra(projectId as number, extra, basis)),
+    reset: (sku: string) => run(() => api.deleteCostModelExtra(projectId as number, sku, basis)),
   };
 }

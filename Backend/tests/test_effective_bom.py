@@ -3,7 +3,8 @@ from __future__ import annotations
 import unittest
 
 from app.models import Material, Project, ProjectBomEntry, ProjectSubtype
-from app.services.effective_bom import build_project_expected_quantity_map, selectable_subtypes, subtype_path
+from app.services.effective_bom import basis_quantity, build_project_expected_quantity_map, selectable_subtypes, subtype_path
+from app.services.export_projection import iter_cost_model_rows
 
 
 class EffectiveBomTests(unittest.TestCase):
@@ -126,6 +127,43 @@ class EffectiveBomTests(unittest.TestCase):
         self.assertEqual([row.id for row in selectable_subtypes(project)], [root.id, child.id])
         self.assertEqual(subtype_path(child), "THXS-A › Espejada")
         self.assertNotIn(group.id, [row.id for row in selectable_subtypes(project)])
+
+    def test_quantity_basis_picks_factory_site_or_both(self) -> None:
+        # Q_fábrica blank is missing; Q_obra blank means nothing installed on site.
+        self.assertEqual(basis_quantity(5, 2, "factory"), 5.0)
+        self.assertEqual(basis_quantity(5, 2, "work"), 2.0)
+        self.assertEqual(basis_quantity(5, 2, "total"), 7.0)
+        self.assertEqual(basis_quantity(5, None, "work"), 0.0)
+        self.assertIsNone(basis_quantity(None, 2, "total"))
+
+        project, root, child, _group, material = self._project()
+        site = Material(id=21, sku="SKU-2", name="Obra", unit="un")
+        project.bom_entries = [
+            ProjectBomEntry(id=1, project_id=project.id, instance_id=100, material_rule_id=200, material_id=material.id,
+                            material=material, subtype_id=None, quantity=4, assembly_quantity=None),
+            ProjectBomEntry(id=2, project_id=project.id, instance_id=101, material_rule_id=201, material_id=site.id,
+                            material=site, subtype_id=root.id, subtype=root, quantity=1, assembly_quantity=3),
+        ]
+        self.assertEqual(build_project_expected_quantity_map(project, "factory")["general"], {"SKU-1": 4.0})
+        work = build_project_expected_quantity_map(project, "work")
+        self.assertEqual(work["general"], {"SKU-1": 0.0})
+        self.assertEqual(work["by_subtype"][child.id], {"SKU-2": 3.0})
+        self.assertEqual(build_project_expected_quantity_map(project, "total")["by_subtype"][root.id], {"SKU-2": 4.0})
+        with self.assertRaises(ValueError):
+            build_project_expected_quantity_map(project, "obra")
+
+    def test_cost_model_rows_follow_the_basis_and_skip_what_is_not_installed_on_site(self) -> None:
+        entry = lambda quantity, work: {"subtype": None, "subtype_id": None, "effective_quantity": quantity,
+                                        "effective_quantity_state": "value" if quantity is not None else "blank",
+                                        "effective_assembly_quantity": work, "effective_assembly_quantity_state": "value" if work is not None else "blank"}
+        material = lambda sku, quantity, work: {"material_id": 1, "material_name": sku, "sku": sku, "unit": "un", "bom_entries": [entry(quantity, work)]}
+        data = {"categories": [{"name": "Obra gruesa", "instances": [{"id": 1, "name": "Muro", "materials": [
+            material("FAB", 4, None), material("OBRA", 2, 3), material("BLANK", None, None),
+        ]}]}]}
+        rows = lambda basis: {row["sku"]: (row["quantity"], row["quantity_state"]) for row in iter_cost_model_rows(data, basis)}
+        self.assertEqual(rows("factory"), {"FAB": (4, "value"), "OBRA": (2, "value"), "BLANK": (None, "blank")})
+        self.assertEqual(rows("work"), {"OBRA": (3.0, "value")})
+        self.assertEqual(rows("total"), {"FAB": (4.0, "value"), "OBRA": (5.0, "value"), "BLANK": (None, "blank")})
 
 
 if __name__ == "__main__":

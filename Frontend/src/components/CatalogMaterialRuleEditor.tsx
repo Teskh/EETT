@@ -464,9 +464,9 @@ export function CatalogMaterialRuleEditor({
 
   function renderSearchDropdown(ruleLocalId: string) {
     return (
-      <div className="absolute z-20 mt-2 w-full rounded-xl border border-black/10 bg-white p-2 shadow-xl dark:border-white/10 dark:bg-zinc-900">
+      <div className="absolute left-0 z-20 mt-1 w-full min-w-[22rem] border border-black/15 bg-white p-1 shadow-lg dark:border-white/15 dark:bg-zinc-900">
         {searchLoading ? (
-          <div className="px-2 py-3 text-xs font-mono text-zinc-500">Buscando materiales...</div>
+          <div className="px-2 py-2 text-xs text-zinc-500">Buscando materiales…</div>
         ) : searchResults.length ? (
           <div className="flex max-h-56 flex-col overflow-y-auto">
             {searchResults.map((result) => (
@@ -477,28 +477,32 @@ export function CatalogMaterialRuleEditor({
                   event.preventDefault();
                   applySearchResult(ruleLocalId, result);
                 }}
-                className="flex items-start justify-between rounded-lg px-2 py-2 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-white/5"
+                className="flex items-start justify-between gap-3 px-2 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-white/5"
               >
                 <div>
-                  <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{result.name}</div>
-                  <div className="text-[11px] font-mono text-zinc-500">
+                  <div className="text-xs font-medium text-zinc-900 dark:text-zinc-100">{result.name}</div>
+                  <div className="font-mono text-[10px] text-zinc-500">
                     {result.sku} {result.unit ? `(${result.unit})` : ""}
                   </div>
                 </div>
-                <span className="rounded border border-black/10 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wide text-zinc-500 dark:border-white/10 dark:bg-white/5">
+                <span className="shrink-0 border border-black/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500 dark:border-white/10">
                   {result.source}
                 </span>
               </button>
             ))}
           </div>
         ) : (
-          <div className="px-2 py-3 text-xs font-mono text-zinc-500">
+          <div className="px-2 py-2 text-xs text-zinc-500">
             No hay coincidencias para "{searchTerm}".
           </div>
         )}
       </div>
     );
   }
+
+  const control = "h-8 w-full border border-black/15 bg-white px-2 text-xs text-zinc-900 outline-none focus:border-red-600 focus:ring-1 focus:ring-red-600 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-100";
+  const iconButton = "flex h-7 w-7 shrink-0 items-center justify-center text-zinc-400 hover:bg-black/5 hover:text-zinc-950 disabled:invisible dark:hover:bg-white/10 dark:hover:text-white";
+  const clauseColumns = "grid grid-cols-[2.25rem_minmax(0,11rem)_8.5rem_minmax(0,1fr)_1.75rem] items-center gap-1.5";
 
   return (
     <Modal
@@ -508,162 +512,92 @@ export function CatalogMaterialRuleEditor({
       onClose={onClose}
       panelClassName="max-w-6xl"
     >
-      <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-4 rounded-xl border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 p-4">
-          <div className="space-y-1">
-            <p className="text-sm text-zinc-700 dark:text-zinc-300">
-              Relaciona materiales con este componente de catálogo usando reglas agrupadas. Las cláusulas dentro de un grupo se combinan con Y; los grupos se combinan con O.
-            </p>
-            <p className="text-[11px] font-mono text-zinc-500">
-              La búsqueda usa primero los materiales guardados del catálogo y también puede mostrar coincidencias ERP cuando la conexión está configurada.
-            </p>
-          </div>
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-zinc-500">
+            Cada material se incluye siempre o cuando se cumple alguna de sus condiciones: dentro de un grupo se combinan con <b className="font-semibold text-zinc-700 dark:text-zinc-300">Y</b>, entre grupos con <b className="font-semibold text-zinc-700 dark:text-zinc-300">O</b>.
+          </p>
           <button
             type="button"
             onClick={addRule}
-            className="shrink-0 rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-black/30 px-3 py-2 text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors hover:bg-zinc-50 dark:hover:bg-white/5"
+            className="flex shrink-0 items-center gap-1.5 border border-black/15 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-900 hover:bg-zinc-50 dark:border-white/15 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-white/5"
           >
-            <i className="ph-bold ph-plus mr-1" />
-            Agregar material
+            <i className="ph-bold ph-plus" aria-hidden="true" /> Agregar material
           </button>
         </div>
 
         {error ? (
-          <div className="rounded-xl border border-red-200 bg-red-100 px-4 py-3 text-sm text-red-800 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+          <div role="alert" className="border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-500/20 dark:bg-red-950/20 dark:text-red-300">
             {error}
           </div>
         ) : null}
 
-        <div className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1">
+        <div className="max-h-[65vh] overflow-y-auto border border-black/10 dark:border-white/10">
           {rules.length ? (
-            rules.map((rule, ruleIndex) => {
-              const searchOpen = searchState?.ruleLocalId === rule.local_id;
-              return (
-                <article
-                  key={rule.local_id}
-                  className="rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 p-4 shadow-sm"
-                >
-                  <div className="mb-4 flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Material {ruleIndex + 1}
-                      </p>
-                      <h4 className="text-base font-bold text-zinc-900 dark:text-white">
-                        {rule.material_name || "Nueva regla de material"}
-                      </h4>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => moveRule(rule.local_id, -1)}
-                        className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 px-2 py-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:bg-white/5 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-200"
-                        title="Mover arriba"
-                      >
-                        <i className="ph-bold ph-caret-up" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => moveRule(rule.local_id, 1)}
-                        className="rounded-lg border border-black/10 dark:border-white/10 bg-zinc-50 px-2 py-1 text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:bg-white/5 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-200"
-                        title="Mover abajo"
-                      >
-                        <i className="ph-bold ph-caret-down" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeRule(rule.local_id)}
-                        className="rounded-lg border border-red-200 bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 transition-colors hover:bg-red-200 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-12">
-                    <div className="relative md:col-span-4">
-                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Nombre del material
-                      </label>
-                      <input
-                        value={rule.material_name}
-                        onChange={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
-                        onFocus={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
-                        placeholder="Buscar en ERP o materiales existentes"
-                        className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                      />
-                      {searchOpen && searchState?.field === "material_name" ? renderSearchDropdown(rule.local_id) : null}
-                    </div>
-
-                    <div className="relative md:col-span-3">
-                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        SKU
-                      </label>
-                      <input
-                        value={rule.sku}
-                        onChange={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
-                        onFocus={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
-                        placeholder="Código ERP"
-                        className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm font-mono text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                      />
-                      {searchOpen && searchState?.field === "sku" ? renderSearchDropdown(rule.local_id) : null}
-                    </div>
-
-                    <div className="md:col-span-2">
-                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        Unidad
-                      </label>
+            <>
+              <div className="sticky top-0 z-10 grid grid-cols-[1.75rem_minmax(0,1fr)_9rem_5rem_6.5rem_5.5rem] gap-2 border-b border-black/10 bg-zinc-100 px-3 py-1.5 text-[10px] font-semibold text-zinc-500 dark:border-white/10 dark:bg-zinc-900">
+                <span>#</span><span>Material</span><span>SKU</span><span>Unidad</span><span className="text-right"><FactoryQuantityLabel /> / un.</span><span />
+              </div>
+              {rules.map((rule, ruleIndex) => {
+                const searchOpen = searchState?.ruleLocalId === rule.local_id;
+                const conditional = rule.conditions.some((group) => group.clauses.length > 0);
+                return (
+                  <article key={rule.local_id} className="group/rule border-b border-black/10 px-3 py-2 last:border-0 dark:border-white/10">
+                    <div className="grid grid-cols-[1.75rem_minmax(0,1fr)_9rem_5rem_6.5rem_5.5rem] items-center gap-2">
+                      <span className="font-mono text-[10px] tabular-nums text-zinc-400">{ruleIndex + 1}</span>
+                      <div className="relative">
+                        <input
+                          value={rule.material_name}
+                          onChange={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
+                          onFocus={(event) => handleSearchInput(rule.local_id, "material_name", event.target.value)}
+                          placeholder="Buscar en ERP o materiales existentes"
+                          aria-label="Nombre del material"
+                          className={`${control} font-medium`}
+                        />
+                        {searchOpen && searchState?.field === "material_name" ? renderSearchDropdown(rule.local_id) : null}
+                      </div>
+                      <div className="relative">
+                        <input
+                          value={rule.sku}
+                          onChange={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
+                          onFocus={(event) => handleSearchInput(rule.local_id, "sku", event.target.value)}
+                          placeholder="Código ERP"
+                          aria-label="SKU"
+                          className={`${control} font-mono`}
+                        />
+                        {searchOpen && searchState?.field === "sku" ? renderSearchDropdown(rule.local_id) : null}
+                      </div>
                       <input
                         value={rule.unit}
                         onChange={(event) => updateRule(rule.local_id, { unit: event.target.value })}
-                        placeholder="EA, M2, KG"
-                        className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm font-mono text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
+                        placeholder="EA, M2…"
+                        aria-label="Unidad"
+                        className={`${control} font-mono`}
                       />
-                    </div>
-
-                    <div className="md:col-span-3">
-                      <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                        <FactoryQuantityLabel /> por unidad
-                      </label>
                       <input
                         value={rule.unit_qty_per_unit}
                         onChange={(event) => updateRule(rule.local_id, { unit_qty_per_unit: event.target.value })}
                         placeholder="Opcional"
-                        className="w-full rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm font-mono text-zinc-900 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
+                        aria-label="Cantidad de fábrica por unidad"
+                        inputMode="decimal"
+                        className={`${control} text-right font-mono tabular-nums`}
                       />
+                      <div className="flex justify-end opacity-40 focus-within:opacity-100 group-hover/rule:opacity-100">
+                        <button type="button" onClick={() => moveRule(rule.local_id, -1)} disabled={ruleIndex === 0} className={iconButton} title="Mover arriba" aria-label="Mover arriba">
+                          <i className="ph-bold ph-caret-up" />
+                        </button>
+                        <button type="button" onClick={() => moveRule(rule.local_id, 1)} disabled={ruleIndex === rules.length - 1} className={iconButton} title="Mover abajo" aria-label="Mover abajo">
+                          <i className="ph-bold ph-caret-down" />
+                        </button>
+                        <button type="button" onClick={() => removeRule(rule.local_id)} className={`${iconButton} hover:text-red-600 dark:hover:text-red-400`} title="Eliminar material" aria-label="Eliminar material">
+                          <i className="ph-bold ph-trash" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="mt-3 rounded-xl border border-dashed border-black/10 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-white/10 dark:bg-white/5 dark:text-zinc-300">
-                    {summarizeRule(rule)}
-                  </div>
-
-                  <div className="mt-4 flex flex-col gap-3">
-                    {rule.conditions.map((group, groupIndex) => (
-                      <section
-                        key={group.local_id}
-                        className="rounded-xl border border-black/10 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/5"
-                      >
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                              Grupo O {groupIndex + 1}
-                            </p>
-                            <input
-                              value={group.group}
-                              onChange={(event) => updateGroup(rule.local_id, group.local_id, { group: event.target.value })}
-                              className="mt-1 w-40 rounded-md border border-black/10 bg-white px-2 py-1 text-xs font-mono text-zinc-700 focus:border-accent-500/50 focus:outline-none dark:border-white/10 dark:bg-black/20 dark:text-zinc-200"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeGroup(rule.local_id, group.local_id)}
-                            className="rounded-lg border border-red-200 bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 transition-colors hover:bg-red-200 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
-                          >
-                            Eliminar grupo
-                          </button>
-                        </div>
-
-                        <div className="flex flex-col gap-2">
+                    <div className="ml-[2.25rem] mt-1.5 flex flex-col gap-1.5">
+                      {rule.conditions.map((group, groupIndex) => group.clauses.length || rule.conditions.length > 1 ? (
+                        <section key={group.local_id} className="group/group border-l-2 border-black/10 pl-2 dark:border-white/15">
                           {group.clauses.map((clause, clauseIndex) => {
                             const attributeMeta = getAttributeMeta(clause.attribute_name, attributeChoices);
                             const operatorIsBetween = clause.operator === "BETWEEN";
@@ -672,168 +606,125 @@ export function CatalogMaterialRuleEditor({
                               clause.operator === "=" &&
                               attributeMeta?.value_type === "select" &&
                               Boolean(attributeMeta.options.length);
+                            const update = (next: Partial<EditableClause>) => updateClause(rule.local_id, group.local_id, clause.local_id, next);
 
                             return (
-                              <div
-                                key={clause.local_id}
-                                className="rounded-lg border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-black/20"
-                              >
-                                <div className="mb-2 flex items-center justify-between gap-3">
-                                  <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">
-                                    {clauseIndex === 0 ? "Si" : "Y"}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeClause(rule.local_id, group.local_id, clause.local_id)}
-                                    className="rounded border border-black/10 px-2 py-0.5 text-[10px] font-semibold text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-white/10 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-zinc-200"
-                                  >
-                                    Eliminar
-                                  </button>
-                                </div>
-
-                                <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
-                                  <select
-                                    value={clause.attribute_name}
-                                    onChange={(event) =>
-                                      updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                        attribute_name: event.target.value,
-                                        comparison_value: "",
-                                        comparison_value_secondary: "",
-                                      })
-                                    }
-                                    className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-4 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                  >
-                                    <option value="">Atributo</option>
-                                    {attributeChoices.map((attribute) => (
-                                      <option key={attribute.name} value={attribute.name}>
-                                        {attribute.name}
+                              <div key={clause.local_id} className={`${clauseColumns} py-0.5`}>
+                                <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                                  {clauseIndex > 0 ? "y" : groupIndex > 0 ? "o si" : "si"}
+                                </span>
+                                <select
+                                  value={clause.attribute_name}
+                                  onChange={(event) => update({ attribute_name: event.target.value, comparison_value: "", comparison_value_secondary: "" })}
+                                  aria-label="Atributo"
+                                  className={control}
+                                >
+                                  <option value="">Atributo</option>
+                                  {attributeChoices.map((attribute) => (
+                                    <option key={attribute.name} value={attribute.name}>
+                                      {attribute.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={clause.operator}
+                                  onChange={(event) => update({ operator: event.target.value, comparison_value: "", comparison_value_secondary: "" })}
+                                  aria-label="Operador"
+                                  className={control}
+                                >
+                                  {OPERATORS.map((operator) => (
+                                    <option key={operator.value} value={operator.value}>
+                                      {operator.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                {operatorNeedsNoValue ? (
+                                  <span className="text-[10px] text-zinc-400">Sin valor de comparación</span>
+                                ) : useSelectValue ? (
+                                  <select value={clause.comparison_value} onChange={(event) => update({ comparison_value: event.target.value })} aria-label="Valor" className={control}>
+                                    <option value="">Valor</option>
+                                    {attributeMeta?.options.map((option) => (
+                                      <option key={option} value={option}>
+                                        {option}
                                       </option>
                                     ))}
                                   </select>
-
-                                  <select
-                                    value={clause.operator}
-                                    onChange={(event) =>
-                                      updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                        operator: event.target.value,
-                                        comparison_value: "",
-                                        comparison_value_secondary: "",
-                                      })
-                                    }
-                                    className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-3 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                  >
-                                    {OPERATORS.map((operator) => (
-                                      <option key={operator.value} value={operator.value}>
-                                        {operator.label}
-                                      </option>
-                                    ))}
-                                  </select>
-
-                                  {operatorNeedsNoValue ? (
-                                    <div className="flex items-center rounded-lg border border-dashed border-black/10 bg-zinc-50 px-3 text-xs text-zinc-500 md:col-span-5 dark:border-white/10 dark:bg-black/10">
-                                      No se requiere valor de comparación.
-                                    </div>
-                                  ) : useSelectValue ? (
-                                    <select
-                                      value={clause.comparison_value}
-                                      onChange={(event) =>
-                                        updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                          comparison_value: event.target.value,
-                                        })
-                                      }
-                                      className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-5 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                    >
-                                      <option value="">Valor</option>
-                                      {attributeMeta?.options.map((option) => (
-                                        <option key={option} value={option}>
-                                          {option}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  ) : operatorIsBetween ? (
-                                    <>
-                                      <input
-                                        value={clause.comparison_value}
-                                        onChange={(event) =>
-                                          updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                            comparison_value: event.target.value,
-                                          })
-                                        }
-                                        placeholder="Desde"
-                                        className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-2 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                      />
-                                      <input
-                                        value={clause.comparison_value_secondary}
-                                        onChange={(event) =>
-                                          updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                            comparison_value_secondary: event.target.value,
-                                          })
-                                        }
-                                        placeholder="Hasta"
-                                        className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-3 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                      />
-                                    </>
-                                  ) : (
-                                    <input
-                                      value={clause.comparison_value}
-                                      onChange={(event) =>
-                                        updateClause(rule.local_id, group.local_id, clause.local_id, {
-                                          comparison_value: event.target.value,
-                                        })
-                                      }
-                                      placeholder={clause.operator === "IN" ? "Valores separados por coma" : "Valor"}
-                                      className="rounded-lg border border-black/10 bg-zinc-50 p-2 text-sm text-zinc-900 focus:border-accent-500/50 focus:outline-none md:col-span-5 dark:border-white/10 dark:bg-black/30 dark:text-zinc-100"
-                                    />
-                                  )}
-                                </div>
+                                ) : operatorIsBetween ? (
+                                  <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5">
+                                    <input value={clause.comparison_value} onChange={(event) => update({ comparison_value: event.target.value })} placeholder="Desde" aria-label="Desde" className={control} />
+                                    <span className="text-[10px] text-zinc-500">y</span>
+                                    <input value={clause.comparison_value_secondary} onChange={(event) => update({ comparison_value_secondary: event.target.value })} placeholder="Hasta" aria-label="Hasta" className={control} />
+                                  </div>
+                                ) : (
+                                  <input
+                                    value={clause.comparison_value}
+                                    onChange={(event) => update({ comparison_value: event.target.value })}
+                                    placeholder={clause.operator === "IN" ? "Valores separados por coma" : "Valor"}
+                                    aria-label="Valor"
+                                    className={control}
+                                  />
+                                )}
+                                <button type="button" onClick={() => removeClause(rule.local_id, group.local_id, clause.local_id)} className={`${iconButton} hover:text-red-600 dark:hover:text-red-400`} title="Quitar condición" aria-label="Quitar condición">
+                                  <i className="ph-bold ph-x text-xs" />
+                                </button>
                               </div>
                             );
                           })}
-                        </div>
-
-                        <div className="mt-3">
-                          <button
-                            type="button"
-                            onClick={() => addClause(rule.local_id, group.local_id)}
-                            className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-800 transition-colors hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:text-zinc-200 dark:hover:bg-white/5"
-                          >
-                            <i className="ph-bold ph-plus mr-1" />
-                            Agregar cláusula Y
-                          </button>
-                        </div>
-                      </section>
-                    ))}
-
-                    <button
-                      type="button"
-                      onClick={() => addGroup(rule.local_id)}
-                      className="self-start rounded-lg border border-black/10 bg-zinc-50 px-3 py-1.5 text-xs font-semibold text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10"
-                    >
-                      <i className="ph-bold ph-plus mr-1" />
-                      Agregar grupo O
-                    </button>
-                  </div>
-                </article>
-              );
-            })
+                          <div className="flex items-center gap-3 pl-[2.625rem] text-[10px] text-zinc-500">
+                            <button type="button" onClick={() => addClause(rule.local_id, group.local_id)} className="hover:text-zinc-950 dark:hover:text-white">+ y…</button>
+                            <label className="flex items-center gap-1 opacity-0 focus-within:opacity-100 group-hover/group:opacity-100" title="Identificador interno del grupo">
+                              Grupo
+                              <input
+                                value={group.group}
+                                onChange={(event) => updateGroup(rule.local_id, group.local_id, { group: event.target.value })}
+                                aria-label="Nombre del grupo"
+                                className="w-24 border-b border-black/10 bg-transparent font-mono outline-none focus:border-red-600 dark:border-white/15"
+                              />
+                            </label>
+                            <button type="button" onClick={() => removeGroup(rule.local_id, group.local_id)} className="opacity-0 hover:text-red-600 focus:opacity-100 group-hover/group:opacity-100 dark:hover:text-red-400">
+                              Eliminar grupo
+                            </button>
+                          </div>
+                        </section>
+                      ) : null)}
+                      <div className="flex items-center gap-3 text-[10px] text-zinc-500">
+                        {!conditional ? <span className="text-zinc-400">Siempre aplica</span> : null}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const empty = rule.conditions.find((group) => !group.clauses.length);
+                            if (!conditional && empty) addClause(rule.local_id, empty.local_id);
+                            else addGroup(rule.local_id);
+                          }}
+                          className="hover:text-zinc-950 dark:hover:text-white"
+                        >
+                          {conditional ? "+ o si…" : "+ Condición"}
+                        </button>
+                        {conditional ? <span className="min-w-0 truncate text-zinc-400" title={summarizeRule(rule)}>{summarizeRule(rule)}</span> : null}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </>
           ) : (
-            <div className="rounded-2xl border border-dashed border-black/10 p-8 text-center text-sm text-zinc-500 dark:border-white/10">
+            <div className="p-8 text-center text-sm text-zinc-500">
               No hay reglas de materiales definidas para este componente.
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-black/10 pt-4 dark:border-white/10">
-          <p className="text-[11px] font-mono text-zinc-500">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[10px] text-zinc-500">
             {liveErpAvailable
-              ? "La búsqueda ERP está disponible para autocompletar SKU."
-              : "La búsqueda ERP no está configurada, por lo que la búsqueda se limita a materiales guardados del catálogo."}
+              ? "La búsqueda incluye materiales del ERP."
+              : "Búsqueda limitada a materiales guardados del catálogo: el ERP no está configurado."}
           </p>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-sm font-semibold text-zinc-800 transition-colors hover:bg-zinc-100 dark:border-white/10 dark:bg-white/5 dark:text-zinc-200 dark:hover:bg-white/10"
+              className="border border-black/15 px-3 py-1.5 text-xs font-semibold text-zinc-800 hover:bg-zinc-50 dark:border-white/15 dark:text-zinc-200 dark:hover:bg-white/5"
             >
               Cerrar
             </button>
@@ -841,9 +732,9 @@ export function CatalogMaterialRuleEditor({
               type="button"
               disabled={saving}
               onClick={() => void handleSave()}
-              className="rounded-lg bg-accent-500 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-accent-400 disabled:opacity-60"
+              className="border border-zinc-950 bg-zinc-950 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 dark:border-white dark:bg-white dark:text-zinc-950"
             >
-              {saving ? "Guardando..." : "Guardar reglas de materiales"}
+              {saving ? "Guardando…" : "Guardar reglas"}
             </button>
           </div>
         </div>

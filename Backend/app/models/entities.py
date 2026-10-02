@@ -1094,6 +1094,7 @@ class ProjectCostModelAdjustment(Base):
         Index(
             "uq_project_cost_model_adjustments_general",
             "project_id",
+            "quantity_basis",
             "material_id",
             unique=True,
             postgresql_where=text("subtype_id IS NULL"),
@@ -1101,6 +1102,7 @@ class ProjectCostModelAdjustment(Base):
         Index(
             "uq_project_cost_model_adjustments_subtype",
             "project_id",
+            "quantity_basis",
             "material_id",
             "subtype_id",
             unique=True,
@@ -1115,6 +1117,8 @@ class ProjectCostModelAdjustment(Base):
         ForeignKey("project_subtypes.id", ondelete="CASCADE"), default=None
     )
     adjusted_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    # "factory" (Q_fábrica), "work" (Q_obra) or "total": the budget this adjustment belongs to.
+    quantity_basis: Mapped[str] = mapped_column(String(10), default="factory", server_default="factory", nullable=False)
     quantity_scope: Mapped[str] = mapped_column(String(20), default="component", server_default="component", nullable=False)
     source_kind: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
     source_note: Mapped[str | None] = mapped_column(Text, default=None)
@@ -1142,10 +1146,11 @@ class ProjectCostModelExtra(Base):
     budget. Without a pinned quantity it follows the study period."""
 
     __tablename__ = "project_cost_model_extras"
-    __table_args__ = (UniqueConstraint("project_id", "sku"),)
+    __table_args__ = (UniqueConstraint("project_id", "quantity_basis", "sku", name="uq_project_cost_model_extras_basis_sku"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    quantity_basis: Mapped[str] = mapped_column(String(10), default="factory", server_default="factory", nullable=False)
     sku: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255), default=None)
     unit: Mapped[str | None] = mapped_column(String(40), default=None)
@@ -1172,12 +1177,14 @@ class ProjectCostModelSetting(Base):
 
 class ConsumptionCecoExclusion(Base):
     """A cost center rule left out of historic consumption: "05" (area),
-    "*-34" (site in any area) or an exact center code."""
+    "*-34" (site in any area) or an exact center code. Each quantity basis
+    (factory, work, total) has its own list."""
 
     __tablename__ = "consumption_ceco_exclusions"
-    __table_args__ = (UniqueConstraint("rule"),)
+    __table_args__ = (UniqueConstraint("basis", "rule", name="uq_consumption_ceco_exclusions_basis_rule"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    basis: Mapped[str] = mapped_column(String(10), default="factory", server_default="factory", nullable=False)
     rule: Mapped[str] = mapped_column(String(20), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, default=None)
     created_by_user_id: Mapped[int | None] = mapped_column(
@@ -1379,3 +1386,53 @@ class MaterialDashboardCacheEntry(Base):
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ErpWithdrawal(Base):
+    """Our stored copy of the ERP's production withdrawals ("Guía de Salida"):
+    one row per withdrawal document and material. Past rows are kept and
+    re-checked on a schedule instead of being fetched again on every request."""
+
+    __tablename__ = "erp_withdrawals"
+    __table_args__ = (
+        UniqueConstraint("document_number", "sku"),
+        Index("ix_erp_withdrawals_sku_date", "sku", "movement_date"),
+        Index("ix_erp_withdrawals_date", "movement_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    movement_date: Mapped[date] = mapped_column(Date, nullable=False)
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    cost_center: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    cost_center_name: Mapped[str | None] = mapped_column(String(255), default=None)
+    request_note: Mapped[str | None] = mapped_column(Text, default=None)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    value: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    line_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ErpProduct(Base):
+    """Name and unit of each material seen in the stored withdrawals."""
+
+    __tablename__ = "erp_products"
+
+    sku: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(40), default=None)
+
+
+class ErpSyncState(Base):
+    """Which days the stored ERP copy covers and when each kind of sync last ran."""
+
+    __tablename__ = "erp_sync_state"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    covered_from: Mapped[date | None] = mapped_column(Date, default=None)
+    covered_to: Mapped[date | None] = mapped_column(Date, default=None)
+    last_recent_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    last_nightly_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    last_full_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    full_sync_resume_from: Mapped[date | None] = mapped_column(Date, default=None)
+    last_error: Mapped[str | None] = mapped_column(Text, default=None)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

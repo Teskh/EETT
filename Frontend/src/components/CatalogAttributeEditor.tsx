@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
 import type { CatalogAttribute } from "../lib/types";
 
@@ -115,126 +115,116 @@ export function CatalogAttributeEditor({ initialAttributes, saving, onSave }: Ca
     );
   }
 
+  const input = "h-7 w-full border border-black/10 bg-white px-2 text-xs text-zinc-900 outline-none hover:border-black/25 focus:border-red-600 focus:ring-1 focus:ring-red-600 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:hover:border-white/25";
+  const icon = "flex h-7 w-6 shrink-0 items-center justify-center text-zinc-400 hover:text-zinc-950 disabled:invisible dark:hover:text-white";
+  const strip = (items: CatalogAttribute[]) => JSON.stringify(items.map(({ name, value_type, options }) => ({ name, value_type, options })));
+  // Names and values are single-line, but wrap so long ones show in full.
+  const blockNewline = (event: KeyboardEvent<HTMLTextAreaElement>) => { if (event.key === "Enter") event.preventDefault(); };
+  const dirty = strip(attributes) !== strip(initialAttributes);
+  const columns = "grid grid-cols-[minmax(0,9rem)_6.5rem_minmax(0,1fr)_4.5rem] gap-2";
+
+  // A table: attribute, type, and for a selection its values as chips.
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-3">
-        {attributes.length ? (
-          attributes.map((attribute) => {
-            const showOptions = attribute.value_type === "select";
-            return (
-              <article key={attribute.local_id} className="bg-zinc-50 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg p-3 flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Atributo</div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => moveAttribute(attribute.local_id, -1)}
-                      className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
-                      title="Mover arriba"
-                    >
-                      <i className="ph-bold ph-caret-up" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveAttribute(attribute.local_id, 1)}
-                      className="px-2 py-1 rounded border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-white/5 transition-colors"
-                      title="Mover abajo"
-                    >
-                      <i className="ph-bold ph-caret-down" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeAttribute(attribute.local_id)}
-                      className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-500/20 transition-colors text-xs font-semibold"
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={attribute.name}
-                    onChange={(event) => updateAttribute(attribute.local_id, { name: event.target.value })}
-                    placeholder="Nombre del atributo"
-                    className="w-1/2 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  />
-                  <select
-                    value={attribute.value_type}
-                    onChange={(event) => updateAttribute(attribute.local_id, { value_type: event.target.value })}
-                    className="w-1/2 bg-white dark:bg-zinc-900 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                  >
-                    <option value="text">Texto</option>
-                    <option value="number">Número</option>
-                    <option value="select">Selección</option>
-                  </select>
-                </div>
-                {showOptions ? (
-                  <div className="border-l-2 border-black/10 dark:border-white/10 pl-3 ml-2 flex flex-col gap-2">
-                    <div className="text-[10px] font-mono text-zinc-500">Opciones</div>
-                    <div className="flex flex-col gap-2">
-                      {attribute.options.map((option, optionIndex) => (
-                        <div
-                          key={`${attribute.local_id}-${optionIndex}`}
-                          className="flex items-center gap-2 bg-white dark:bg-black/20 shadow-sm border border-black/10 dark:border-white/10 rounded-lg p-2"
-                        >
-                          <input
-                            type="text"
-                            value={option}
-                            onChange={(event) => updateOption(attribute.local_id, optionIndex, event.target.value)}
-                            placeholder="Valor de opción"
-                            className="flex-1 bg-white dark:bg-black/40 border border-black/10 dark:border-white/10 rounded p-1.5 text-xs text-zinc-900 dark:text-zinc-200 focus:outline-none focus:border-accent-500/50 transition-colors font-mono"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => removeOption(attribute.local_id, optionIndex)}
-                            className="px-2 py-1 rounded border border-red-200 dark:border-red-500/20 bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-500/20 transition-colors"
-                          >
-                            <i className="ph-bold ph-x" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => addOption(attribute.local_id)}
-                      className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-zinc-50 dark:hover:bg-white/5 rounded text-xs font-semibold text-zinc-800 dark:text-zinc-300 transition-colors flex items-center gap-2 self-start"
-                    >
-                      <i className="ph-bold ph-plus" /> Agregar valor
-                    </button>
-                  </div>
-                ) : (
-                  <p className="text-[10px] text-zinc-500 font-mono">Valor libre ingresado más tarde en las instancias de proyecto.</p>
-                )}
-              </article>
-            );
-          })
-        ) : (
-          <div className="text-zinc-500 font-mono text-xs text-center border border-dashed border-black/10 dark:border-white/10 rounded-lg p-4">
-            No hay atributos definidos.
+    <div className="flex flex-col gap-2">
+      {attributes.length ? (
+        <div className="border border-black/10 bg-white dark:border-white/10 dark:bg-zinc-950">
+          <div className={`${columns} border-b border-black/10 bg-zinc-100 px-2 py-1.5 text-[10px] font-semibold text-zinc-500 dark:border-white/10 dark:bg-zinc-900`}>
+            <span>Atributo</span><span>Tipo</span><span>Valores</span><span />
           </div>
-        )}
-      </div>
-      <div className="flex items-center justify-between gap-3 pt-1">
-        <button
-          type="button"
-          className="px-3 py-1.5 border border-black/10 dark:border-white/10 bg-zinc-50 dark:bg-white/5 hover:bg-zinc-100 dark:hover:bg-white/10 rounded text-xs font-semibold text-zinc-900 dark:text-zinc-200 transition-colors flex items-center gap-2"
-          onClick={addAttribute}
-        >
-          <i className="ph-bold ph-plus" /> Agregar atributo
+          <ul>
+            {attributes.map((attribute, index) => (
+              <li key={attribute.local_id} className={`group/attribute ${columns} items-start border-b border-black/5 px-2 py-1.5 last:border-0 dark:border-white/5`}>
+                <textarea
+                  rows={1}
+                  value={attribute.name}
+                  onKeyDown={blockNewline}
+                  onChange={(event) => updateAttribute(attribute.local_id, { name: event.target.value })}
+                  placeholder="Nombre"
+                  aria-label="Nombre del atributo"
+                  autoFocus={!attribute.name && index === attributes.length - 1}
+                  className={`${input} h-auto min-h-7 resize-none py-1.5 font-medium leading-4 [field-sizing:content]`}
+                />
+                <select
+                  value={attribute.value_type}
+                  onChange={(event) => updateAttribute(attribute.local_id, { value_type: event.target.value })}
+                  aria-label="Tipo de valor"
+                  className={input}
+                >
+                  <option value="text">Texto</option>
+                  <option value="number">Número</option>
+                  <option value="select">Selección</option>
+                </select>
+                <div className="flex min-w-0 flex-wrap items-center gap-1">
+                  {attribute.value_type === "select" ? (
+                    <>
+                      {attribute.options.map((option, optionIndex) => (
+                        <span key={`${attribute.local_id}-${optionIndex}`} className="group/option inline-flex min-h-7 max-w-full items-start bg-zinc-100 pl-2 focus-within:ring-1 focus-within:ring-red-600 dark:bg-white/10">
+                          <textarea
+                            rows={1}
+                            value={option}
+                            onKeyDown={blockNewline}
+                            onChange={(event) => updateOption(attribute.local_id, optionIndex, event.target.value)}
+                            placeholder="Valor"
+                            aria-label="Valor de opción"
+                            autoFocus={!option && optionIndex === attribute.options.length - 1 && optionIndex > 0}
+                            className="min-w-[3ch] max-w-full resize-none break-words bg-transparent py-1.5 text-xs leading-4 text-zinc-900 outline-none [field-sizing:content] dark:text-zinc-100"
+                          />
+                          <button type="button" onClick={() => removeOption(attribute.local_id, optionIndex)} title="Quitar valor" aria-label={`Quitar ${option || "valor"}`}
+                            className="flex h-7 w-6 shrink-0 items-center justify-center text-zinc-400 opacity-0 hover:text-red-600 focus:opacity-100 group-hover/option:opacity-100">
+                            <i className="ph-bold ph-x text-[10px]" />
+                          </button>
+                        </span>
+                      ))}
+                      <button type="button" onClick={() => addOption(attribute.local_id)} title="Agregar valor"
+                        className="h-7 border border-dashed border-black/15 px-2 text-xs text-zinc-500 hover:border-black/40 hover:text-zinc-950 dark:border-white/15 dark:hover:border-white/40 dark:hover:text-white">
+                        + Valor
+                      </button>
+                    </>
+                  ) : (
+                    <span className="flex h-7 items-center text-xs text-zinc-400" title="El valor se ingresa en cada instancia del proyecto.">
+                      {attribute.value_type === "number" ? "Número libre en cada proyecto" : "Texto libre en cada proyecto"}
+                    </span>
+                  )}
+                </div>
+                <div className="flex justify-end opacity-0 focus-within:opacity-100 group-hover/attribute:opacity-100">
+                  <button type="button" onClick={() => moveAttribute(attribute.local_id, -1)} disabled={index === 0} className={icon} title="Mover arriba" aria-label="Mover arriba">
+                    <i className="ph-bold ph-caret-up" />
+                  </button>
+                  <button type="button" onClick={() => moveAttribute(attribute.local_id, 1)} disabled={index === attributes.length - 1} className={icon} title="Mover abajo" aria-label="Mover abajo">
+                    <i className="ph-bold ph-caret-down" />
+                  </button>
+                  <button type="button" onClick={() => removeAttribute(attribute.local_id)} className={`${icon} hover:text-red-600 dark:hover:text-red-400`} title="Eliminar atributo" aria-label="Eliminar atributo">
+                    <i className="ph-bold ph-trash" />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="border border-dashed border-black/10 px-3 py-2 text-xs text-zinc-500 dark:border-white/10">No hay atributos definidos.</p>
+      )}
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={addAttribute} className="text-xs text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white">
+          <i className="ph-bold ph-plus mr-1" />Agregar atributo
         </button>
-        <button
-          type="button"
-          disabled={saving}
-          className="px-3 py-1.5 bg-accent-500/20 hover:bg-accent-500/30 disabled:opacity-60 text-accent-700 dark:text-accent-400 rounded text-xs font-semibold transition-colors"
-          onClick={() => void handleSave()}
-        >
-          {saving ? "Guardando..." : "Guardar conjunto de atributos"}
-        </button>
+        {dirty ? (
+          <>
+            <span className="ml-auto text-[10px] text-amber-700 dark:text-amber-400">Cambios sin guardar</span>
+            <button type="button" disabled={saving} className="text-[10px] text-zinc-500 underline" onClick={() => setAttributes(normalizeAttributes(initialAttributes))}>
+              Descartar
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              className="border border-zinc-950 bg-zinc-950 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50 dark:border-white dark:bg-white dark:text-zinc-950"
+              onClick={() => void handleSave()}
+            >
+              {saving ? "Guardando…" : "Guardar atributos"}
+            </button>
+          </>
+        ) : null}
       </div>
-      <p className="text-[10px] text-zinc-500 font-mono">
-        Construye atributos como filas y agrega valores de opción individuales dentro de cada atributo de selección.
-      </p>
     </div>
   );
 }

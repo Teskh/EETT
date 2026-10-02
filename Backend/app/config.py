@@ -74,6 +74,25 @@ class Settings(BaseSettings):
     softland_password: str | None = Field(default_factory=lambda: os.getenv("SOFTLAND_PASSWORD"))
     softland_connect_timeout_seconds: int = 5
     softland_query_timeout_seconds: int = 20
+    # --- Stored copy of ERP withdrawals (see services/erp_history.py) ---
+    # Unset means "only in production", so development machines, which copy
+    # production's database, don't also query the ERP on their own.
+    erp_sync_enabled: bool | None = None
+    erp_sync_history_days: int = 730
+    # Every night the last N days are fetched again to catch late corrections.
+    erp_sync_recent_days: int = 30
+    # Local hour the nightly re-check (and the monthly full re-check) may start;
+    # they only run inside a window of `erp_sync_night_window_hours`.
+    erp_sync_night_hour: int = 1
+    erp_sync_night_window_hours: int = 5
+    erp_sync_full_interval_days: int = 30
+    # During the day, today's new withdrawals are picked up this often.
+    erp_sync_intraday_minutes: int = 60
+    # Pacing: the ERP is queried one chunk of days at a time with a pause in
+    # between, and a failing chunk is retried after a growing wait.
+    erp_sync_chunk_days: int = 31
+    erp_sync_pause_seconds: float = 10.0
+    erp_sync_retry_seconds: tuple[int, ...] = (60, 300)
 
     @model_validator(mode="after")
     def apply_softland_password_fallback(self) -> "Settings":

@@ -1,7 +1,8 @@
 import type { CostModelAdjustment, CostModelRow, CostModelStudyMaterial } from "../../lib/types";
+import type { GroupValidation } from "./groupValidation";
 import { findSubtypeAdjustment, quantityCost } from "./model";
 
-export type BudgetSource = "estimated" | "historic_allocated" | "manual" | "legacy";
+export type BudgetSource = "estimated" | "historic_allocated" | "manual" | "legacy" | "mixed";
 export type BudgetLine = {
   row: CostModelRow;
   estimate: number | null;
@@ -19,8 +20,18 @@ export type BudgetLine = {
   potentialChange: number | null;
   /** Other subtypes whose BOM leaves this material blank: their houses expect none of it. */
   missingSubtypes: string[];
+  /** Some instance leaves the quantity blank: the estimate counts only the filled ones. */
+  partial: boolean;
   /** Whether to adopt the historic quantity, under the viewer's criteria. */
   suggestion: Suggestion;
+  /** Set when a group of substitutes validates the historic quantity, whatever the material's own confidence. */
+  groupValidation?: GroupValidation | null;
+  /** Over several subtypes: each one's line and weight in the average house. */
+  parts?: { id: number | null; name: string; weight: number; line: BudgetLine }[];
+  /** The subtypes that use the material, when not all selected ones do. */
+  onlyIn?: string[] | null;
+  /** Share of the average house that uses the material. */
+  share?: number;
 };
 
 export type Suggestion = "historic" | "review" | "estimated";
@@ -32,7 +43,7 @@ export type SuggestionCriteria = {
   /** Minimum |historic − estimate| × price per house, in pesos. */
   minImpact: number;
 };
-export const defaultSuggestionCriteria: SuggestionCriteria = { minDeviation: 0.1, minGrade: "high", minImpact: 0 };
+export const defaultSuggestionCriteria: SuggestionCriteria = { minDeviation: 0, minGrade: "high", minImpact: 15000 };
 
 export function suggest(study: CostModelStudyMaterial | null, historic: number | null, estimate: number | null, price: number | null, criteria: SuggestionCriteria): Suggestion {
   const ratio = study?.ratio ?? null;
@@ -42,9 +53,16 @@ export function suggest(study: CostModelStudyMaterial | null, historic: number |
   return study.grade === "high" || criteria.minGrade === "medium" ? "historic" : "review";
 }
 
+// The filled instances count even when another one is blank; only a
+// component with no quantity at all is unknown.
 function componentEstimate(row: CostModelRow, subtypeId: number | null): number | null {
   const entry = row.subtypes.find((item) => item.subtype_id === subtypeId);
-  return entry ? entry.has_missing_quantity ? null : entry.estimated_quantity : 0;
+  return entry ? entry.estimated_quantity : 0;
+}
+
+function componentPartial(row: CostModelRow, subtypeId: number | null): boolean {
+  const entry = row.subtypes.find((item) => item.subtype_id === subtypeId);
+  return Boolean(entry?.has_missing_quantity && entry.estimated_quantity !== null);
 }
 
 function add(left: number | null, right: number | null) {
@@ -79,6 +97,7 @@ export function buildBudgetLine(row: CostModelRow, subtypeId: number | null, stu
     change: quantity !== null && estimate !== null ? quantityCost(quantity - estimate, price) : null,
     potentialChange: historic !== null && estimate !== null ? quantityCost(historic - estimate, price) : null,
     missingSubtypes: row.subtypes.filter((entry) => entry.has_missing_quantity && entry.subtype_id !== null && entry.subtype_id !== subtypeId).map((entry) => entry.subtype_name),
+    partial: estimate !== null && (componentPartial(row, null) || (subtypeId !== null && componentPartial(row, subtypeId))),
     suggestion: suggest(study, historic, estimate, price, criteria),
   };
 }
@@ -113,6 +132,10 @@ export function summarizeBudget(lines: BudgetLine[]) {
     budget: lines.reduce((sum, line) => sum + (line.budgetCost ?? 0), 0),
     missingEstimate: lines.filter((line) => line.estimatedCost === null).length,
     missingBudget: lines.filter((line) => line.budgetCost === null).length,
+    /** Counted with the filled instances only: some instance still lacks its quantity. */
+    partial: lines.filter((line) => line.partial && line.estimatedCost !== null).length,
+    /** The same, among lines whose budget still follows the estimate. */
+    partialBudget: lines.filter((line) => line.partial && line.budgetCost !== null && line.source !== "historic_allocated" && line.source !== "manual").length,
     adjusted: lines.filter((line) => line.source !== "estimated").length,
   };
 }
